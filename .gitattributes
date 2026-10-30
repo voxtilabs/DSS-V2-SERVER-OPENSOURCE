@@ -1,0 +1,9 @@
+# Line endings: consistent multi-platform repo
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.pcapng binary
+*.exe binary
+*.7z binary
