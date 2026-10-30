@@ -27,6 +27,11 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 | EV-013 | Puertos por defecto del dispositivo Dahua: 37777/37778/554/80 | PROBABLE | Abierta |
 | EV-014 | Toolchain REA 6.8.0 operativo (Node 26 dedicado + MCP en OpenCode) | CONFIRMADO | Cerrada |
 | EV-015 | Huella SHA-256 del instalador DSS Client V8.006 registrada | CONFIRMADO | Abierta |
+| EV-016 | DSS Client clasificado: Qt 5.15.13 C++ x64 + CEF (Chromium 109); no Electron / no .NET | CONFIRMADO | Cerrada |
+| EV-017 | Instalador Client = NSIS; extracción estática sin ejecución (Version.xml: AIO8.6.0, build 2025-03-07) | CONFIRMADO | Cerrada |
+| EV-018 | `ClientFramework` (23.6 MB) es una base SQLite de registro de plugins/UI | CONFIRMADO | Cerrada |
+| EV-019 | Superficie SDK nativa del Client + estado de firma (instalador pkcs7; exe/netsdk sin firma) | CONFIRMADO | Cerrada |
+| EV-020 | M-002 DSS Ultimate V8.8 descargado y verificado (Server Win64 IS V8.008 R.20260930) | CONFIRMADO | Cerrada |
 
 ## Fichas
 
@@ -120,4 +125,68 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Fecha: 2026-10-30 · Fuente: `Get-FileHash -Algorithm SHA256` (local).
 - Resultado: `A0138D2ED3228F0F75A37C5E72C126B9CD8F727F7516CB5744BEC691D42792C9` · 203.694.736 bytes (~194 MiB) · VersionInfo del instalador vacía (wrapper sin metadatos).
 - Confianza: **CONFIRMADO**. Uso: identificación de la muestra M-001 para el análisis estático de E-006 (`research/evidence/samples-manifest.md`, fuera de git).
-- Limitaciones: el instalador DSS Server (M-002) aún no está en disco.
+- Limitaciones: cerrada el mismo día — M-002 descargado y registrado (ver EV-020).
+
+### EV-016 — Clasificación estática del DSS Client V8.006
+- Fecha: 2026-10-30 · Fuentes: REA `inspect_pe_imports`/`inspect_pe_certificates` + VersionInfo
+  + layout de instalación (detalles y evidence_ids en `research/evidence/dss-evidence-local.json`
+  y `research/evidence/E-006/dssclient-static-inventory-20261030.md`, fuera de git).
+- Veredicto: **Qt 5.15.13 C++ nativo Win64 + CEF embebido (Chromium 109.0.5414.120 —
+  `libcef.dll` 185.9 MB + `CefRender.exe` + `resources.pak` + 55 `locales/*.pak`)**; launcher
+  0.4 MB (pe32-plus, imphash-md5 `48262c615e46edb9b6fac581b09965b5`, 137 imports:
+  Qt5Core/Gui/Widgets + `DSGui.dll` + `UICommonModule.dll` + MSVCP140/VCRUNTIME140) que carga
+  plugins con `QPluginLoader`; 15 módulos `*Logical.dll`.
+- NO Electron (sin `app.asar`/bundle) y NO .NET (sin imports CLR/mscoree).
+- Confianza: **CONFIRMADO** (observación estática reproducible). Corrección respecto a EV-014:
+  `list_strings`/`search_strings` **sí** requieren motor nativo (vere EV-017, limitaciones).
+- Cumplimiento: solo extracción estática (7-Zip); ningún binario ejecutado.
+
+### EV-017 — Shell NSIS del instalador + extracción estática (sin ejecución)
+- Fecha: 2026-10-30 · Fuentes: REA `open_binary` (format=pe x86) + `inspect_pe_resources` +
+  7-Zip 26.05 portable (`C:\Users\bruno\Tools\dssv2\7zip\`, repo oficial ip7z).
+- Evidencia: stub NSIS (magic `NullsoftInst`); imports 8 DLLs/155 funciones (imphash-md5
+  `7fa974366048f9c551ef45714595665e`); certificado **pkcs7** (wrapper firmado). `7z x` →
+  1254 archivos / 678.192.049 bytes en `Downloads\dssv2-setup\dssclient-extracted\`.
+  REA `extract_artifact` no soporta PE/NSIS (frontera documentada del tool).
+- Procedencia de build embebida: `Version.xml` → módulo `OverseasClient`, branch
+  `release-20241213-AIO8.6.0`, commit `e5b1e036de4e3d909a760da8deb92f3f3a58b236`,
+  build 2025-03-07. `Localcfg.ini`: OEM app "DSS Client", company "dahua", `[Https] enable=1`.
+- Confianza: **CONFIRMADO**. Limitaciones: (a) `list_strings`/`search_strings` y decompilación
+  exigen motor nativo (ghidra/hopper/ida/kuna ninguno instalado; JDK 25.0.2 presente); (b)
+  `inspect_managed_artifact` rechazado por allowance fija de bytes (194 MB > allowance) —
+  no reintentable sobre esta muestra.
+
+### EV-018 — `ClientFramework` es una base SQLite (registro de plugins/UI)
+- Fecha: 2026-10-30 · Fuente: REA `inspect_sqlite_database` (header `SQLite format 3`).
+- Evidencia: archivo sin extensión de 23.6 MB (SHA-256 `36BF4AC8…B00FFF`); motor SQLite 3.54.0,
+  UTF-8, esquema completo con 9 tablas: `ConfigUIPlugin(5)`, `LogicalPlugin(2)`, `PluginMenu(18)`,
+  `StylePlugin(3)`, `ToolManagerPlugin(3)`, `UIPlugin(5)`, `PluginPanelInfo(8)`,
+  `TranslateTable(28)`, `_TranslateTable_old_20240523(27)` — metadatos de widgets/menús/
+  traducciones coordinados con los 15 `*Logical.dll`.
+- Confianza: **CONFIRMADO**. Cumplimiento: inspección a nivel esquema únicamente; **sin
+  sampling de filas** (decisión conservadora, ADR-0003).
+
+### EV-019 — Superficie SDK nativa del cliente + estado de firma
+- Fecha: 2026-10-30 · Fuente: REA `inspect_native_exports` / `inspect_pe_certificates` sobre la
+  extracción estática.
+- Evidencia: `netsdk.dll` v3.5.6.68586 (26.9 MB) → **2034 exports** (`CLIENT_Init/Login/RealPlay/…`);
+  `DPSDK.dll` (16.3 MB) → **1363 exports** (`DPSDK_AES256Decrypt`, `DPSDK_ARAddLabel`, …);
+  `configsdk.dll` (7.2 MB) → **5 exports** (parsers de config/eventos); `avnetsdk.dll`
+  v3.5.6.68586 (4.2 MB, exports pendientes de captura); `P2PDll.dll` (1.9 MB) → **8 exports
+  exactas**: `P2P_Init/Connect/Disconnect/GetDeviceInfo/DeviceStatus/QueryChannelStatus/
+  QueryServerStatus/UnInit` (coherente con EV-005/EV-012). Certificados: instalador pkcs7,
+  pero **`DSS Client.exe` y `netsdk.dll` sin firma** (0 entradas, observado).
+- Confianza: **CONFIRMADO** (números de tablas de export observados, no inferidos).
+- Uso: anclaje de nombres de API para DSS V2 (E-002…E-005); P2P queda como **solo procedencia
+  observada** hasta el sampling/dinámica en laboratorio.
+
+### EV-020 — M-002: DSS Ultimate V8.8 descargado y verificado
+- Fecha: 2026-10-30 · Fuente: descarga oficial vía `Start-BitsTransfer` (URL del operador;
+  CDN `materialfile.dahuasecurity.com`, upload 2026-10-28).
+- Resultado: `DSS_Ultimate_V8.8_Installation_Package.zip` · 1.742.304.375 bytes ·
+  SHA-256 `3C3D5D882699F31B3FD5A1E439CD4AC63D49EF487BAB1E1198DEEA88B99F5196` · contenido
+  (listado estático 7z, sin extraer): `DH_DSS Ultimate_Release Notes.pdf` (13.989.128 B) +
+  `General_DSS-Ultimate_Server_Win64_IS_V8.008.0000000.0.R.20260930.exe` (1.731.861.040 B).
+- Confianza: **CONFIRMADO**. Registro completo en `research/evidence/samples-manifest.md`
+  (fuera de git).
+- Pendiente: extracción estática + inventario del Server (sin ejecución) → siguiente pasada E-006.
