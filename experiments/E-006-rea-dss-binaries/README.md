@@ -32,5 +32,9 @@ corresponda según `rea.tools` docs. Para PE estático rápido no se requiere pr
    `docs/NETWORK_PROTOCOLS.md` (protocolo observado) con fichas EV nuevas en RESEARCH.md.
 
 ## Estado
-¿Material (instaladores) disponibles? verificar carpeta de descargas local; si falta, descargar
-versiones oficiales (DSS Pro V7 V8.8) desde dahuasecurity.com con cuenta validada.
+- **DSS Client**: instalador oficial disponible localmente
+  (`General_DSS-Client_Win64_IS_V8.006.0000000.0.R.20250307.exe`, en carpeta de descargas del
+  operador; registrar SHA-256 en `samples-manifest.md` antes de abrir).
+- **DSS Server**: instalador pendiente de obtener — descargar el instalador oficial
+  (DSS Ultimate V8.8 en dahuasecurity.com) y registrar igualmente.
+
