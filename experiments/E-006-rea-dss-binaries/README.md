@@ -32,9 +32,23 @@ corresponda según `rea.tools` docs. Para PE estático rápido no se requiere pr
    `docs/NETWORK_PROTOCOLS.md` (protocolo observado) con fichas EV nuevas en RESEARCH.md.
 
 ## Estado
-- **DSS Client**: instalador oficial disponible localmente
-  (`General_DSS-Client_Win64_IS_V8.006.0000000.0.R.20250307.exe`, en carpeta de descargas del
-  operador; registrar SHA-256 en `samples-manifest.md` antes de abrir).
+
+### Toolchain (2026-10-30) — LISTO para la fase estática
+- **REA v6.8.0** instalado con Node 26.13.0 dedicado (`C:\Users\bruno\Tools\dssv2\`), registrado
+  como MCP en OpenCode V2.2.4 (`~/.config/opencode/opencode.jsonc`; backup `.rea.backup`) —
+  `opencode mcp list`: `✓ rea connected` · catálogo: **229 herramientas MCP / 175 comandos CLI**.
+- **Motores nativos no configurados** (Ghidra/Hopper/IDA/jadx/Kuna): sin ellos corre todo el
+  inventario estático (imports PE, certificados, load config, recursos, strings, overview,
+  Electron/ASAR). El análisis profundo nativo (decompilación) requiere Ghidra 12.1.x + JDK ≥21
+  instalados por el operador (en Windows REA ≥4.1 incluye bundle nativo; frontera P0 experimental).
+- **frida** quedó con su post-install bloqueado por política npm (`allowScripts`): pendiente de
+  aprobar solo si se necesitan sesiones dinámicas. No afecta esta fase.
+- Evidencia: `research/evidence/E-006/rea-setup-20261030.md` (fuera de git) · EV-014 en RESEARCH.md.
+
+### Material
+- **DSS Client**: instalador oficial disponible localmente — SHA-256
+  `A0138D2ED3228F0F75A37C5E72C126B9CD8F727F7516CB5744BEC691D42792C9` registrado en
+  `research/evidence/samples-manifest.md` (fuera de git; nunca versionar el binario).
 - **DSS Server**: instalador pendiente de obtener — descargar el instalador oficial
-  (DSS Ultimate V8.8 en dahuasecurity.com) y registrar igualmente.
+  (DSS Ultimate V8.8 en dahuasecurity.com) y registrar igualmente en el manifest (M-002).
 

@@ -25,6 +25,8 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 | EV-011 | Ataques activos usando P2P cloud por SN (oct-2026) | CONFIRMADO | Cerrada |
 | EV-012 | DSS Pro V8 usa P2P para conexiones de clientes (webinar oficial) | CONFIRMADO | Cerrada |
 | EV-013 | Puertos por defecto del dispositivo Dahua: 37777/37778/554/80 | PROBABLE | Abierta |
+| EV-014 | Toolchain REA 6.8.0 operativo (Node 26 dedicado + MCP en OpenCode) | CONFIRMADO | Cerrada |
+| EV-015 | Huella SHA-256 del instalador DSS Client V8.006 registrada | CONFIRMADO | Abierta |
 
 ## Fichas
 
@@ -101,3 +103,21 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 ### EV-013 — Puertos por defecto del dispositivo
 - Fecha: 2026-10-30 · Fuentes: Programming Guide NetSDK (37777 como puerto estándar de login del dispositivo) + EV-006 (JSON de info del dispositivo: `privport` 37777, `tlsprivport` 37778, `rtspport` 554, `httpport` 80).
 - Confianza: **PROBABLE** para el conjunto completo (37777 confirmado por guía oficial); enumeración exacta por modelo/firmware → E-002.
+
+### EV-014 — Toolchain REA operativo en Windows (Node 26 dedicado + OpenCode MCP)
+- Fecha: 2026-10-30 · Fuente: salidas de comandos locales (`research/evidence/E-006/rea-setup-20261030.md`, fuera de git).
+- Evidencia:
+  - `npm install rea-agents@latest` con Node 26.13.0 dedicado → 176 paquetes instalados; entrypoint `scripts/rea.mjs`, versión **6.8.0** (SDK MCP 2.3.1).
+  - `rea doctor`: `node` 26.13.0 healthy, `host` win32 x64 healthy; motores nativos (ghidra/hopper/ida/jadx/kuna) **no** configurados.
+  - `rea setup --client opencode --yes` → `{"appliedActions":["configured_opencode","installed_skill"],"status":"ready"}` (con backup de la config).
+  - `opencode mcp list` → `✓ rea connected` · `rea doctor --client opencode` → `registration:opencode healthy`.
+- Resultado: REA operativo en Windows con **229 herramientas MCP / 175 comandos CLI**. Para la fase estática de E-006 quedan habilitadas (sin motor nativo): `inspect_pe_imports`, `inspect_pe_certificates`, `inspect_pe_load_config`, `inspect_pe_resources`, `list_strings`/`search_strings`, `binary_overview`, `analyze_javascript_application`, `inspect_desktop_application`, `inspect_electron_fuses`, `open_binary`/`binary_session`/`close_binary`.
+- Confianza: **CONFIRMADO** (salidas reproducibles).
+- Limitaciones: (a) decompilación nativa PE x64 pendiente de instalar Ghidra 12.1.x + JDK ≥21 por el operador (REA npm ≥4.1 incluye bundle nativo Windows, frontera P0 experimental); (b) `frida@17.23.2` con post-install bloqueado por política npm (`allowScripts`) — irrelevante para estático; (c) runtime Node 26 dedicado en `C:\Users\bruno\Tools\dssv2\` (Node global 24.19.0 no cumple y no fue tocado).
+- Cumplimiento: no se ejecutó ningún binario DSS; reversibilidad documentada (borrar carpeta + entry MCP).
+
+### EV-015 — Huella SHA-256 del instalador DSS Client V8.006
+- Fecha: 2026-10-30 · Fuente: `Get-FileHash -Algorithm SHA256` (local).
+- Resultado: `A0138D2ED3228F0F75A37C5E72C126B9CD8F727F7516CB5744BEC691D42792C9` · 203.694.736 bytes (~194 MiB) · VersionInfo del instalador vacía (wrapper sin metadatos).
+- Confianza: **CONFIRMADO**. Uso: identificación de la muestra M-001 para el análisis estático de E-006 (`research/evidence/samples-manifest.md`, fuera de git).
+- Limitaciones: el instalador DSS Server (M-002) aún no está en disco.
