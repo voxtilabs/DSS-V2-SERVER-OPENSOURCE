@@ -1,0 +1,70 @@
+# DSS_CLIENT_RESEARCH.md — Protocolo cliente-servidor DSS e integración
+
+Alcance: entender (1) cómo funciona la comunicación DSS Client ↔ DSS Server, (2) qué APIs de
+integración existen de forma oficial, (3) decidir si algún día DSS Client original puede hablar con
+DSS V2 — sin bloquear el proyecto si no se logra.
+
+## 1. Frontera de investigación del proyecto
+
+- El protocolo interno del DSS **no está documentado** y no se asume disponible.
+- Distinguir SIEMPRE: API de integración oficial ≠ protocolo interno completo.
+- Método: análisis estático de los ejecutables con REA (`morluto/rea`) para binarios
+  **Windows** (DSS Client, servicios del Server) + capturas de red en laboratorio (E-001).
+- Los ejecutables se obtienen del instalador oficial de Dahua con licencia válida y se analizan
+  localmente. No se publican binarios ni se eluden controles de licencia (ADR-0003, ADR-0005).
+
+## 2. Arquitectura confirmada del lado servidor (EV-001, EV-002)
+
+- Modularidad oficial por servicios: CMS, DMS, SS, MTS, ARS, ADS, PTS, OSS (datasheet V7).
+- Puertos V7 a nivel router: 9500, 9200, 21, 990, 9090, 61616, 9100, 3306 (MySQL), 9550, 9400, 80, 5080.
+- V8 (Ultimate 8.8, corresponde a DSS Pro V8.8): instalador disponible; servicios equivalentes por
+  confirmar con el análisis de E-006.
+- El appliance DSS7016D (nuestra producción) ejecuta una versión embebida del mismo modelo (EV-010).
+
+## 3. Preguntas de investigación (checklist dinámico)
+
+| # | Pregunta | Método | Estado |
+|---|----------|--------|--------|
+| 1 | ¿Qué binarios/servicios conforman el Client y el Server? (procesos, DLL, firma Authenticode) | análisis PE de REA (imports, certificados) | Pendiente E-006 |
+| 2 | ¿Es el Client Electron/Qt/C++ nativo? | REA `analyze-javascript-application` vs. imports nativos | Pendiente |
+| 3 | ¿Qué endpoints/sockets abre el Client hacia el Server? | Capture Wireshark por operación (login, live, playback, alarmas) | E-001 |
+| 4 | ¿Existe API oficial de integración de DSS V8 (HTTP)? | Buscar documentación oficial + programa partner (EV-007/EV-008) | Abierta |
+| 5 | ¿La API oficial cubre todo lo que el Client hace? | Mapa funcional API vs. capturas | Abierta |
+| 6 | ¿El Client es re-autenticable contra un server "parecido"? | Verificar esquema de tokens/certificados en V8 — asumir NO sin evidencia | Abierta |
+| 7 | ¿Qué base de datos local usa el Server (MySQL 3306 en V7)? | Solo lectura de esquema en laboratorio, jamás en producción | E-001 |
+
+## 4. Estrategia de compatibilidad con DSS Client
+
+- **Primera prioridad:** Web Client propio (React/TS) — nunca bloqueado por el punto anterior.
+- **Línea experimental aislada:** `components/dss-compat-adapter/`. Si se demuestra que el Client
+  habla un protocolo estándar (por ejemplo REST + WebSocket oficial de V8), DSS V2 podría exponer un
+  "perfil de protocolo" compatible. Cualquier adaptador debe ser un plugin separado, sin
+  acoplamiento al núcleo, y jamás debe embeber secretos de Dahua.
+- **Estado:** HIPÓTESIS de nivel bajo (sin evidencia aún). No asumir compatibilidad nunca.
+
+## 5. Playbook de ingeniería inversa (E-006) con REA
+
+Herramientas: Windows de laboratorio + REA (CLI/MCP, `npx -y rea-agents@latest`)
++ Hopper/Ghidra/IDA si se dispone; proceso no destructivo en máquina virtual dedicada.
+
+Fase 1 — Entorno:
+1. Descargar el instalador oficial de Dahua (por ejemplo `General_DSS-PRO_Win64_...exe`) con cuenta
+   de la organización; conservar hash SHA-256 en `research/evidence/samples-manifest.md` (fuera de git).
+2. Instalar en una VM Windows de laboratorio (con snapshot antes de instalar; sin licencia en
+   producción activada).
+3. Registrar los ejecutables en el manifest y activar capturas con Process Monitor/Sysinternals.
+
+Fase 2 — Análisis estático:
+4. Inspección PE de REA: imports, certificado Authenticode, cadenas (`strings`), y si el Client es
+   Electron, `analyze-javascript-application`.
+5. Identificar: ejecutables del servidor (servicios CMS/DMS/MTS/…), librerías (NetSDK, P2P), base de
+   datos local, puertos escuchados (netstat), módulos de autenticación.
+6. Documentar cada hallazgo con archivo/función/import y nivel de confianza.
+
+Fase 3 — Dinámico (con autorización):
+7. DSS Client contra el server de laboratorio: captura Wireshark por operación; documentar endpoints
+   en `docs/NETWORK_PROTOCOLS.md`.
+8. Correlacionar la tabla de puertos V7 (EV-002) con los servicios reales observados.
+
+Fase 4 — Síntesis:
+9. Producir matriz funcional (Client↔Server) y decidir dónde aporta la compatibilidad.

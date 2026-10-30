@@ -1,0 +1,47 @@
+# --- Evidencia de investigación (jamás publicada) ---
+research/evidence/
+experiments/**/captures/
+experiments/**/*.pcap
+experiments/**/*.pcapng
+experiments/**/*.log
+
+# --- Binarios SDK propietarios (Dahua) ---
+third_party/
+tools/netsdk-bin/
+*.so
+!third_party/**/README-EXTERNAL.md
+
+# --- Artefactos de build ---
+build/
+dist/
+bin/
+out/
+*.o
+*.obj
+*.a
+*.lib
+
+# --- Go ---
+vendor/
+
+# --- Node / web ---
+node_modules/
+dist-web/
+
+# --- Entornos y secretos ---
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# --- OS/IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- Python temporales (scripts de laboratorio) ---
+__pycache__/
+.venv/

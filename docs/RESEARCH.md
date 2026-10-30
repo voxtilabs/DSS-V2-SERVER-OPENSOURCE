@@ -1,0 +1,103 @@
+# RESEARCH.md — Registro central de evidencias (ledger)
+
+Reglas del ledger:
+- Toda afirmación técnica del proyecto debe referenciar una entrada de este archivo.
+- Niveles de confianza: `CONFIRMADO | PROBABLE | HIPÓTESIS | NO VERIFICADO | DESCARTADO`.
+- Una hipótesis nunca se transforma en afirmación sin evidencia + experimento.
+- La evidencia cruda (capturas, hashes, logs) vive en `research/evidence/` (fuera de git).
+
+Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md`.
+
+## Índice de evidencias
+
+| ID | Título | Confianza | Estado |
+|----|--------|-----------|--------|
+| EV-001 | DSS Pro V7 datasheet: arquitectura de servicios del servidor | CONFIRMADO | Abierta |
+| EV-002 | DSS Pro V7 manual: lista de puertos del servidor | CONFIRMADO | Abierta |
+| EV-003 | DSS Ultimate V8.8 instalador oficial disponible (dahuasecurity.com) | CONFIRMADO | Abierta |
+| EV-004 | NetSDK Linux x64 existe (binarios oficiales, NuGet + demo Java) | CONFIRMADO | Abierta |
+| EV-005 | NetSDK standalone no expone ruta P2P operativa sin libP2PDll + credenciales de app | PROBABLE | Abierta |
+| EV-006 | Protocolo P2P Dahua (Easy4IPCloud + PTCP) descrito en PoC público dh-p2p | PROBABLE | Abierta |
+| EV-007 | Documento "HTTP API for DSS V8.7" existe (Scribd) | NO VERIFICADO | Abierta |
+| EV-008 | Programa oficial de integración DSS (Partner DSS Integration / DEPP) | NO VERIFICADO | Abierta |
+| EV-009 | DoLynk Developer Cloud (open.dolynkcloud.com) plataforma oficial IoT | CONFIRMADO | Abierta |
+| EV-010 | DSS7016D appliance: manual oficial disponible | CONFIRMADO | Abierta |
+| EV-011 | Ataques activos usando P2P cloud por SN (oct-2026) | CONFIRMADO | Cerrada |
+| EV-012 | DSS Pro V8 usa P2P para conexiones de clientes (webinar oficial) | CONFIRMADO | Cerrada |
+| EV-013 | Puertos por defecto del dispositivo Dahua: 37777/37778/554/80 | PROBABLE | Abierta |
+
+## Fichas
+
+### EV-001 — Arquitectura de servicios DSS Pro (datasheet oficial)
+- Fecha: 2026-10-30 · Fuente: [DSS Pro Datasheet V7.002](https://www.dahuasecurity.com/asset/upload/uploads/soft/20210207/DSS-Pro-Datasheet_V7.002.0000003-V2-_20210207.pdf)
+- Evidencia: la hoja de datos lista los servicios del servidor.
+- Resultado: el servidor DSS Pro es modular, client-server: **Central Management Service (CMS), Device Management Service (DMS), Storage Service (SS), Media Transmission Service (MTS), Auto Register Service (ARS), Alarm Dispatch Service (ADS), Picture Transfer Service (PTS), Object Storage Service (OSS)**; clientes: Windows/Mac PC + DSS Mobile.
+- Confianza: **CONFIRMADO** (documento oficial de Dahua).
+- Limitaciones: corresponde a V7; la topología de servicios en V8 requiere verificación (EV-003).
+- Uso en DSS V2: mapa de equivalencias de módulos en `docs/ARCHITECTURE.md`.
+
+### EV-002 — Puertos del servidor DSS Pro V7
+- Fecha: 2026-10-30 · Fuente: [DSS Pro User Manual V7.02 (PDF oficial)](https://files.dahua.support/Solutions/HBTM-%20Pomiar%20temperatury/Instrukcje/DSS/04.%20DSS%20Pro%20User%20Mannual_V7.02.002.pdf)
+- Evidencia: la guía de configuración de router lista puertos a abrir: **9500, 9200, 21, 990, 9090, 61616, 9100, 3306, 9550, 9400, 80, 5080**; el anexo 1 "Service Module Introduction" detalla puerto por servicio; login HTTP del cliente en 443 por defecto.
+- Resultado: el servidor V7 expone ese conjunto de puertos; 3306 indica MySQL nativo; 21/990 FTP(S); 61616 típico de mensajería (ActiveMQ/STOMP).
+- Confianza: **CONFIRMADO** para V7 (manual oficial). V8: NO VERIFICADO.
+- Relacionado: `docs/NETWORK_PROTOCOLS.md` §servidor-DSS.
+
+### EV-003 — Instaladores oficiales disponibles
+- Fecha: 2026-10-30 · Fuente: [dahuasecurity.com Software Downloads](https://www.dahuasecurity.com/products/software/software-downloads)
+- Evidencia: catálogo ofrece **DSS Ultimate V8.8 Installation Package** (2026-10-28) y patch installer; históricamente existieron `General_DSS-PRO_Win64_IS_V7...exe` y `General_DSS-Express_win32...exe`.
+- Confianza: **CONFIRMADO** (existencia del instalador). Análisis estático del binario: pendiente → E-006.
+- Riesgo: licencia EULA del instalador; no redistribuir binarios.
+
+### EV-004 — NetSDK Linux x64 oficial
+- Fecha: 2026-10-30 · Fuentes: [NuGet Dahua.NetSDK.Native v3.57.2023.309](https://libraries.io/nuget/Dahua.NetSDK.Native) (incluye `linux-x64`, `linux-x86`), [GitHub 452/dahua-sdk](https://github.com/452/dahua-sdk) (usa libs lin64 del Download Center oficial, demo Java), [Programming Guide dhnetsdk](https://pdfcoffee.com/dahua-camera-netsdk-programming-guide-pdf-free.html).
+- Resultado: existen binarios NetSDK para Linux x64; API documentada con `CLIENT_Init/LoginEx2/RealPlay/Playback/PTZ/Alarm`. Puerto de dispositivo por defecto 37777.
+- Confianza: **CONFIRMADO** en existencia; validación efectiva en Ubuntu 24.04 → E-002.
+- Riesgo: licencias del SDK (redistribución restringida) → `docs/DAHUA_COMPATIBILITY.md`.
+
+### EV-005 — Limitación de P2P en NetSDK standalone
+- Fecha: 2026-10-30 · Fuente: [GitHub zkrige/dahua-smartpss-toolkit](https://github.com/zkrige/dahua-smartpss-toolkit) (un operador; experimento en macOS).
+- Evidencia: reporte: la ruta de "cloud login" del SDK standalone y `emSpecCap=19` **no funciona**; SmartPSS requiere `libP2PDll` + `Easy4IPServer.xml` + credenciales de aplicación fijas; el par `P2PClient/SmartPSS` por defecto es rechazado con **403**.
+- Confianza: **PROBABLE** (un reporte comunitario que afirma reproducibilidad; falta replicar en Ubuntu). Verificación → E-002/E-003.
+- Decisión asociada: ADR-0004 (no reutilizar credenciales de apps Dahua en producción).
+
+### EV-006 — Descripción del protocolo P2P (dh-p2p, MIT)
+- Fecha: 2026-10-30 · Fuente: [GitHub khoanguyen-3fc/dh-p2p](https://github.com/khoanguyen-3fc/dh-p2p) (PoC Rust+Python, MIT, 114 estrellas, 42 forks).
+- Resumen del protocolo (a confirmar en laboratorio):
+  - Nubes: `easy4ip` (Dahua/derivados) y `amcrest`; dominios mencionados: easy4ip.com, dahuap2p.com (coincide con zkrige).
+  - Flujo: `/probe/p2psrv` → `/online/p2psrv/{SN}` → `/probe/device/{SN}` → `/info/device/{SN}` (payload base64 + AES-256-OFB con `httpport/privport/randsalt/rtspport/tlsprivport`) → relay (`/relay/agent`, `/relay/start/{token}`) → handshake PTCP con el dispositivo.
+  - PTCP: TCP-sobre-UDP; cabecera de 24 bytes (magic "PTCP", sent/recv, pid, lmid, rmid); tipos de cuerpo 0x00 SYN, 0x10 datos, 0x11 bind, 0x12 CONN/DISC, 0x13 heartbeat, 0x19/0x1a/0x1b autenticación.
+  - Hash de login: `MD5({user}:Login to {randsalt}:{password})`.
+  - RTSP sobre el túnel: `rtsp://…/cam/realmonitor?channel=1&subtype=0`.
+- Confianza: **PROBABLE** (implementación pública reproducida por terceros; no oficial). Verificación → E-003 + E-005.
+- Advertencia: usa credenciales fijas de apps Dahua (ver EV-005) → aplica ADR-0004.
+
+### EV-007 — "Dahua HTTP API for DSS V8.7"
+- Fecha: 2026-10-30 · Fuente: [Scribd (doc de terceros)](https://www.scribd.com/document/962529883/) — resultado de búsqueda que describe un documento de API HTTP de DSS V8.7.
+- Confianza: **NO VERIFICADO** — obtener copia legítima oficial (centro de socios / documentación de Dahua) → E-004.
+- Nota: la API de integración no equivale al protocolo interno completo cliente-servidor (regla del proyecto).
+
+### EV-008 — Programa de integración de partners
+- Fecha: 2026-10-30 · Fuentes: [software.dahuasecurity.com/ceen/download](https://software.dahuasecurity.com/ceen/download) ("Partner DSS Integration"), [depp.dahuasecurity.com/integration/guide](https://depp.dahuasecurity.com/integration/guide) ("Integration Knowledge Base", "Getting Started").
+- Confianza: **NO VERIFICADO** en el contenido (páginas con JS; requiere sesión de partner). Acción: registrar cuenta / consultar proveedor; es la vía oficial para la compatibilidad DSS.
+
+### EV-009 — DoLynk Developer Cloud
+- Fecha: 2026-10-30 · Fuente: [open.dolynkcloud.com](https://open.dolynkcloud.com) — "IoT public cloud low-code platform" de Dahua para partners de su ecosistema; contacto DoLynkDeveloper@dahuatech.com.
+- Confianza: **CONFIRMADO** (existencia oficial). Aplicabilidad a NVR enterprise detrás de NAT: NO VERIFICADO → E-003 fase B.
+
+### EV-010 — Appliance DSS7016D
+- Fecha: 2026-10-30 · Fuente: catálogo de manuales de Dahua France (DSS7016D-S2 V1.0.0).
+- Confianza: **CONFIRMADO** (manual existe). Nuestra base instalada es un DSS7016D: el modelo exacto y la versión de DSS instalada se determinan en el laboratorio (panel del appliance) → E-001.
+
+### EV-011 — Abuso activo del P2P cloud (seguridad)
+- Fecha: 2026-10-30 · Fuente: [The Hacker News — atacantes acceden a cámaras Dahua vía P2P por solo SN (oct-2026)](https://thehackernews.com/2026/10/attackers-hijack-dahua-ip-cameras-in.html); menciona reporte de Hunt.io (283 dispositivos alcanzados por relay vía SN sin credenciales; backdoor p2pwn).
+- Confianza: **CONFIRMADO** (reporte de seguridad con múltiples fuentes). Implicación: DSS V2 nunca debe exponer el conector P2P ni endpoints admin a Internet; ver `docs/SECURITY.md`.
+
+### EV-012 — DSS Pro V8 y P2P
+- Fecha: 2026-10-30 · Fuente: webinar oficial Dahua Nordic "Introducing Dahua DSS Pro V8" (transcripción en YouTube).
+- Evidencia: en V8 se menciona usar **P2P para todas las conexiones de clientes**; se elige el tipo de dispositivo al agregarlo (IP / protocolo / ONVIF); activación/licencia por servidor (deactivate/activate movible entre servidores).
+- Confianza: **CONFIRMADO** (manifestación oficial del producto). Implicación: en V8, el Server acepta NVRs vía SN/P2P igual que el appliance.
+
+### EV-013 — Puertos por defecto del dispositivo
+- Fecha: 2026-10-30 · Fuentes: Programming Guide NetSDK (37777 como puerto estándar de login del dispositivo) + EV-006 (JSON de info del dispositivo: `privport` 37777, `tlsprivport` 37778, `rtspport` 554, `httpport` 80).
+- Confianza: **PROBABLE** para el conjunto completo (37777 confirmado por guía oficial); enumeración exacta por modelo/firmware → E-002.
