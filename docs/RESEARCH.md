@@ -32,6 +32,8 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 | EV-018 | `ClientFramework` (23.6 MB) es una base SQLite de registro de plugins/UI | CONFIRMADO | Cerrada |
 | EV-019 | Superficie SDK nativa del Client + estado de firma (instalador pkcs7; exe/netsdk sin firma) | CONFIRMADO | Cerrada |
 | EV-020 | M-002 DSS Ultimate V8.8 descargado y verificado (Server Win64 IS V8.008 R.20260930) | CONFIRMADO | Cerrada |
+| EV-021 | Instalador Server V8.008: stub 205 KB + overlay propietario (magic `93 FB 69 5A`), firmado por Dahua (DigiCert G4, cadena verificada) | CONFIRMADO | Cerrada |
+| EV-022 | Ghidra 12.1.4 operativo con REA; strings nativos validados con direcciones exactas | CONFIRMADO | Cerrada |
 
 ## Fichas
 
@@ -190,3 +192,38 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Confianza: **CONFIRMADO**. Registro completo en `research/evidence/samples-manifest.md`
   (fuera de git).
 - Pendiente: extracción estática + inventario del Server (sin ejecución) → siguiente pasada E-006.
+
+### EV-021 — Shell del instalador Server V8.008 + firma Authenticode de Dahua
+- Fecha: 2026-10-30 · Fuentes: 7-Zip 26.05 (`l -slt`, `x`), REA (`open_binary`,
+  `inspect_pe_imports` sobre stub truncado) y parseo .NET (`X509Certificate2Collection`) del
+  blob de firma extraído — lectura 100 % estática, nada ejecutado.
+- Estructura: PE32 x86 stub (~205 KB: `.text` 30.4 KB, `.rdata`, `.data`, `.rsrc` con
+  bitmaps/diálogos/8 iconos/MANIFEST, imports 7 DLLs/171: ADVAPI32/SHELL32/**ole32**/COMCTL32/
+  USER32/GDI32/KERNEL32, imphash-md5 `5e48fbae3520a62c95e412b293e1759c`) + **overlay
+  propietario de 1.731.655.800 bytes** (magic `93 FB 69 5A`; no NSIS/7z/MSI) + bloque
+  WIN_CERTIFICATE (type 2, 10.680 B) al final.
+- Firma: **CN="Zhejiang Dahua Technology Co., Ltd."** ← DigiCert Trusted G4 Code Signing
+  RSA4096 SHA384 2021 CA1 ← DigiCert Trusted Root G4 · leaf vigencia 2026-04-23→2027-06-26 ·
+  serial `0CD01D1F…2C87` · sha256RSA · thumbprint `87696A73…1BA` · **chain build True**
+  (trust local, revocación NoCheck). DER SHA-256 `35A85F78…2ED2EB`.
+- Confianza: **CONFIRMADO** (identidad del firmante oficial de Dahua observada; no implica
+  verificación de propiedad de cada byte del overlay).
+- Limitaciones: cap REA de 512 MiB impide `inspect_pe_imports/…certificates` sobre el archivo
+  completo (1.73 GB) — análisis de wrapper hecho con stub truncado + blob extraído a mano.
+- notship: el overlay queda como **contenedor desconocido** (decodificación pendiente).
+
+### EV-022 — Ghidra 12.1.4 operativo con REA (motor nativo Windows)
+- Fecha: 2026-10-30 · Fuente: `rea doctor` + `rea search` (CLI) con `GHIDRA_INSTALL_DIR` inline.
+- Instalación: zip oficial NSA `ghidra_12.1.4_PUBLIC_20260921.zip` (SHA-256 `DDAC49F9…D4DB`,
+  569.649.598 B) extraído en `C:\Users\bruno\Tools\dssv2\ghidra\ghidra_12.1.4_PUBLIC` (5219
+  archivos). `GHIDRA_INSTALL_DIR` fijado como env User; `JAVA_HOME` = JDK 25.0.2 (aceptado).
+- Doctor: `ghidra`, `ghidra-platform`, `ghidra-architecture`, `ghidra-installation`,
+  `ghidra-version`, `ghidra-headless`, `ghidra-native_decompiler`, `ghidra-java`,
+  `ghidra-native_authority` → **todos healthy** (decompile.exe win_x86_64 detectado).
+- Strings nativos validados: `rea search "DSS Client.exe" "Qt" --kind strings` → evidence
+  `ev_0469a534…` con matches y **direcciones exactas** (`0x140014e0a,Qt5Core.dll`,
+  `0x140014f18,Qt5Gui.dll`, `0x1400151ba,Qt5Widgets.dll`).
+- Confianza: **CONFIRMADO**.
+- Limitación operativa: el servidor MCP REA hereda el entorno al arrancar — **reiniciar
+  OpenCode** para que las herramientas MCP (`list_strings`, decompilación) vean el provider
+  (el CLI ya funciona); Hopper/IDA/jadx/Kuna siguen sin configurar (innecesarios por ahora).

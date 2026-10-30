@@ -39,11 +39,12 @@ Kuna). Sin provider corre (verificado en sesión 2026-10-30): `inspect_pe_import
 - **REA v6.8.0** instalado con Node 26.13.0 dedicado (`C:\Users\bruno\Tools\dssv2\`), registrado
   como MCP en OpenCode V2.2.4 (`~/.config/opencode/opencode.jsonc`; backup `.rea.backup`) —
   `opencode mcp list`: `✓ rea connected` · catálogo: **229 herramientas MCP / 175 comandos CLI**.
-- **Motores nativos no configurados** (Ghidra/Hopper/IDA/jadx/Kuna): sin ellos corre el
-  inventario estático observado (imports PE, certificados, load config, recursos, SQLite,
-  exports de DLL, overview). `list_strings`/`search_strings` y decompilación **sí** exigen
-  motor (verificado 2026-10-30): Ghidra 12.1.x + JDK ≥21 instalados por el operador
-  (JDK 25.0.2 ya presente en el host; frontera P0 experimental).
+- **Ghidra 12.1.4 instalado y healthy** (`C:\Users\bruno\Tools\dssv2\ghidra\ghidra_12.1.4_PUBLIC`,
+  zip NSA oficial, SHA-256 `DDAC49F9…D4DB`; JDK 25.0.2 aceptado). Strings nativos y
+  decompilación operativos vía CLI (`rea search` / `rea decompile`), validados con el
+  launcher del Client (EV-022). Hopper/IDA/jadx/Kuna siguen sin configurar (innecesarios).
+  Nota MCP: el servidor REA hereda el entorno al arrancar — **reiniciar OpenCode** para que
+  el MCP vea `GHIDRA_INSTALL_DIR` (User env ya fijada).
 - **frida** quedó con su post-install bloqueado por política npm (`allowScripts`): pendiente de
   aprobar solo si se necesitan sesiones dinámicas. No afecta esta fase.
 - Evidencia: `research/evidence/E-006/rea-setup-20261030.md` (fuera de git) · EV-014 en RESEARCH.md.
@@ -67,8 +68,9 @@ Kuna). Sin provider corre (verificado en sesión 2026-10-30): `inspect_pe_import
 - **DSS Client**: instalador oficial disponible localmente — SHA-256
   `A0138D2ED3228F0F75A37C5E72C126B9CD8F727F7516CB5744BEC691D42792C9` registrado en
   `research/evidence/samples-manifest.md` (fuera de git; nunca versionar el binario).
-- **DSS Server**: M-002 obtenido y verificado (EV-020) — ZIP 1.62 GiB con
-  `DH_DSS Ultimate_Release Notes.pdf` + `General_DSS-Ultimate_Server_Win64_IS_V8.008.0000000.0.R.20260930.exe`
-  (1.73 GB, build R.20260930). Extracción estática e inventario del Server: **pendiente**
-  (sin ejecución).
+- **DSS Server**: M-002 verificado (EV-020). Shell del instalador caracterizado (EV-021):
+  stub PE32 x86 ~205 KB (imphash-md5 `5e48fbae…`, con `ole32`) + **overlay propietario**
+  (magic `93 FB 69 5A`, 1.73 GB) **firmado por Dahua** (DigiCert G4, cadena verificada
+  localmente; leaf CN="Zhejiang Dahua Technology Co., Ltd."). Pendiente: decodificar el
+  overlay + inventario interno de servicios (sin ejecución).
 
