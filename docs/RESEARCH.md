@@ -40,6 +40,11 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 | EV-026 | pkgB embebido = instalador DSS Client completo V8.008 R.20260325 (247.74 MB, 1,199 archivos / 814 MB) dentro del instalador Server | CONFIRMADO | Cerrada |
 | EV-027 | easy4ip (Easy4IPCloud) CONFIRMADO en ambas generaciones DPSDK.dll (client y pkgB); corrige busquedas previas con 0 resultados | CONFIRMADO | Cerrada |
 | EV-028 | Tabla Z de 232 bloques stored grandes (>1 MB): 100% verificada por span; contenido con nombres reales (modelos .nnx, AR.zip, manuals, APK, vcredists) | CONFIRMADO | Cerrada |
+| EV-029 | Spec API BRMS/MTS de producción (operador): handshake doble MD5, puertos 1443/9100/18800/19800, endpoints v1.0/v1.1 | CONFIRMADO | Abierta |
+| EV-030 | DPSDK.dll implementa el contrato BRMS nativamente (authorize, X-Subject-Token, WINPC_V2, MTS/Video/StartVideo, websocket) | CONFIRMADO | Cerrada |
+| EV-031 | P2PDll.dll = wrapper libTouProxy: 8 exports P2P_* y DHProxyClientAddPortEx decompilado (forwarding de puerto local sobre túnel PTCP/Tou) | CONFIRMADO | Cerrada |
+| EV-032 | Protocolo cloud easy4ip: SOAP DDNS getDeviceByDevSequence + HTTP/JSON; detalles de cable PROBABLE (verificación dinámica E-008) | PROBABLE | Abierta |
+| EV-033 | Servicios del server en data-area: árbol Java Spring Boot con wrappers VMS_*.exe + esquema MySQL ac_* | CONFIRMADO | Cerrada |
 
 ## Fichas
 
@@ -278,3 +283,48 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Resultado: 232 brechas, **232/232 con modelOK**; contenido identificado por nombre del registro: modelos AI `*_reid_x64_openvino.nnx`, `DSOD_PIC_FL_x64_openvino.nnx`, `AR.zip` (125.6 MB), `spire.xls-14.4.4.jar`, `timeshape-2025b.28.jar`, `user-manual.pdf` (webclient), `resetpass-generator-1.0-jar-with-dependencies.jar`, `General_MPT220_Android_Phone_Chn_IS_V8.007…apk`, `vcredist_x64_vs2008/2015_2019.exe`, `msodbcsql_17.msi`, `_mssql.cp311-win_amd64.pyd` (Python 3.11 embebido).
 - Confianza: **CONFIRMADO** (coordenadas exactas y nombres en `z-gaps.json`, fuera de git).
 - Uso en DSS V2: el mapa del data-area (servicios del servidor, entorno Python 3.11, modelos AI) alimenta la matriz de equivalencias de `docs/ARCHITECTURE.md`.
+
+
+### EV-029 — Especificación de producción API BRMS/MTS/Alarmas (fuente operador)
+- Fecha: 2026-10-30 · Fuente: observación de producción del operador sobre un servidor DSS en 192.168.0.71 (entrada de E-007; sin URL pública).
+- Resultado (contrato observado):
+  - Puerto 1443 HTTPS/TLS = BRMS API Gateway: rutas /brms/api/v1.0/ y /v1.1/, JSON REST, token en cabecera X-Subject-Token.
+  - Puerto 9100 = MTS (RTSP tcp/udp) con token= en la URL del stream.
+  - 18800 (UDP/TCP) y 19800 (UDP de respaldo) = Generic Alarm Ingest: tramas de texto terminadas en CRLF que disparan pop-ups y Alarm Schemes en el Client.
+  - 8443/8888 = consola administrativa web y servicios auxiliares.
+  - Handshake POST /brms/api/v1.0/accounts/authorize: (1) desafío con userName → HTTP 401 con realm y randomKey; (2) firma: temp = md5(md5(userName + md5(password))); signature = md5(md5(userName + ":" + realm + ":" + temp) + ":" + randomKey); (3) payload {userName, randomKey, signature, clientType:"WINPC_V2"} → {token, duration:86400}.
+  - Sesión: accounts/keepalive, GET accounts/current, accounts/unauthorize.
+  - Resto de recursos: v1.0/tree/orgs|devices|channels (channelId formato "num$K$m$0"), v1.0/MTS/Video/StartVideo|StopVideo|KeepAlive, v1.1/video/live/channel/{channelId}/hls, v1.0/SS/Record/QueryRecord, v1.0/event/subscription (REST/WebSocket/ActiveMQ) y v1.0/event/query, v1.0/vehicle/anpr/records y /whitelist, v1.0/access/door/control, v1.0/ptz/direction|preset.
+- Confianza: CONFIRMADO como observación de producción del operador.
+- Limitaciones: muestra limitada a un despliegue; verificación cruzada con laboratorio propia (E-003/E-008) abierta.
+
+### EV-030 — DPSDK.dll implementa el contrato BRMS nativamente
+- Fecha: 2026-10-30 · Fuente: scan-brms-strings.mjs + scan-protocols.mjs sobre DPSDK.dll pkgB (3f49799f…, 11,388,424 B) y generación client (ce43c8b7…, 17,078,880 B).
+- Evidencia (strings literales en pkgB): "/brms/api", "/brms/api/v1.0/accounts/authorize", "accounts/token/keepalive", "accounts/unauthorize", "accounts/authorize/cert", "/authorizepolice", "/brms/api/v1.1/account/authorize/password/change"; plantilla "X-Subject-Token: %s"; "WINPC_V1"/"WINPC_V2"; "MTS/Video/StartVideo" y "Video/StopVideo" (clases HW_MTSVideoStartVideo, Dpsdk::CRestLogicalImplGA::HandleStartVideoResponce); "tree/devices", "tree/search", "v1.1/tree/grade-device-tree", "fcs/deviceTree/search"; campos "randomKey", "clientType", "deviceCode", "channelType"; autenticación MD5 vía "buildMd5DigestAuthReq, m_iRid = %d" y clases GetRealm; cliente WebSocket (Sec-WebSocket-Key/Version, "Received 101, switch to WebSocket"); RTSP sobre HTTP ("[DPSDK]OPTION/DESCRIBE iMediaSessionID … http->url"); alarmas "/bayonetServer/alarmReport" (Dpsdk::CBayonetPicClient); JSON "application/json; charset=utf-8".
+- Generación client además: "accounts/keepalive", informantes de bus "brms.notify*" (brms.notifyAlarms, brms.batchAddDevices) y exports de servidor websocket DPSDK_StartWebsocketServer / DPSDK_GetWebsocketServerPort.
+- Resultado: el DSS Client habla el contrato REST/JSON de EV-029 con esos mismos endpoints y esa gestión de token; el vídeo contra MTS es RTSP (OPTIONS/DESCRIBE) más HLS v1.1.
+- Confianza: CONFIRMADO (contadores por archivo y hashes de las muestras en dssclient-analysis/).
+- Implicación DSS V2: los endpoints mínimos de EV-029 + formato channelId + handshake MD5 bastan para compatibilidad precisa con el Client original.
+
+### EV-031 — P2PDll.dll = envoltorio de libTouProxy: exports y semántica decompiladas
+- Fecha: 2026-10-30 · Fuente: pe-exports-p2pdll.mjs (parser de tabla de exports PE) + REA/Ghidra 12.1.4 decompile_all (evidence ev_49afa116…) sobre P2PDll.dll pkgB (0b1082ef…).
+- Evidencia:
+  - Exports (8, idénticos en ambas generaciones): P2P_Init, P2P_Connect, P2P_Disconnect, P2P_GetDeviceInfo, P2P_DeviceStatus, P2P_QueryChannelStatus, P2P_QueryServerStatus, P2P_UnInit.
+  - Pseudocódigo: P2P_Connect → ruta ".\P2PDll.cpp AddPort" → DHProxyClientAddPortEx ("Src/Client/ProxyClientCWrap.cpp" de libTouProxy): exige instancia única, el parámetro de puerto local se recorta a u16 y devuelve éxito o "P2P_ERROR_ADD_PORT_FAIL".
+  - Strings del motor: namespace Dahua::Tou (túnel sobre UDP propio: parseSn, "ptcp connect success", "/relay/agent", "agenthost:", "jsonDevInfo", "get device info from device"), bind local "127.0.0.1" y diagnóstico "localport[%d],fd[%d]".
+- Resultado: P2PDll abre un túnel PTCP (directo o vía relay) y expone un puerto local en la máquina donde todo el resto de la pila (netsdk DVRIP, RTSP, …) habla como si estuviera conectado al dispositivo; P2P_Connect registra ese mapeo puerto↔SN y P2P_GetDeviceInfo entrega la información del dispositivo (jsonDevInfo).
+- Confianza: CONFIRMADO (decompilación + strings; exports reproducibles con parser propio).
+- Uso DSS V2: define el contrato externo del PoC "P2P Connector" (E-008): entrada (handler, SN, …), salida puerto local tunelado.
+
+### EV-032 — Protocolo cloud easy4ip: identificación estática
+- Fecha: 2026-10-30 · Fuente: scan-protocols.mjs + scan-brms-strings.mjs (DPSDK ambas generaciones) + dh-p2p (EV-006).
+- Evidencia en DPSDK: cliente HTTP curl completo (HSTS/cookies/ALPN), llamada SOAP ns2:getDeviceByDevSequence con ns2="http://webservice.ddns.dahua.com/" (búsqueda de dispositivo por SN en la plataforma DDNS de Dahua), JSON "application/json", dominios www.easy4ip.com y www.easy4ipcloud.com; en P2PDll: "agenthost:" y "/relay/agent" para coordinar relay.
+- NO apareció en strings: puertos UDP 8800/8866 ni magia de paquetes ES → wire-level queda PROBABLE, a confirmar por captura dinámica (E-003/E-008) o decompilación dirigida (limitación actual: deadline de Ghidra al analizar DPSDK completo de 11.4 MB).
+- Confianza: PROBABLE para los detalles del cable; CONFIRMADO para la presencia de la capa HTTP/SOAP + túnel PTCP/Tou.
+- Riesgo: el uso del cloud de Dahua requiere credenciales legítimas de app (ADR-0004); el PoC debe operar con SN propios de laboratorio o modo relay local.
+
+### EV-033 — Servicios del servidor en el data-area (mapa)
+- Fecha: 2026-10-30 · Fuente: map-server-services.mjs → services-map.json (41,055 registros del outer-db).
+- Resultado: los servicios del DSS Ultimate Server son Java Spring Boot desplegados en el árbol del data-area (665 jars únicos, 20,592 .class, ~1,805 .py, 213 .bat), con envoltorios nativos de servicio Windows: VMS_DMS.exe, VMS_ACMS.exe, VMS_ARCMS.exe, VMS_MTS.exe; configuraciones DMS.conf, brms.conf, MTS.xml. Controladores confirmados por nombre en clases de MTS (MTSServerController, MTSVideoController, MTSAudioController, MTSRegisterHandler, MTS2CmsMessageHandling) y CMS (CMSClusterServerController, CMSClientRegisterHandler); comunicación inter-servicios vía ActiveMQ (74 coincidencias), Redis (207) y Nginx (39); base MySQL con esquema ac_* (ac_door_*, ac_authorize_*; archivos .frm/.ibd) y tablas eco_openapi_*. LPR/estacionamiento: familias SIRAANPR*.class; lado servidor del P2P: nombre de compilación PlatformSDK__3caad5/C/DPSDK/Logic/P2P/P2PServerManager.cpp (fuga EV-027).
+- Confianza: CONFIRMADO (inventario por nombres del registro decodificado).
+- Mapeo endpoint→jar exacto: PROBABLE — requiere decodificar los chunks del data-area de los jars candidatos (fase siguiente E-009 opcional).

@@ -64,3 +64,9 @@ Formato: ADR-XXXX · Status · Fecha · Contexto · Decisión · Consecuencias.
 - Contexto: proyecto basado en investigación de protocolos; requiere hechos y reproducibilidad.
 - Decisión: `docs/RESEARCH.md` como registro único con clasificación de confianza obligatoria; este
   repositorio nunca versiona evidencia cruda (solo local, ver política de evidencia en README).
+
+
+## ADR-0009 — Conector P2P: implementación propia sobre PTCP/Tou con PoC MIT como referencia
+- Status: aceptada · Fecha: 2026-10-30 · Contexto: EV-031 (P2PDll decompilado: libTouProxy, 8 exports, puerto local tunelado) y EV-032 (lookup easy4ip por HTTPS/SOAP en DPSDK).
+- Decisión: no redistribuir ni integrar P2PDll.dll (licencia, ADR-0004); reimplementación propia del lookup cloud (HTTPS+SOAP) + túnel PTCP/Tou + forwarding de puerto local, usando el PoC MIT dh-p2p (EV-006) como referencia técnica abierta. Fases: A (lookup + PTCP), B (fallback relay), C (exposición dentro del servidor DSS V2).
+- Consecuencias: control y auditoría del cable propios; los detalles de protocolo pendientes se resuelven en E-008 con captura dinámica sobre SN legítimo de laboratorio; en paralelo el servidor DSS V2 debe cumplir ya el subconjunto BRMS/MTS de EV-029/EV-030 para servir al Client original.

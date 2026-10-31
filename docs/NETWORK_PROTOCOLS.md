@@ -69,3 +69,28 @@ Fuentes de confirmación propias: registro DNS en capturas de E-003.
   opcional 37778 — conf. EV-006/EV-013: PROBABLE. Verificar variantes de cifrado por firmware.
 - Para DSS V2: todo habla salir con TLS (ver `docs/SECURITY.md`), independizándose del estado del
   canal dispositivo→VMS (que puede no ser cifrado end-to-end).
+
+
+## 7. Gateway REST BRMS (puerto 1443/TLS) — contrato observado (E-007, EV-029/EV-030)
+
+Base: https://<server>:1443/brms/api/v1.0/ (y v1.1), JSON UTF-8, token en cabecera X-Subject-Token.
+
+### 7.1 Handshake de autenticación (EV-029)
+1. POST accounts/authorize con {"userName": "..."} —> HTTP 401 con realm y randomKey.
+2. temp = md5(md5(userName + md5(password))); signature = md5(md5(userName + ":" + realm + ":" + temp) + ":" + randomKey).
+3. POST accounts/authorize con {"userName","randomKey","signature","clientType":"WINPC_V2"} —> {"token","duration":86400}.
+4. Sesión: POST accounts/keepalive; GET accounts/current; POST accounts/unauthorize.
+
+Confirmación estática: DPSDK.dll genera exactamente esas rutas y cabeceras ("X-Subject-Token: %s", "buildMd5DigestAuthReq", "WINPC_V2") — EV-030.
+
+### 7.2 Recursos confirmados y su uso por el Client
+v1.0/tree/orgs|devices|channels; v1.0/MTS/Video/StartVideo|StopVideo|KeepAlive; v1.1/video/live/channel/{channelId}/hls; v1.0/SS/Record/QueryRecord; v1.0/event/subscription|query; v1.0/vehicle/anpr/records|whitelist; v1.0/access/door/control; v1.0/ptz/direction|preset. channelId = "num$K$m$0".
+
+## 8. MTS Media Streaming (9100) y Alarmas (18800/19800)
+
+- rtsp://<ip>:9100/...?token=<TOKEN> para video en vivo; el cliente RTSP de DPSDK alcanza MTS por OPTIONS/DESCRIBE envueltos en HTTP (EV-030); HLS por v1.1/video/live.
+- Generic Alarm Ingest: 18800 (UDP/TCP), 19800 UDP de respaldo; tramas de texto con CRLF disparan pop-ups y Alarm Schemes en el Client (confirmado por el operador; el client además usa la ruta HTTP alternativa "/bayonetServer/alarmReport").
+
+## 9. Flujo P2P Easy4IP visto desde el Client (EV-031/EV-032)
+
+SN → CP2PServerManager::LoginP2PServer (cloud easy4ip por HTTP+SOAP sobre DDNS) → NAT traversal PTCP/Tou o relay (/relay/agent) → DHProxyClientAddPortEx registra el puerto local tunelado → DVRIP 37777 / RTSP H.265 contra el dispositivo vía 127.0.0.1:puerto. Detalles del cable: E-008 (captura dinámica).

@@ -83,3 +83,9 @@ SDKs incluidos en ese árbol (hashes completos en `pkgB-key-sha256.json`, fuera 
 | netsdk.dll | 33,253,888 | `4d862b9272140df4efd0072f83d1273acd64b2f09635aed0dd18f469a8d91b48` |
 
 Estas generaciones difieren de las del instalador client V8.006 (EV-019): comparativa de versiones/exports → propuesta E-007.
+
+
+## 9. Correlación DPSDK ↔ contrato BRMS (E-007, EV-030)
+
+La misma DLL que el Client usa para vídeo/alarmas (DPSDK.dll) contiene el cliente REST de BRMS: construye /brms/api/v1.0/accounts/authorize, envía "X-Subject-Token: %s", ofrece WINPC_V2/WINPC_V1 como clientType y llama MTS/Video/StartVideo, tree/devices y accounts/keepalive, apoyándose en curl (HSTS/cookies) y jsoncpp. SetP2PClientType indica que el P2P easy4ip y el login BRMS comparten sesión de token. La generación client añade DPSDK_StartWebsocketServer (el propio DPSDK puede exponer una salida WebSocket local, útil como referencia de integración V2) y las claves de bus brms.notify* (probable ActiveMQ).
+Compatibilidad DSS V2 → ver DAHUA_COMPATIBILITY.md §5 y NETWORK_PROTOCOLS.md §7.

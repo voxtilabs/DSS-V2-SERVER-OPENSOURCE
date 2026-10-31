@@ -83,3 +83,26 @@ Fuente: `scan-4-dlls.mjs` sobre las 4 DLLs (client V8.006 `dssclient-extracted` 
 | Build path filtrada (pkgB DPSDK) | `d:\jk_107\workspace\Module_Software-HW_DSS-Client_OverseasClient_W_OverseasClient_windows\code_path\PlatformSDK__3caad5\C\DPSDK\Logic\P2P\P2PServerManager.cpp` | CONFIRMADO |
 
 Corrección de registro: búsquedas previas case-sensitive con `easy4ip: 0 resultados` (`ev_4971b2ca`/`ev_ef79f8af`) quedan supersedidas (EV-027). El plan de laboratorio (E-003/E-005) gana un objetivo concreto: logar el flujo `LoginP2PServer → GetP2PServerList → GetDeviceInfoFromEasy4IP` capturando DNS/TLS de `*.easy4ip*.com`.
+
+
+## 7. PoC "DSS V2 P2P Connector" — especificación (E-007, EV-031/EV-032)
+
+Diagrama de secuencia objetivo (base estática confirmada):
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario (SN + credenciales)
+  participant C as DSS V2 Connector
+  participant E as Easy4IP Cloud (HTTP/SOAP)
+  participant D as DVR/NVR tras NAT
+  U->>C: SN + credenciales
+  C->>E: login / getDeviceByDevSequence(SN) [HTTPS+SOAP]
+  E-->>C: host de relay/agent
+  C->>D: handshake PTCP (directo o /relay/agent)
+  C-->>C: DHProxyClientAddPortEx(localPort)
+  U->>C: DVRIP 37777 / RTSP H.265 via 127.0.0.1:localPort
+  C-->>D: forwarding del túnel
+```
+
+Arquitectura elegida (ADR-0009): proceso propio con dos módulos — (1) dsv2-cloud-dialer: reimplementación del lookup (HTTPS/SOAP ya observados en DPSDK) y del handshake PTCP/Tou, tomando como referencia abierta el PoC MIT dh-p2p (EV-006); (2) dsv2-port-forward: escucha local en loopback y multiplexa hacia DVRIP/RTSP. No se redistribuye P2PDll.dll ni material no sintético de Dahua (ADR-0003/0004).
+Limitación de conocimiento: puertos UDP del cloud y magia de paquetes quedan PROBABLE hasta E-008 (captura dinámica con SN legítimo propio).

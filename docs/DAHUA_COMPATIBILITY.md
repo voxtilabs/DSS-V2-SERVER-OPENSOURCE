@@ -47,3 +47,14 @@
 
 Interoperabilidad Open: cualquier driver ONVIF/Generic-RTSP debe ser plugin separado; por ahora el
 alcance es Dahua-first.
+
+
+## 5. Compatibilidad REST con DSS Client V8 (E-007, EV-029/EV-030)
+
+Un servidor de reemplazo (DSS V2) que sirva al DSS Client original debe exponer, en puerto 1443 con TLS, como mínimo:
+1. POST /brms/api/v1.0/accounts/authorize con handshake MD5 doble (realm + randomKey + signature, clientType WINPC_V2) y respuesta {"token","duration":86400}; además accounts/keepalive, GET accounts/current, accounts/unauthorize.
+2. Cabecera X-Subject-Token en todos los recursos autenticados y formato channelId "num$K$m$0".
+3. v1.0/tree/orgs|devices|channels con deviceCode y channelType.
+4. v1.0/MTS/Video/StartVideo|StopVideo|KeepAlive; streaming RTSP en 9100 con token= (o RTSP-over-HTTP, soportado por el cliente) y HLS v1.1/video/live.
+5. El resto de recursos según alcance (eventos, grabaciones SS, PTZ, ANPR, control de puertas) — ver EV-029/EV-030.
+El contrato lo fijan los strings del Client; no hay requisito de credenciales de app Dahua por parte de DSS V2 (ADR-0004).
