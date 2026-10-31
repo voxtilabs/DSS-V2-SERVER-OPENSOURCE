@@ -611,3 +611,16 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
   - Almacenamiento en memoria (`P2P_DEVICES` Map) con `deviceId`, `channelIds` (`P2P-xxx$1$0$0`)
   - Preparado para integración con `p2p-probe` (SOAP Easy4IP + PTCP tunnel)
 - Confianza: **CONFIRMADO** (endpoints operativos, tests pasan)
+
+### EV-060 — ARS (Auto Register Service) - Registro Automático Tradicional
+- Fecha: 2026-11-01 · Validado por Don Omar: *"El autoregistro requiere que le des una IP, un puerto y un ID para el registro. Puedes desactivar p2p y el autoregistro funciona igual."*
+- Endpoints en `brms-gateway` (funcionan SIN P2P):
+  - `POST /ars/register` (sin auth) → dispositivo se autoregistra con `{ deviceId, ip, port, ... }`
+  - `POST /ars/keepalive` (sin auth) → heartbeat periódico
+  - `POST /ars/unregister` (sin auth) → desregistro
+  - `POST /ars/list` (con auth client) → lista dispositivos ARS
+  - `POST /ars/device-info` (con auth client) → `DeviceTreeVo` compatible para árbol
+- Almacenamiento: `ARS_DEVICES` Map con `deviceId`, `originalId`, `ip`, `port`, `status`, `lastSeen`
+- Diferencia clave con P2P Register: ARS = device-to-server (sin P2P), P2P Register = client-to-server (requiere P2P)
+- Tests: Register, Keepalive, List, DeviceInfo, Unregister → todos PASS
+- Confianza: **CONFIRMADO** (validado en laboratorio, confirmado por operador)

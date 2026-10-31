@@ -313,3 +313,27 @@ Endpoints invocados por DSS Client tras login exitoso:
 2. **Integración p2p-probe → BRMS**: SOAP Easy4IP lookup automático al registrar SN
 3. **Túnel PTCP/Tou real** con `createLocalPort` en `127.0.0.1`
 4. **HLS segmentos reales** en `/brms/api/v1.1/video/live/channel/:channelId/hls`
+
+## 16. ARS (Auto Register Service) - Registro Automático Tradicional (EV-060)
+
+### 16.1 Diferencia clave: ARS vs P2P Register
+| Aspecto | P2P Register (`/device/p2p-register`) | ARS (`/ars/register`) |
+|---------|--------------------------------------|----------------------|
+| **Iniciador** | DSS Client (por SN) | Dispositivo (por IP/Puerto/ID) |
+| **Requiere P2P** | Sí (prepara túnel PTCP) | **NO** (Don Omar confirmado) |
+| **Campos clave** | `sn, user, password, channels` | `deviceId, ip, port, deviceId, ...` |
+| **Autenticación** | Client token (`X-Subject-Token`) | **Ninguna** (device-to-server) |
+
+### 16.2 Endpoints ARS Implementados
+| Endpoint | Descripción |
+|----------|-------------|
+| `POST /ars/register` | Dispositivo se registra (sin auth) |
+| `POST /ars/keepalive` | Heartbeat periódico del dispositivo |
+| `POST /ars/unregister` | Dispositivo se desregistra |
+| `POST /ars/list` | Lista dispositivos ARS (requiere auth client) |
+| `POST /ars/device-info` | Info compatible `DeviceTreeVo` para árbol |
+
+### 16.3 Validación Don Omar
+> "El autoregistro requiere que le des una IP, un puerto y un ID para el registro. Esto requiere autoregistro. Eso apunta a la ip que tú le das. Puedes desactivar p2p y el autoregistro funciona igual."
+
+**Confirmado**: ARS funciona independientemente de P2P. El dispositivo se configura con la IP del servidor y se autoregistra.

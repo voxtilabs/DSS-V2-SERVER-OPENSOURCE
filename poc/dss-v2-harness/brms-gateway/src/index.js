@@ -436,6 +436,135 @@ app.post('/brms/api/v1.0/device/p2p-list', { preHandler: auth }, async () => {
   return envelope({ devices });
 });
 
+// ===== ARS (Auto Register Service) - Device Auto-Registration =====
+// Traditional Dahua device auto-registration (device -> server)
+// Device sends registration with its info, server adds to device tree
+// Works WITHOUT P2P (as Don Omar confirmed)
+
+const ARS_DEVICES = new Map();
+
+// Device registers itself (called by device, not client)
+// Body: { deviceId, deviceName, ip, port, username, password, deviceType, channelNum, ... }
+app.post('/brms/api/v1.0/ars/register', async (req, reply) => {
+  const { deviceId, deviceName, ip, port, username, password, deviceType, channelNum, protocol, ...rest } = req.body;
+  
+  if (!deviceId || !ip) {
+    return reply.code(400).send(envelope(null, 400, 'Missing deviceId or ip'));
+  }
+
+  // Check if already registered
+  if (ARS_DEVICES.has(deviceId)) {
+    const existing = ARS_DEVICES.get(deviceId);
+    existing.lastSeen = Date.now();
+    existing.ip = ip; // Update IP in case it changed
+    return envelope({
+      success: true,
+      deviceId: existing.deviceId,
+      message: 'Device already registered, updated',
+      registered: true
+    });
+  }
+
+  // Generate internal device code if not provided
+  const internalDeviceCode = deviceId.startsWith('ARS-') ? deviceId : 'ARS-' + deviceId;
+
+  // Store ARS device info
+  const deviceInfo = {
+    deviceId: internalDeviceCode,
+    originalId: deviceId,
+    deviceName: deviceName || `AutoReg Device ${deviceId}`,
+    ip,
+    port: port || 37777,
+    username: username || 'admin',
+    password: password || 'admin123',
+    deviceType: deviceType || 2, // 2 = IPC
+    channelNum: channelNum || 1,
+    protocol: protocol || 'Dahua',
+    status: 1, // online
+    registeredAt: Date.now(),
+    lastSeen: Date.now(),
+    ...rest
+  };
+
+  ARS_DEVICES.set(deviceId, deviceInfo);
+
+  console.log('[ARS] Device registered:', deviceId, 'from', ip);
+
+  return envelope({
+    success: true,
+    deviceId: internalDeviceCode,
+    message: 'Device registered successfully via ARS'
+  });
+});
+
+// Device heartbeat/keepalive
+app.post('/brms/api/v1.0/ars/keepalive', async (req, reply) => {
+  const { deviceId } = req.body;
+  if (!deviceId) return reply.code(400).send(envelope(null, 400, 'Missing deviceId'));
+
+  const device = ARS_DEVICES.get(deviceId);
+  if (!device) {
+    return reply.code(404).send(envelope(null, 404, 'Device not registered'));
+  }
+
+  device.lastSeen = Date.now();
+  device.status = 1; // online
+
+  return envelope({ success: true, deviceId });
+});
+
+// Device unregister
+app.post('/brms/api/v1.0/ars/unregister', async (req, reply) => {
+  const { deviceId } = req.body;
+  if (!deviceId) return reply.code(400).send(envelope(null, 400, 'Missing deviceId'));
+
+  ARS_DEVICES.delete(deviceId);
+  return envelope({ success: true, message: 'Device unregistered' });
+});
+
+// List ARS registered devices
+app.post('/brms/api/v1.0/ars/list', { preHandler: auth }, async () => {
+  const devices = Array.from(ARS_DEVICES.values()).map(d => ({
+    deviceId: d.deviceId,
+    originalId: d.originalId,
+    deviceName: d.deviceName,
+    ip: d.ip,
+    port: d.port,
+    deviceType: d.deviceType,
+    channelNum: d.channelNum,
+    status: d.status,
+    registeredAt: d.registeredAt,
+    lastSeen: d.lastSeen
+  }));
+  return envelope({ devices });
+});
+
+// Get ARS device info for tree integration
+app.post('/brms/api/v1.0/ars/device-info', { preHandler: auth }, async (req) => {
+  const { deviceId } = req.body;
+  const device = ARS_DEVICES.get(deviceId);
+  if (!device) {
+    return envelope(null, 404, 'Device not found');
+  }
+  return envelope({
+    deviceCode: device.deviceId,
+    deviceName: device.deviceName,
+    status: device.status,
+    deviceType: device.deviceType,
+    ip: device.ip,
+    port: device.port,
+    protocol: device.protocol,
+    username: device.username,
+    channelNum: device.channelNum,
+    alarmInNum: 1,
+    alarmOutNum: 1,
+    diskNum: 0,
+    supportP2P: false,
+    supportRTSPS: false,
+    supportMulticast: false
+  });
+});
+
 // ===== HEALTH =====
 app.get('/health', async () => ({ status: 'ok', version: '0.3.0', realm: REALM, rtspPort: RTSP_PORT, publicHost: PUBLIC_HOST, mediamtxUrl: MEDIAMTX_URL }));
 

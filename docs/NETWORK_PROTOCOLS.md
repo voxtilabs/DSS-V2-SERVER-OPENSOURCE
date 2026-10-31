@@ -385,7 +385,21 @@ curl -k https://10.10.20.120:1443/health
 
 **Flujo**: Registra SN → genera `deviceId` (`P2P-xxx`) + `channelIds` (`P2P-xxx$1$0$0`) → prepara túnel PTCP/Tou.
 
-### 21.4 RTSP/H.265 con MediaMTX
+### 21.4 ARS (Auto Register Service) - Device Auto-Registration
+Tradicional registro automático de dispositivos Dahua (device → server). **Funciona SIN P2P** (confirmado por Don Omar).
+
+| Endpoint | Method | Auth | Body | Response |
+|----------|--------|------|------|----------|
+| `/brms/api/v1.0/ars/register` | POST | No | `{ deviceId, deviceName, ip, port, username, password, deviceType, channelNum, ... }` | `{ success, deviceId, message }` |
+| `/brms/api/v1.0/ars/keepalive` | POST | No | `{ deviceId }` | `{ success, deviceId }` |
+| `/brms/api/v1.0/ars/unregister` | POST | No | `{ deviceId }` | `{ success, message }` |
+| `/brms/api/v1.0/ars/list` | POST | Sí | - | `{ devices: [...] }` |
+| `/brms/api/v1.0/ars/device-info` | POST | Sí | `{ deviceId }` | `DeviceTreeVo` compatible |
+
+**Flujo**: Dispositivo envía registro con su info → Server añade a árbol de dispositivos → Dispositivo hace keepalive periódico.
+**Clave**: Requiere IP, puerto y ID del dispositivo (como indicó Don Omar). **P2P se puede desactivar** y funciona igual.
+
+### 21.5 RTSP/H.265 con MediaMTX
 - **MediaMTX** en docker-compose (puerto 9100 → 8554 interno)
 - Paths `test`, `cam1` con `source: publisher`
 - **Limitación**: Requiere publisher FFmpeg externo para H.265 real

@@ -263,4 +263,22 @@ curl -k https://10.10.20.120:1443/health
 curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/device/p2p-register \
   -H "X-Subject-Token: <token>" -H "Content-Type: application/json" \
   -d '{"sn":"SN123456","user":"admin","password":"admin123","channels":4}'
+
+# Test ARS register (device auto-registration, no auth)
+curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/register \
+  -H "Content-Type: application/json" \
+  -d '{"deviceId":"CAM-001","deviceName":"Test Cam","ip":"192.168.1.100","port":37777}'
 ```
+
+### 10.7 ARS (Auto Register Service) - Registro Automático Tradicional
+**Validado por Don Omar**: "El autoregistro requiere que le des una IP, un puerto y un ID para el registro. Puedes desactivar p2p y el autoregistro funciona igual."
+
+| Endpoint | Auth | Body | Response |
+|----------|------|------|----------|
+| `POST /ars/register` | No | `{ deviceId, deviceName, ip, port, username, password, deviceType, channelNum }` | `{ success, deviceId }` |
+| `POST /ars/keepalive` | No | `{ deviceId }` | `{ success, deviceId }` |
+| `POST /ars/unregister` | No | `{ deviceId }` | `{ success }` |
+| `POST /ars/list` | Sí | - | `{ devices: [...] }` |
+| `POST /ars/device-info` | Sí | `{ deviceId }` | `DeviceTreeVo` |
+
+**Diferencia clave**: ARS = device-to-server (sin P2P), P2P Register = client-to-server (con P2P).
