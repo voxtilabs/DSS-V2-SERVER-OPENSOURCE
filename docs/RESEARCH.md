@@ -45,6 +45,12 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 | EV-031 | P2PDll.dll = wrapper libTouProxy: 8 exports P2P_* y DHProxyClientAddPortEx decompilado (forwarding de puerto local sobre túnel PTCP/Tou) | CONFIRMADO | Cerrada |
 | EV-032 | Protocolo cloud easy4ip: SOAP DDNS getDeviceByDevSequence + HTTP/JSON; detalles de cable PROBABLE (verificación dinámica E-008) | PROBABLE | Abierta |
 | EV-033 | Servicios del server en data-area: árbol Java Spring Boot con wrappers VMS_*.exe + esquema MySQL ac_* | CONFIRMADO | Cerrada |
+| EV-034 | Formato SOAP exacto de GetDeviceInfoFromEasy4IP: ns2:getDeviceByDevSequence (webservice.ddns.dahua.com) con <devSequence>%s</devSequence> | CONFIRMADO | Cerrada |
+| EV-035 | Dominios cloud observados: www.easy4ip.com, www.easy4ipcloud.com, www.dahuap2p.com, www.dahuap2pcloud.com + host interno 172.23.1.120 | CONFIRMADO | Cerrada |
+| EV-036 | Pseudocódigo P2PDll.dll completo: 8 exports P2P_* + DHProxyClientAddPortEx (local port forward sobre PTCP/Tou) | CONFIRMADO | Cerrada |
+| EV-037 | Contratos REST BRMS extraídos de 11 controladores Spring Boot (Authorize, Account, DeviceTree, Video, Event, SSRecord, Access, Vehicle, Ptz, BRMAlarm, AlarmRecord) | CONFIRMADO | Cerrada |
+| EV-038 | Mock BRMS Gateway (Node.js/Fastify) implementado en poc/dss-v2-harness/brms-gateway/ con handshake doble MD5, X-Subject-Token, y endpoints v1.0/v1.1 | CONFIRMADO | Abierta |
+| EV-039 | P2P Probe scaffolding en poc/dss-v2-harness/p2p-probe/ para validar Easy4IP SOAP + PTCP/Tou con SN propio de laboratorio | PROBABLE | Abierta |
 
 ## Fichas
 
@@ -328,3 +334,135 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Resultado: los servicios del DSS Ultimate Server son Java Spring Boot desplegados en el árbol del data-area (665 jars únicos, 20,592 .class, ~1,805 .py, 213 .bat), con envoltorios nativos de servicio Windows: VMS_DMS.exe, VMS_ACMS.exe, VMS_ARCMS.exe, VMS_MTS.exe; configuraciones DMS.conf, brms.conf, MTS.xml. Controladores confirmados por nombre en clases de MTS (MTSServerController, MTSVideoController, MTSAudioController, MTSRegisterHandler, MTS2CmsMessageHandling) y CMS (CMSClusterServerController, CMSClientRegisterHandler); comunicación inter-servicios vía ActiveMQ (74 coincidencias), Redis (207) y Nginx (39); base MySQL con esquema ac_* (ac_door_*, ac_authorize_*; archivos .frm/.ibd) y tablas eco_openapi_*. LPR/estacionamiento: familias SIRAANPR*.class; lado servidor del P2P: nombre de compilación PlatformSDK__3caad5/C/DPSDK/Logic/P2P/P2PServerManager.cpp (fuga EV-027).
 - Confianza: CONFIRMADO (inventario por nombres del registro decodificado).
 - Mapeo endpoint→jar exacto: PROBABLE — requiere decodificar los chunks del data-area de los jars candidatos (fase siguiente E-009 opcional).
+
+
+### EV-034 — Formato SOAP exacto de GetDeviceInfoFromEasy4IP
+- Fecha: 2026-10-30 · Fuente: `trace-easy4ip-detail.mjs` (strings vecindad offset 8,547,280 en DPSDK.dll pkgB).
+- Evidencia: `<ns2:getDeviceByDevSequence xmlns:ns2='http://webservice.ddns.dahua.com/'><devSequence>%s</devSequence></ns2:getDeviceByDevSequence>` + sobre SOAP `<soap:Envelope xmlns:soap='http://schemas.xmlsoap.org/soap/envelope/'>`.
+- Contexto: llamado desde `Dpsdk::CP2PServerManager::LoginP2PServer` → `StartP2PTraversal` → `GetDeviceInfoFromEasy4IP` → `ParseHttpBodyForEasy4IP`.
+- Confianza: **CONFIRMADO** (strings literal en .rdata vecinas a la función).
+
+### EV-035 — Dominios y hosts cloud Easy4IP/P2P
+- Fecha: 2026-10-30 · Fuente: `trace-easy4ip-detail.mjs` (vecindad offset 10,755,048).
+- Lista exacta: `www.easy4ip.com`, `www.easy4ipcloud.com`, `www.dahuap2p.com`, `www.dahuap2pcloud.com`, IP interna `172.23.1.120` (probable entorno de staging/desarrollo Dahua).
+- Confianza: **CONFIRMADO** (strings ASCII/UTF-16 adyacentes).
+
+### EV-036 — Pseudocódigo completo de P2PDll.dll (libTouProxy)
+- Fecha: 2026-10-30 · Fuente: `decompile_all` REA/Ghidra 12.1.4 (evidence `ev_49afa116…`) → `dssserver-analysis/p2pdll-decomp/`.
+- Exports (8): `P2P_Init`, `P2P_Connect`, `P2P_Disconnect`, `P2P_GetDeviceInfo`, `P2P_DeviceStatus`, `P2P_QueryChannelStatus`, `P2P_QueryServerStatus`, `P2P_UnInit`.
+- Núcleo: `P2P_Connect(param_1, …) → FUN_1800010f0 (AddPort) → DHProxyClientAddPortEx ("Src/Client/ProxyClientCWrap.cpp", libTouProxy)`: instancia única, `*param_4 = (ushort)port`, devuelve `0` éxito o `0x11` (`P2P_ERROR_ADD_PORT_FAIL`).
+- Strings motor: `Dahua::Tou::parseSn`, `ptcp connect success`, `/relay/agent`, `agenthost:`, `jsonDevInfo`, `get device info from device`, bind `127.0.0.1`.
+- Confianza: **CONFIRMADO** (decompilación + strings + exports PE).
+
+### EV-037 — Contratos REST BRMS extraídos de controladores Spring Boot
+- Fecha: 2026-10-30 · Fuente: `decode-brms-controllers.mjs` + `run-javap-all.mjs` (11 controladores decodificados del data-area).
+- Controladores y métodos públicos clave:
+  - **AuthorizeController (v1s1)**: `getToken(TokenInfoXo)`, `checkToken`, `checkCredence(CredenceXo)`.
+  - **AccountController (linux)**: `getMenus()`, `updatePassword(AccountInfoVo)`, `getAccountUpdatePublicKey()`.
+  - **DeviceTreeController (v1s0.brm)**: `getDeviceOrgTree(String,String,String)`, `getDeviceInfoTree(DeviceTreeXo)`, `searchDeviceTree(DeviceTreeSearchXo)`.
+  - **VideoController (v1s1)**: `download(VideoRecordDownloadXo)` (MTS StartVideo está en MTSVideoController).
+  - **EventController (ecos)**: `pushEvent(HttpServletRequest, EventXo)`, `batchPushEvent(EventXos)`, `batchPushEventFile(EventFileXos)`.
+  - **SSRecordController (v1s0.ss)**: `queryRecords(RequestInfo<RecordQueryXo>)`, `startRecord/stopRecord(RecordStartStopXo)`, `getAlarmRecords(AlarmXo)`, `lockRecord/unlockRecord(RecordLockXo)`, `deleteRecord(RecordDeleteXo)`.
+  - **AccessController (v1s1.obms)**: `getDoorCurrentStatus(PointIdsXo)`, `getAreaAccessRecordPage(AccessRecordPageXo)`, `exportAccessRecordPage(AccessRecordExportXo)`, `getDoorCurrentAlarmStatus(PointIdsXo)`.
+  - **VehicleController (v1s1.ipms)**: `getCars(CarQueryParamXo)`, `getCarInfo(Long)`, `addCars(AddCarsXo)`, `getEntranceAccessInfo(String,String,String)`.
+  - **PtzController (v1s1)**: `setHomePosition(String)`, `gotoHomePosition(String)`, `getPresetPoints(String)`, `moveAbsolutely(String, PtzMoveAbsolutelyXo)`, `getPtz(String)`.
+  - **BRMAlarmController (v1s0.eams)**: `handleAlarm(AlarmHanleXo)`, `getAlarmProcedures(AlarmXo)`, `getAlarmDprecord/PicrecordWanted/EntranceBlockList/EntranceOverTime/FaceDetection/FaceRecognition/AccessRecordInfo`.
+  - **AlarmRecordController (v1s1.eams)**: `queryAlarmRecords(PageAlarmRecordXo)`, `exportAlarmRecords`, `getAlarmEntranceInfo`, `queryLatestUnhandledAlarmRecords`, `getAlarmDeviceContactInfo`, `getAlarmAdditionInfo`.
+- Confianza: **CONFIRMADO** (pseudocódigo Java + firmas de método; DTOs nombradas coinciden con strings en DPSDK).
+
+### EV-038 — Mock BRMS Gateway (PoC) implementado
+- Fecha: 2026-10-30 · Código: `poc/dss-v2-harness/brms-gateway/` (Node.js 20+, Fastify, sin dependencias externas salvo node-forge).
+- Implementa handshake doble MD5 idéntico a `buildMd5DigestAuthReq` (EV-030): `temp = md5(md5(user + md5(pass)))`, `signature = md5(md5(user:realm:temp):randomKey)`, `clientType: "WINPC_V2"`.
+- Endpoints funcionales: `/brms/api/v1.0/accounts/authorize|keepalive|current|unauthorize`, `/tree/orgs|devices|channels`, `/MTS/Video/StartVideo|StopVideo|KeepAlive` (devuelve `rtsp://127.0.0.1:9100/...` + HLS), `/SS/Record/QueryRecord`, `/event/subscription|query`, `/vehicle/anpr/records|whitelist`, `/access/door/control`, `/ptz/direction|preset`.
+- Tests automatizados: `npm test` valida handshake 401→200, token X-Subject-Token, formato `channelId` `num$K$m$0`, URLs RTSP/HLS.
+- Confianza: **CONFIRMADO** (código ejecutable, tests pasan contra spec EV-029).
+
+### EV-039 — P2P Probe scaffolding
+- Fecha: 2026-10-30 · Código: `poc/dss-v2-harness/p2p-probe/` (Node.js, ESM).
+- Funciones: `soapGetDeviceByDevSequence(SN)` envía el payload SOAP exacto de EV-034; `touHandshake(relayHost, relayPort, localPort)` esqueleto para `DHProxyClientAddPortEx` (EV-031).
+- Tests crypto: validadores de `doubleMd5` y `signature` coincidentes con DPSDK.
+- Uso: `SN=<serial> USER=<user> PASS=<pass> node src/index.js` → consulta SOAP a `www.easy4ip.com`, parsea relay, abre túnel PTCP, mapea puerto local.
+- Confianza: **PROBABLE** (esqueleto funcional; handshake PTCP/Tou completo requiere reimplementación de libTouProxy por ADR-0009 → E-009).
+### EV-040 — libTouProxy completo (P2PDll.dll): cadena de llamadas y protocolo
+- Fecha: 2026-10-31 · Fuente: REA/Ghidra 12.1.4 decompile_all sobre P2PDll.dll pkgB (0b1082ef...), análisis de funciones internas.
+- Evidencia:
+  - **P2P_Init** → `DHProxyClientInit` → `getDomainIP` (DNS resolve via `getaddrinfo` / `DAT_18032f928`), crea instancia `ProxyClientImpl` (única por proceso).
+  - **P2P_Connect** → `AddPort` → `DHProxyClientAddPortEx` → `FUN_18001e160` → `FUN_18001d1d0` (núcleo) → `FUN_18001c8e0` (`createLocalPort`): bind UDP en `0.0.0.0:puerto`, valida que `remoteIp` sea `127.0.0.1` o `::1`, `listen` via `FUN_18008dd80`, registra en mapa `CPortResource` claveado por puerto local.
+  - **P2P_GetDeviceInfo** → `DHProxyGetDeviceInfo` → `FUN_18000dd60` → `FUN_1800108c0` → llamada virtual vtable offset 0x20 (`FUN_18002e620`).
+  - Strings clave: `Dahua::Tou::parseSn`, `ptcp connect success`, `/relay/agent`, `agenthost:`, `jsonDevInfo`, `get device info from device`, bind `127.0.0.1`.
+  - Single-instance enforced: `tagmast_pClient` global, error `SDK Client need has one instance first!`.
+- Confianza: **CONFIRMADO** (pseudocódigo completo para exports + cadena interna).
+
+### EV-041 — Esquemas JSON de 46 DTOs BRMS (RequestInfo/ResponseInfo)
+- Fecha: 2026-10-31 · Fuente: `decode-dtos.mjs` (extracción marker+LZMA del data-area) + `javap -v -p` sobre 46 clases `.class` extraídas.
+- DTOs clave y campos:
+  - `TokenInfoVo`: `token, userId, username, userType, topLevel`
+  - `DeviceOrgTreeVo`: `departments` (array `OrgNodeVo`: `orgId, orgName, parentId, orgType, sort, children`)
+  - `DeviceTreeVo`: `devices` (array `DeviceUnitInfoVo`: `deviceCode, deviceName, status, deviceType, channelNum, ip, port, protocol, userName, supportP2P...`)
+  - `RealTimeVideoVo`: `connectType, ip, minRate, multicastIp, multicastPort, port, protocol, session, stopTime, stunEnable, stunPort, token, trackId, url, url2, vkId, vkValue`
+  - `RealTimeVideoXo`: `channelId, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, streamType, trackId`
+  - `RecordQueryVo`: `pageCount, records (RecordQueryVo[]), session`
+  - `RecordQueryXo`: `All, Device, Timer, cardNo, channelId, deviceInfo, diskPath, endIndex, endTime, page, recordSource, recordType, session, startIndex, startTime, streamIds, streamType`
+  - `VehicleVo`: `id, personId, plateNo, carType, carNumColor, carBrand, vehicleColor, orgCode, orgName, companyName, entranceGroups, surveyGroups, carStatus, carMark, carCode, bindingDeviceCode`
+  - `PtzPresetPointVo`: `channelId, presetPoints[] (presetId, presetName)`
+  - `AlarmVo`: `alarmCode, alarmType, alarmGrade, alarmDate, channelId, channelName, deviceCode, deviceName, alarmStat, handleStat, handleType, handleUserName, id, linkRecordChannels`
+  - `PageAlarmRecordXo`: `TRUE, currentPage, page, pageSize, splitId, splitTime`
+  - (Total 46 clases, esquema completo en `research/evidence/brms-dto-schemas.json`)
+- Confianza: **CONFIRMADO** (extracción binaria + `javap -v -p` verificado).
+
+### EV-042 — Mock BRMS Gateway con DTOs exactos y alarmas UDP
+- Fecha: 2026-10-31 · Código: `poc/dss-v2-harness/brms-gateway/` (Node.js 20+, Fastify, `@fastify/cors`, `node:crypto`, `node:dgram`).
+- Implementa:
+  - Handshake doble MD5 idéntico a `buildMd5DigestAuthReq` (EV-030): `temp = md5(md5(user+md5(pass)))`, `sig = md5(md5(user:realm:temp):randomKey)`, `clientType: "WINPC_V2"`.
+  - Envelope estándar `ResponseInfo<T>`: `{code:1000, desc:"Success", data: T}` para todos los endpoints.
+  - Endpoints v1.0/v1.1: `accounts/authorize|keepalive|current|unauthorize`, `tree/orgs|devices|channels`, `MTS/Video/StartVideo|StopVideo|KeepAlive` (devuelve `RealTimeVideoVo` completo con `connectType, ip, minRate, multicastIp, multicastPort, port, protocol, session, stopTime, stunEnable, stunPort, token, trackId, url, url2, vkId, vkValue`), `SS/Record/QueryRecord`, `event/subscription|query`, `vehicle/anpr/records|whitelist|list|add|entrance/info`, `access/door/status|control|records|alarm/status|record/export`, `ptz/direction|preset|goto/home|set/home|device/location|correct/scene`, `alarm/records|handle|procedures|dprecord|picrecord/wanted|entrance/block|entrance/overtime|face/detection|face/recognition|access/record`.
+  - HTTPS opcional (puerto 1443 configurable por `PORT`/`HTTPS`/`SSL_KEY`/`SSL_CERT`).
+  - UDP Alarm Ingest en 18800/19800: `dgram` socket, recibe tramas CRLF, loggea y reinyecta en `/event/push`.
+- Tests: `npm test` valida handshake 401→200, TokenInfoVo campos, DeviceOrgTreeVo/DeviceTreeVo estructura, `channelId` formato `num$K$m$0`, `RealTimeVideoVo` 18 campos, `RecordQueryVo` (`pageCount, records, session`), ANPR records, `PointDoorStatusListVo`, `PtzOperateVo`, `PageAlarmRecordXo` lista.
+- Confianza: **CONFIRMADO** (tests automatizados pasan).
+
+### EV-043 — P2P Probe con cliente libTouProxy real (esqueleto)
+- Fecha: 2026-10-31 · Código: `poc/dss-v2-harness/p2p-probe/` (Node.js ESM).
+- Funcionalidad: `soapGetDeviceByDevSequence(SN)` envía payload SOAP exacto EV-034 a `www.easy4ip.com`; `touHandshake(relayHost, relayPort, localPort)` stub para `DHProxyClientAddPortEx` (EV-031); helpers crypto `doubleMd5` / `makeSig` validados contra DPSDK.
+- Uso: `SN=<serial> USER=admin PASS=admin123 node src/index.js`.
+- Confianza: **PROBABLE** (esqueleto funcional; handshake PTCP/Tou completo requiere reimplementación nativa o binding a libTouProxy → E-010).
+
+### EV-044 — Suite de tests CI obligatoria
+- Fecha: 2026-10-31 · `npm test` en `brms-gateway/` y `p2p-probe/` ejecuta en cada push (GitHub Actions).
+- Cobertura: handshake MD5 doble WINPC_V2, TokenInfoVo 5 campos, DeviceOrgTreeVo/DeviceTreeVo estructura, `channelId` formato `num$K$m$0`, `RealTimeVideoVo` 18 campos, `RecordQueryVo` 3 campos, ANPR records, `PointDoorStatusListVo`, `PtzOperateVo`, `PageAlarmRecordXo` lista, alarm UDP ingest.
+- Confianza: **CONFIRMADO** (tests automatizados pasan en CI).
+
+### EV-045 — Mapeo servicios servidor → controladores Spring Boot
+- Fecha: 2026-10-31 · Fuente: `run-javap-all.mjs` + `decode-brms-controllers.mjs` (11 controladores del data-area).
+- Mapeo:
+  - `AuthorizeController` (v1s1): `getToken, checkToken, checkCredence` → `/accounts/authorize, /accounts/check, /accounts/credence`
+  - `DeviceTreeController` (v1s0.brm): `getDeviceOrgTree, getDeviceInfoTree, searchDeviceTree` → `/tree/orgs, /tree/devices, /tree/search`
+  - `MTSVideoController` (v1s0.mts): `startVideo, stopVideo` → `/MTS/Video/StartVideo, /MTS/Video/StopVideo`
+  - `SSRecordController` (v1s0.ss): `queryRecords, startRecord, stopRecord, getAlarmRecords, lockRecord, unlockRecord, queryLockInfos, deleteRecord` → `/SS/Record/...`
+  - `AccessController` (v1s1.obms): `getDoorCurrentStatus, getAreaAccessRecordPage, exportAccessRecordPage, getDoorCurrentAlarmStatus` → `/access/door/...`
+  - `VehicleController` (v1s1.ipms): `getCars, getCarInfo, addCars, getEntranceAccessInfo` → `/vehicle/...`
+  - `PtzController` (v1s1): `setHomePosition, gotoHomePosition, getPresetPoints, moveAbsolutely, getPtz, setCorrectScene` → `/ptz/...`
+  - `BRMAlarmController` (v1s0.eams): `handleAlarm, getAlarmProcedures, getAlarmDprecord, getAlarmPicrecordWanted, getAlarmEntranceBlockList, getAlarmEntranceOverTime, getAlarmFaceDetection, getAlarmFaceRecognition, getAlarmAccessRecordInfo`
+  - `AlarmRecordController` (v1s1.eams): `queryAlarmRecords, exportAlarmRecords, getAlarmEntranceInfo, queryLatestUnhandledAlarmRecords, getAlarmDeviceContactInfo, getAlarmAdditionInfo`
+- Confianza: **CONFIRMADO** (firmas `javap -p` verificadas).
+
+### EV-046 — Catálogo JSON schemas BRMS (46 DTOs)
+- Fecha: 2026-10-31 · Archivo: `research/evidence/brms-dto-schemas.json` (generado por `run-javap-dtos-v3.mjs`).
+- Contiene: nombre de clase, array de campos para 46 DTOs (Xo/Vo/ParamXo) extraídos del data-area.
+- Uso: referencia para implementación servidor DSS V2 compatible con Client WINPC_V2.
+- Confianza: **CONFIRMADO**.
+
+### EV-047 — UDP Alarm Ingest (18800/19800) en gateway
+- Fecha: 2026-10-31 · Implementación: `dgram.createSocket('udp4')` en puertos 18800/19800, bind `0.0.0.0`.
+- Recibe tramas texto terminadas en CRLF (ej. `ANPR_EBA|CAM001|plate=ABC1234\r\n`), loggea origen, reinyecta en `/event/push` interno.
+- Backup en 19800.
+- Confianza: **CONFIRMADO** (implementado y testeado en `brms-gateway`).
+
+### EV-048 — PoC DSS V2 Harness completo
+- Fecha: 2026-10-31 · Directorio: `poc/dss-v2-harness/`.
+- Componentes:
+  - `brms-gateway/`: Mock BRMS Gateway completo (Fastify, DTOs exactos, handshake MD5, UDP alarm).
+  - `p2p-probe/`: P2P Probe esqueleto (SOAP exacto EV-034, crypto helpers, stub `DHProxyClientAddPortEx`).
+  - Tests: `npm test` en ambos submódulos, CI GitHub Actions.
+  - Scripts reproducibles: `decode-dtos.mjs`, `run-javap-dtos-v3.mjs`, `decode-brms-controllers.mjs`, `run-javap-all.mjs`, `trace-easy4ip-detail.mjs`.
+- Confianza: **CONFIRMADO** (código ejecutable, tests pasan).

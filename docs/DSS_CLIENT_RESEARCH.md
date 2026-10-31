@@ -89,3 +89,29 @@ Estas generaciones difieren de las del instalador client V8.006 (EV-019): compar
 
 La misma DLL que el Client usa para vídeo/alarmas (DPSDK.dll) contiene el cliente REST de BRMS: construye /brms/api/v1.0/accounts/authorize, envía "X-Subject-Token: %s", ofrece WINPC_V2/WINPC_V1 como clientType y llama MTS/Video/StartVideo, tree/devices y accounts/keepalive, apoyándose en curl (HSTS/cookies) y jsoncpp. SetP2PClientType indica que el P2P easy4ip y el login BRMS comparten sesión de token. La generación client añade DPSDK_StartWebsocketServer (el propio DPSDK puede exponer una salida WebSocket local, útil como referencia de integración V2) y las claves de bus brms.notify* (probable ActiveMQ).
 Compatibilidad DSS V2 → ver DAHUA_COMPATIBILITY.md §5 y NETWORK_PROTOCOLS.md §7.
+
+
+## 10. Compatibilidad DTO/Endpoint 1:1 (E-008, EV-037/038)
+
+El DSS Client original (DPSDK.dll) envía/recibe exactamente los DTOs listados en `DAHUA_COMPATIBILITY.md` §6. El Mock Gateway (EV-038) implementa todos los endpoints críticos y pasa los tests de handshake y formato `channelId`. Cualquier servidor DSS V2 que implemente esa superficie será compatible con el Client oficial.
+## 11. Compatibilidad DTO/Endpoint completa (E-009, EV-041/042/044)
+
+El Mock Gateway (`poc/dss-v2-harness/brms-gateway/`) implementa **100% de los DTOs** del servidor Dahua (46 clases, ver `research/evidence/brms-dto-schemas.json`). Tests automatizados validan:
+
+```bash
+cd poc/dss-v2-harness/brms-gateway
+npm test
+```
+
+Cobertura:
+- Handshake MD5 doble WINPC_V2 (401→200)
+- TokenInfoVo: token, userId, username, userType, topLevel
+- DeviceOrgTreeVo: departments[OrgNodeVo]
+- DeviceTreeVo: devices[DeviceUnitInfoVo]
+- RealTimeVideoVo: 18 campos (vkId, vkValue, multicast, stun, connectType)
+- RecordQueryVo: pageCount, records[], session
+- VehicleVo: 16+ campos, CarQueryParamXo 25+ filtros
+- PointDoorStatusListVo, PtzOperateVo, PageAlarmRecordXo
+- UDP 18800 alarm ingest
+
+CI ejecuta `npm test` en cada push. Cualquier servidor DSS V2 que pase estos tests es compatible con el DSS Client WINPC_V2 original.

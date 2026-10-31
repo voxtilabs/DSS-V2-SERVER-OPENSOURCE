@@ -70,3 +70,13 @@ Formato: ADR-XXXX · Status · Fecha · Contexto · Decisión · Consecuencias.
 - Status: aceptada · Fecha: 2026-10-30 · Contexto: EV-031 (P2PDll decompilado: libTouProxy, 8 exports, puerto local tunelado) y EV-032 (lookup easy4ip por HTTPS/SOAP en DPSDK).
 - Decisión: no redistribuir ni integrar P2PDll.dll (licencia, ADR-0004); reimplementación propia del lookup cloud (HTTPS+SOAP) + túnel PTCP/Tou + forwarding de puerto local, usando el PoC MIT dh-p2p (EV-006) como referencia técnica abierta. Fases: A (lookup + PTCP), B (fallback relay), C (exposición dentro del servidor DSS V2).
 - Consecuencias: control y auditoría del cable propios; los detalles de protocolo pendientes se resuelven en E-008 con captura dinámica sobre SN legítimo de laboratorio; en paralelo el servidor DSS V2 debe cumplir ya el subconjunto BRMS/MTS de EV-029/EV-030 para servir al Client original.
+
+
+## ADR-010 — PoC BRMS Gateway y P2P Probe como código ejecutable en el repo
+- Status: aceptada · Fecha: 2026-10-30 · Contexto: EV-037 (contratos completos), EV-038/039 (scaffolding PoC).
+- Decisión: mantener `poc/dss-v2-harness/` como código fuente del proyecto (MIT), con tests automatizados en CI. El Mock Gateway valida la compatibilidad con el Client original sin ejecutar binarios Dahua; el P2P Probe documenta el contrato SOAP/PTCP para futura reimplementación (ADR-0009).
+- Consecuencias: CI ejecuta `npm test` en ambos submódulos en cada push; la cobertura de handshake MD5 y endpoints es obligatoria para merge.
+## ADR-011 — PoC Harness como código de referencia en repo (MIT)
+- Status: aceptada · Fecha: 2026-10-31 · Contexto: EV-042/043/048 (PoC funcional con tests).
+- Decisión: mantener `poc/dss-v2-harness/` como código fuente del proyecto (licencia MIT), con `npm test` obligatorio en CI. El Mock Gateway valida compatibilidad DTO 1:1 con Client original; el P2P Probe documenta el contrato SOAP/PTCP para futura reimplementación nativa (ADR-0009).
+- Consecuencias: CI ejecuta `npm test` en `brms-gateway/` y `p2p-probe/` en cada push; cobertura de handshake MD5, DTO contracts y alarm UDP es obligatoria para merge.

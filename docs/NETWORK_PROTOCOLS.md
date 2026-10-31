@@ -94,3 +94,127 @@ v1.0/tree/orgs|devices|channels; v1.0/MTS/Video/StartVideo|StopVideo|KeepAlive; 
 ## 9. Flujo P2P Easy4IP visto desde el Client (EV-031/EV-032)
 
 SN → CP2PServerManager::LoginP2PServer (cloud easy4ip por HTTP+SOAP sobre DDNS) → NAT traversal PTCP/Tou o relay (/relay/agent) → DHProxyClientAddPortEx registra el puerto local tunelado → DVRIP 37777 / RTSP H.265 contra el dispositivo vía 127.0.0.1:puerto. Detalles del cable: E-008 (captura dinámica).
+
+
+## 10. SOAP Easy4IP Lookup (EV-034) y Endpoints Cloud (EV-035)
+
+```xml
+POST /ws/getDeviceByDevSequence HTTP/1.1
+Host: www.easy4ip.com
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "getDeviceByDevSequence"
+
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <ns2:getDeviceByDevSequence xmlns:ns2="http://webservice.ddns.dahua.com/">
+      <devSequence>SN123456789</devSequence>
+    </ns2:getDeviceByDevSequence>
+  </soap:Body>
+</soap:Envelope>
+```
+
+Dominios cloud: `www.easy4ip.com`, `www.easy4ipcloud.com`, `www.dahuap2p.com`, `www.dahuap2pcloud.com`. Host interno observado: `172.23.1.120`.
+
+## 11. Resumen de contratos REST BRMS por controlador (EV-037)
+
+Ver tabla completa en `docs/DAHUA_COMPATIBILITY.md` §6. Cada controlador usa `RequestInfo<T>` / `ResponseInfo<T>` con `X-Subject-Token` en cabecera.
+
+## 12. Mock BRMS Gateway — uso (EV-038)
+
+```bash
+cd poc/dss-v2-harness/brms-gateway
+npm install
+npm start      # escucha en :1443 (TLS disabled for lab)
+npm test       # valida handshake MD5 doble + endpoints
+```
+
+## 13. P2P Probe — uso (EV-039)
+
+```bash
+cd poc/dss-v2-harness/p2p-probe
+npm install
+SN=<serial> USER=admin PASS=admin123 node src/index.js
+```
+## 14. libTouProxy Protocol (E-009, EV-040)
+
+Cadena completa de llamadas P2P:
+
+```
+P2P_Init
+  → DHProxyClientInit
+    → getDomainIP (DNS resolve via getaddrinfo / DAT_18032f928)
+    → new ProxyClientImpl (single instance enforced)
+P2P_Connect
+  → DHProxyClientAddPortEx (Src/Client/ProxyClientCWrap.cpp, libTouProxy)
+    → FUN_18001e160
+      → FUN_18001d1d0 (core implementation)
+        → FUN_18001c8e0 (createLocalPort)
+          → bind UDP 0.0.0.0:localPort
+          → validate remoteIp == 127.0.0.1 or ::1
+          → listen socket (FUN_18008dd80)
+          → register in CPortResource map keyed by localPort
+P2P_GetDeviceInfo
+  → DHProxyGetDeviceInfo
+    → FUN_18000dd60
+      → FUN_1800108c0
+        → vtable call offset 0x20 (FUN_18002e620)
+```
+
+Detalles clave:
+- **getDomainIP**: parsea dominio/IP, si es dominio usa `getaddrinfo` (Windows) para resolver A/AAAA records.
+- **createLocalPort**: bind UDP en `0.0.0.0:localPort`, valida `remoteIp` sea `127.0.0.1` o `::1`, `listen` socket, registra en `CPortResource` map keyed by `localPort`.
+- **Relay**: `/relay/agent` + `agenthost:` para coordinación de relay PTCP/Tou.
+- **jsonDevInfo**: payload JSON devuelto por `P2P_GetDeviceInfo` con info del dispositivo.
+- **Single instance**: global `tagmast_pClient`, error si se intenta segunda instancia: `"SDK Client need has one instance first!"`.
+- **Wire format**: PTCP/Tou propietario sobre UDP; relay opcional via `/relay/agent`.
+
+## 15. DTO Contracts BRMS (E-009, EV-041)
+
+Envelope estándar: `ResponseInfo<T> = { code: 1000, desc: "Success", data: T }`
+
+### 15.1 Auth
+- `TokenInfoVo`: token, userId, username, userType, topLevel
+- `TokenInfoXo`: token
+- `CredenceXo`: credence
+
+### 15.2 Tree
+- `DeviceOrgTreeVo`: departments[]
+- `DeviceTreeVo`: devices[]
+- `DeviceTreeXo`: categories, containVirtualDevice, deviceCodes, filterAreaAuthority, orgCode, resourceTypes, sourceTypes
+- `DeviceTreeSearchXo`: act, cascading, id, keyWord, nodeType, page, pageSize, typeCode
+
+### 15.3 Video (MTS)
+- `RealTimeVideoXo`: channelId, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, streamType, trackId
+- `RealTimeVideoVo`: connectType, ip, minRate, multicastIp, multicastPort, port, protocol, session, stopTime, stunEnable, stunPort, token, trackId, url, url2, vkId, vkValue
+
+### 15.4 Records (SS)
+- `RecordQueryXo`: All, Device, Timer, cardNo, channelId, deviceInfo, diskPath, endIndex, endTime, page, recordSource, recordType, session, startIndex, startTime, streamIds, streamType
+- `RecordQueryVo`: pageCount, records[], session
+
+### 15.4 Records (SS)
+- `RecordQueryXo`: All, Device, Timer, cardNo, channelId, deviceInfo, diskPath, endIndex, endTime, page, recordSource, recordType, session, startIndex, startTime, streamIds, streamType
+- `RecordQueryVo`: pageCount, records[], session
+
+### 15.5 Vehicle/ANPR
+- `VehicleVo`: id, personId, plateNo, carType, carNumColor, carBrand, vehicleColor, orgCode, orgName, companyName, entranceGroups, surveyGroups, carStatus, carMark, carCode, bindingDeviceCode
+- `CarQueryParamXo`: companyName, containChild, containVisitorVehicle, entranceEffectiveEndTime, entranceEffectiveStartTime, entranceEffectiveStatus, entranceFailureEndTime, entranceFailureStartTime, entranceGroupId, entranceGroupIds, filterAuthorityOrg, groupType, keyword, orgCode, orgName, page, pageSize, parkingLotId, personId, personName, plateNo, plateNoMatchMode, surveyEffectiveEndTime, surveyEffectiveStartTime, surveyEffectiveStatus, surveyFailureEndTime, surveyFailureStartTime, surveyGroupId, vehicleBrand, vehicleColor
+
+### 15.6 PTZ
+- `PtzMoveAbsolutelyXo`: ptzPan, ptzTilt, ptzZoom
+- `PtzPresetPointVo`: channelId, presetPoints[]
+
+### 15.7 Alarms
+- `AlarmVo`: alarmCode, alarmType, alarmGrade, alarmDate, channelId, channelName, deviceCode, deviceName, alarmStat, handleStat, handleType, handleUserName, id, linkRecordChannels
+- `PageAlarmRecordXo`: TRUE, currentPage, page, pageSize, splitId, splitTime
+- `AlarmVo` (detailed): alarmCode, alarmType, alarmGrade, alarmDate, channelId, channelName, deviceCode, deviceName, alarmStat, handleStat, handleType, handleUserName, id, linkRecordChannels, alarmPic, alarmPicSize, gpsX, gpsY, handleDate, handleMessage, handleUserGroupName, handleUserGroupUsers, mailReceivers, memo, eventRemark, extData
+
+## 16. UDP Alarm Ingest (E-009, EV-047)
+
+Puerto 18800 UDP (primario), 19800 UDP (backup). Tramas texto CRLF:
+```
+ANPR_EBA|CAM001|plate=ABC1234\r\n
+ALARM|deviceCode=CAM001|type=Intrusion|channel=1\r\n
+```
+
+Gateway recibe en `dgram` socket `0.0.0.0:18800` (backup 19800), parsea, loggea, reinyecta en canal de eventos interno.

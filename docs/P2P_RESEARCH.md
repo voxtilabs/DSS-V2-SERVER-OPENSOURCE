@@ -106,3 +106,78 @@ sequenceDiagram
 
 Arquitectura elegida (ADR-0009): proceso propio con dos módulos — (1) dsv2-cloud-dialer: reimplementación del lookup (HTTPS/SOAP ya observados en DPSDK) y del handshake PTCP/Tou, tomando como referencia abierta el PoC MIT dh-p2p (EV-006); (2) dsv2-port-forward: escucha local en loopback y multiplexa hacia DVRIP/RTSP. No se redistribuye P2PDll.dll ni material no sintético de Dahua (ADR-0003/0004).
 Limitación de conocimiento: puertos UDP del cloud y magia de paquetes quedan PROBABLE hasta E-008 (captura dinámica con SN legítimo propio).
+
+
+## 8. Evidencia detallada P2P (E-008, EV-034/035/036)
+
+### 8.1 SOAP Easy4IP (EV-034)
+```xml
+<ns2:getDeviceByDevSequence xmlns:ns2="http://webservice.ddns.dahua.com/">
+  <devSequence>SN123456789</devSequence>
+</ns2:getDeviceByDevSequence>
+```
+Llamado desde `Dpsdk::CP2PServerManager::LoginP2PServer` → `StartP2PTraversal` → `GetDeviceInfoFromEasy4IP` → `ParseHttpBodyForEasy4IP`.
+
+### 8.2 Dominios cloud (EV-035)
+`www.easy4ip.com`, `www.easy4ipcloud.com`, `www.dahuap2p.com`, `www.dahuap2pcloud.com`, IP `172.23.1.120` (staging).
+
+### 8.3 Pseudocódigo P2PDll (EV-036)
+```c
+// P2P_Connect -> DHProxyClientAddPortEx
+int DHProxyClientAddPortEx(Handler h, ..., uint32_t* localPort) {
+  if (!g_Client) return -1;           // instancia única
+  *localPort = (uint16_t)*localPort;  // recorta a u16
+  return g_Client->AddPortEx(...);    // libTouProxy
+}
+```
+Motor: `Dahua::Tou::parseSn`, `ptcp connect success`, `/relay/agent`, `agenthost:`, bind `127.0.0.1`.
+
+## 9. PoC Scaffolding (E-008, EV-038/039)
+
+### 9.1 Mock BRMS Gateway (EV-038)
+```bash
+cd poc/dss-v2-harness/brms-gateway
+npm install && npm test
+```
+Tests validan: handshake 401→200 (realm+randomKey, double MD5, WINPC_V2), X-Subject-Token, tree/orgs/devices/channels, MTS StartVideo→RTSP/HLS.
+
+### 9.2 P2P Probe (EV-039)
+```bash
+cd poc/dss-v2-harness/p2p-probe
+npm install
+SN=<serial> USER=admin PASS=admin123 node src/index.js
+```
+Envía SOAP exacto EV-034, parsea relay, stub `touHandshake` para `DHProxyClientAddPortEx`.
+## 10. libTouProxy Deep Dive (E-009, EV-040)
+
+### 10.1 Call Chain
+```
+P2P_Init → DHProxyClientInit → getDomainIP (DNS) → ProxyClientImpl (singleton)
+P2P_Connect → DHProxyClientAddPortEx → FUN_18001d1d0 → createLocalPort
+P2P_GetDeviceInfo → vtable[0x20] → jsonDevInfo
+```
+
+### 10.2 createLocalPort (FUN_18001c8e0)
+1. `bind(0.0.0.0, localPort)` UDP
+2. Validate `remoteIp == 127.0.0.1 || ::1` (rejecta IPs públicas)
+3. `listen()` socket
+4. Register in `CPortResource` map: `key=localPort` → channel context
+5. Returns `localPort` to caller (truncado a u16)
+
+### 10.3 Relay & PTCP
+- `/relay/agent` endpoint para coordinación de relay
+- `agenthost:` header para dirección de relay
+- `Dahua::Tou::parseSn` para parsing de SN en paquetes PTCP
+- `jsonDevInfo` payload en `P2P_GetDeviceInfo`
+
+### 10.4 Single Instance Enforcement
+Global `tagmast_pClient` pointer. `DHProxyClientInit` falla si ya existe: `"SDK Client need has one instance first!"`.
+
+## 11. P2P Probe Update (E-009, EV-043)
+
+`poc/dss-v2-harness/p2p-probe/src/index.js`:
+- `soapGetDeviceByDevSequence(SN)` → SOAP exacto EV-034 a `www.easy4ip.com`
+- `touHandshake(relayHost, relayPort, localPort)` stub para `DHProxyClientAddPortEx`
+- Crypto helpers: `doubleMd5(user, pass)`, `makeSig(user, realm, temp, randomKey)` validados contra DPSDK
+
+Uso: `SN=<serial> USER=admin PASS=admin123 node src/index.js`
