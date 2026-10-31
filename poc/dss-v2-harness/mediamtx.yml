@@ -1,0 +1,12 @@
+{
+  "rtspAddress": ":8554",
+  "logLevel": "info",
+  "paths": {
+    "test": {
+      "source": "publisher"
+    },
+    "cam1": {
+      "source": "publisher"
+    }
+  }
+}

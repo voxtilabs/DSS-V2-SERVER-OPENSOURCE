@@ -195,3 +195,72 @@ node --test poc/dss-v2-harness/e2e-lan-test.mjs
 # Server health
 curl -k https://10.10.20.120:1443/health
 ```
+
+## 10. E-012: Real H.265 Video Engine + Bootstrap APIs + P2P Bridge (EV-056..059)
+
+### 10.1 Componentes Actualizados
+| Componente | Versión | Cambios |
+|------------|---------|---------|
+| `brms-gateway` | 0.4.0 | MediaMTX integration, Bootstrap APIs, P2P Register, Inspector Middleware |
+| `docker-compose.yml` | - | MediaMTX service, puertos actualizados |
+| `e2e-lan-test.mjs` | - | RTSP signaling validation, P2P register tests |
+
+### 10.2 MediaMTX H.265 Streaming
+- **Servicio**: `mediamtx` (`bluenviron/mediamtx:latest` v1.21.3) en docker-compose
+- **Puertos**: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+- **Paths**: `test`, `cam1` con `source: publisher`
+- **Estado actual**: RTSP signaling funcional (OPTIONS 200 OK, DESCRIBE 404 sin publisher)
+- **Requisito para H.265 real**: Publisher FFmpeg externo → `runOnInit` con `testsrv2` + `libx265`
+
+### 10.3 Bootstrap APIs (Post-Login Client Initialization)
+Endpoints que DSS Client invoca tras login exitoso:
+
+| Endpoint | DTO Response | Descripción |
+|----------|--------------|-------------|
+| `GET /brms/api/v1.0/accounts/menus` | `MenuListVo` | Menú principal |
+| `GET /brms/api/v1.1/accounts/menus` | `MenuListVo` | Menú v1.1 |
+| `GET /brms/api/v1.0/accounts/userinfo` | `UserInfoVo` | Info usuario |
+| `GET /brms/api/v1.0/system/time` | `ServerTimeVo` | Tiempo NTP |
+| `GET /brms/api/v1.0/version` | `VersionVo` | Versión servidor |
+| `GET /brms/api/v1.0/system/version` | `VersionVo` | Versión (alt) |
+| `GET /brms/api/v1.0/capability` | `CapabilityVo` | Capacidades |
+| `GET /brms/api/v1.0/license` | `LicenseInfoVo` | Licencia |
+
+**Inspector Middleware**: Catch-all hook loggea request/response completo.
+
+### 10.4 P2P Device Register Bridge
+Nuevos endpoints en `brms-gateway`:
+
+| Endpoint | Body | Response |
+|----------|------|----------|
+| `POST /brms/api/v1.0/device/p2p-register` | `{ sn, user, password, name, channels }` | `{ deviceId, channelIds, p2pStatus }` |
+| `POST /brms/api/v1.0/device/p2p-unregister` | `{ sn }` | `{ success: true }` |
+| `POST /brms/api/v1.0/device/p2p-list` | - | `{ devices: [...] }` |
+
+**Flujo**: SN → `deviceId` (`P2P-xxx`) + `channelIds` (`P2P-xxx$1$0$0`) → túnel PTCP futuro.
+
+### 10.5 E2E Tests Results (All PASS)
+| Test | Validación |
+|------|------------|
+| E2E-1 | Auth handshake + keepalive/current |
+| E2E-2 | Tree/DTOs exactos |
+| E2E-3 | RTSP OPTIONS 200 OK + DESCRIBE (200/404) |
+| E2E-4 | UDP 18800 → WebSocket push `type:ALARM` |
+| E2E-5 | P2P probe manual + register endpoints |
+
+### 10.6 Verification Commands
+```bash
+# Unit tests (includes bootstrap, P2P endpoints)
+cd poc/dss-v2-harness/brms-gateway && npm test
+
+# E2E tests (from Windows)
+node --test poc/dss-v2-harness/e2e-lan-test.mjs
+
+# Health check
+curl -k https://10.10.20.120:1443/health
+
+# Test P2P register
+curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/device/p2p-register \
+  -H "X-Subject-Token: <token>" -H "Content-Type: application/json" \
+  -d '{"sn":"SN123456","user":"admin","password":"admin123","channels":4}'
+```

@@ -264,3 +264,52 @@ E2E-5 validates the P2P probe profile is available and the endpoint responds (20
 - No Dahua app credentials stored in repo (ADR-0003/0004)
 - Probe uses lab SN only
 - Cloud Easy4IP is single point of failure; production must prefer direct routes
+
+## 15. E-012: P2P Register Bridge + MediaMTX Integration (EV-056..059)
+
+### 15.1 P2P Register Bridge en BRMS Gateway
+Nuevos endpoints en `brms-gateway` para conectar `p2p-probe` con Device Manager:
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `POST /brms/api/v1.0/device/p2p-register` | Registra dispositivo por SN | Body: `{ sn, user, password, name, channels }` → `{ deviceId, channelIds, p2pStatus }` |
+| `POST /brms/api/v1.0/device/p2p-unregister` | Elimina registro | Body: `{ sn }` |
+| `POST /brms/api/v1.0/device/p2p-list` | Lista dispositivos P2P registrados | Returns `{ devices: [...] }` |
+
+**Implementación**:
+- Almacenamiento en memoria: `P2P_DEVICES` Map con `deviceId`, `channelIds` (`P2P-xxx$1$0$0`)
+- `deviceId` formato: `P2P-{token[0:12]}`
+- `channelIds`: `[P2P-xxx$1$0$0, P2P-xxx$2$0$0, ...]`
+- Preparado para integración con `p2p-probe`: SOAP Easy4IP lookup → PTCP tunnel
+
+### 15.2 MediaMTX Integration para H.265 Real
+- **docker-compose.yml**: Servicio `mediamtx` (`bluenviron/mediamtx:latest` v1.21.3)
+- Puertos: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+- Paths: `test`, `cam1` con `source: publisher`
+- **Limitación**: Requiere publisher FFmpeg externo para stream H.265 real
+- **Validación actual**: OPTIONS 200 OK, DESCRIBE 404 Not Found (sin publisher) → protocolo RTSP funcional
+
+### 15.3 Bootstrap APIs para DSS Client
+Endpoints invocados por DSS Client tras login exitoso:
+- `GET /brms/api/v1.0/accounts/menus` + v1.1
+- `GET /brms/api/v1.0/accounts/userinfo`
+- `GET /brms/api/v1.0/system/time`
+- `GET /brms/api/v1.0/version` + `/system/version`
+- `GET /brms/api/v1.0/capability`
+- `GET /brms/api/v1.0/license`
+- **Inspector Middleware**: Catch-all logging de todas las requests/responses
+
+### 15.4 E2E Tests Actualizados
+| Test | Validación |
+|------|------------|
+| E2E-1 | Auth handshake + keepalive/current |
+| E2E-2 | Tree/DTOs exactos |
+| E2E-3 | RTSP OPTIONS 200 OK + DESCRIBE (200/404) |
+| E2E-4 | UDP 18800 → WebSocket push `type:ALARM` |
+| E2E-5 | P2P probe manual + register endpoints |
+
+### 15.5 Próximos Pasos (E-013+)
+1. **Publisher FFmpeg real** en MediaMTX para H.265 streaming real
+2. **Integración p2p-probe → BRMS**: SOAP Easy4IP lookup automático al registrar SN
+3. **Túnel PTCP/Tou real** con `createLocalPort` en `127.0.0.1`
+4. **HLS segmentos reales** en `/brms/api/v1.1/video/live/channel/:channelId/hls`

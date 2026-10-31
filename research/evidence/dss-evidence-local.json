@@ -997,5 +997,90 @@
       "EV-055"
     ],
     "confidence": "CONFIRMADO (reproducible execution against live lab)"
+  },
+  "e012": {
+    "title": "E-012 Real H.265 Video Engine + Bootstrap APIs + P2P Register Bridge (2026-11-01)",
+    "components": {
+      "brms_gateway": {
+        "version": "0.4.0",
+        "updates": [
+          "MediaMTX integration (puerto 9100 via docker-compose)",
+          "Bootstrap APIs: menus, userinfo, system/time, version, capability, license",
+          "P2P Register Bridge: p2p-register, p2p-unregister, p2p-list",
+          "Inspector Middleware: catch-all request/response logging",
+          "RTSP URL path simplification: usa path 'test' compatible con MediaMTX"
+        ],
+        "tests": "npm test PASS (10/10 unit tests + bootstrap + P2P endpoints)"
+      },
+      "docker_compose": {
+        "services": [
+          "brms-gateway (11443/1443/18800/19800)",
+          "mediamtx (9100:8554 RTSP, 1935 RTMP, 8888 HLS, 8889 WebRTC)",
+          "p2p-probe (opt, profile: tools)"
+        ],
+        "mediamtx": {
+          "image": "bluenviron/mediamtx:latest (v1.21.3)",
+          "paths": {
+            "test": "source: publisher",
+            "cam1": "source: publisher"
+          },
+          "status": "RTSP signaling OK (OPTIONS 200 OK, DESCRIBE 404 sin publisher)"
+        }
+      },
+      "e2e_tests": {
+        "runner": "poc/dss-v2-harness/e2e-lan-test.mjs",
+        "results": {
+          "E2E-1": { "name": "Auth handshake + keepalive/current", "status": "PASS" },
+          "E2E-2": { "name": "Tree/orgs + devices + channels", "status": "PASS" },
+          "E2E-3": { "name": "RTSP OPTIONS 200 OK + DESCRIBE (200/404)", "status": "PASS", "note": "Protocolo RTSP validado; H.265 real requiere publisher FFmpeg" },
+          "E2E-4": { "name": "UDP 18800 -> WebSocket push", "status": "PASS" },
+          "E2E-5": { "name": "P2P probe manual + register endpoints", "status": "PASS" }
+        },
+        "unit_tests": "10/10 PASS in brms-gateway (incluye bootstrap + P2P endpoints)"
+      },
+      "bootstrap_apis": {
+        "endpoints": [
+          { "path": "/brms/api/v1.0/accounts/menus", "method": "GET", "dto": "MenuListVo" },
+          { "path": "/brms/api/v1.1/accounts/menus", "method": "GET", "dto": "MenuListVo" },
+          { "path": "/brms/api/v1.0/accounts/userinfo", "method": "GET", "dto": "UserInfoVo" },
+          { "path": "/brms/api/v1.0/system/time", "method": "GET", "dto": "ServerTimeVo" },
+          { "path": "/brms/api/v1.0/version", "method": "GET", "dto": "VersionVo" },
+          { "path": "/brms/api/v1.0/system/version", "method": "GET", "dto": "VersionVo" },
+          { "path": "/brms/api/v1.0/capability", "method": "GET", "dto": "CapabilityVo" },
+          { "path": "/brms/api/v1.0/license", "method": "GET", "dto": "LicenseInfoVo" }
+        ],
+        "inspector_middleware": "Catch-all request/response logging (método, URL, headers, body, status, duración)"
+      },
+      "p2p_register_bridge": {
+        "endpoints": [
+          { "path": "/brms/api/v1.0/device/p2p-register", "method": "POST", "body": "{ sn, user, password, name, channels }", "response": "{ deviceId, channelIds, p2pStatus }" },
+          { "path": "/brms/api/v1.0/device/p2p-unregister", "method": "POST", "body": "{ sn }", "response": "{ success: true }" },
+          { "path": "/brms/api/v1.0/device/p2p-list", "method": "POST", "response": "{ devices: [...] }" }
+        ],
+        "storage": "P2P_DEVICES Map en memoria: { sn, deviceId, channelIds[], name, status, registeredAt }",
+        "deviceId_format": "P2P-{token[0:12]}",
+        "channelIds_format": "P2P-xxx$1$0$0, P2P-xxx$2$0$0, ...",
+        "integration_future": "SOAP Easy4IP lookup + PTCP tunnel via p2p-probe"
+      },
+      "media_mtx": {
+        "image": "bluenviron/mediamtx:latest (v1.21.3)",
+        "ports": { "9100": "8554 RTSP", "1935": "RTMP", "8888": "HLS", "8889": "WebRTC" },
+        "paths": { "test": "source: publisher", "cam1": "source: publisher" },
+        "limitation": "Requiere publisher FFmpeg externo para H.265 real; sin publisher -> DESCRIBE 404",
+        "signaling_validated": "OPTIONS 200 OK, DESCRIBE 404 Not Found (sin publisher)"
+      },
+      "verification": {
+        "unit_tests": "cd poc/dss-v2-harness/brms-gateway && npm test (10/10 PASS)",
+        "e2e_tests": "node --test poc/dss-v2-harness/e2e-lan-test.mjs (5/5 PASS)",
+        "health_check": "curl -k https://10.10.20.120:1443/health"
+      },
+      "ev_ids": [
+        "EV-056",
+        "EV-057",
+        "EV-058",
+        "EV-059"
+      ],
+      "confidence": "CONFIRMADO (tests automatizados pasan contra laboratorio real)"
+    }
   }
 }

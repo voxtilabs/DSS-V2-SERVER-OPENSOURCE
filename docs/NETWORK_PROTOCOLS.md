@@ -353,3 +353,66 @@ node --test poc/dss-v2-harness/e2e-lan-test.mjs
 # Check server health
 curl -k https://10.10.20.120:1443/health
 ```
+
+## 21. E-012: Real H.265 Video Engine + Bootstrap APIs + P2P Bridge (EV-056..059)
+
+### 21.1 Deployment Updates
+- **MediaMTX Service**: `bluenviron/mediamtx:latest` (v1.21.3) en docker-compose
+  - Puertos: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+  - Paths: `test`, `cam1` con `source: publisher` (requiere publisher externo)
+  - RTSP Signaling validado: OPTIONS 200 OK, DESCRIBE 404 (sin publisher)
+
+### 21.2 Bootstrap APIs (Post-Login Client Initialization)
+| Endpoint | Method | Description | DTO Response |
+|----------|--------|-------------|--------------|
+| `/brms/api/v1.0/accounts/menus` | GET | Menú principal v1.0 | `MenuListVo` |
+| `/brms/api/v1.1/accounts/menus` | GET | Menú principal v1.1 | `MenuListVo` |
+| `/brms/api/v1.0/accounts/userinfo` | GET | Info usuario actual | `UserInfoVo` |
+| `/brms/api/v1.0/system/time` | GET | Tiempo servidor NTP | `ServerTimeVo` |
+| `/brms/api/v1.0/version` | GET | Versión servidor | `VersionVo` |
+| `/brms/api/v1.0/system/version` | GET | Versión servidor (alt) | `VersionVo` |
+| `/brms/api/v1.0/capability` | GET | Capacidades servidor | `CapabilityVo` |
+| `/brms/api/v1.0/license` | GET | Info licencia | `LicenseInfoVo` |
+
+**Inspector Middleware**: Catch-all hook que loggea método, URL, headers, body, status, duración.
+
+### 21.3 P2P Device Register Bridge
+| Endpoint | Method | Body | Response |
+|----------|--------|------|----------|
+| `/brms/api/v1.0/device/p2p-register` | POST | `{ sn, user, password, name, channels }` | `{ deviceId, channelIds, p2pStatus }` |
+| `/brms/api/v1.0/device/p2p-unregister` | POST | `{ sn }` | `{ success: true }` |
+| `/brms/api/v1.0/device/p2p-list` | POST | - | `{ devices: [...] }` |
+
+**Flujo**: Registra SN → genera `deviceId` (`P2P-xxx`) + `channelIds` (`P2P-xxx$1$0$0`) → prepara túnel PTCP/Tou.
+
+### 21.4 RTSP/H.265 con MediaMTX
+- **MediaMTX** en docker-compose (puerto 9100 → 8554 interno)
+- Paths `test`, `cam1` con `source: publisher`
+- **Limitación**: Requiere publisher FFmpeg externo para H.265 real
+- **Validación actual**: OPTIONS 200 OK, DESCRIBE 404 (sin publisher) → protocolo RTSP funcional
+
+### 21.5 E2E Test Suite Results (All PASS)
+| Test | Validation |
+|------|------------|
+| E2E-1 | Auth handshake + keepalive/current |
+| E2E-2 | Tree/DTOs exactos |
+| E2E-3 | RTSP OPTIONS 200 OK + DESCRIBE (200/404) |
+| E2E-4 | UDP 18800 → WebSocket push `type:ALARM` |
+| E2E-5 | P2P probe manual + register endpoints |
+
+### 21.6 Verification Commands
+```bash
+# Unit tests (includes bootstrap, P2P endpoints)
+cd poc/dss-v2-harness/brms-gateway && npm test
+
+# E2E tests (from Windows)
+node --test poc/dss-v2-harness/e2e-lan-test.mjs
+
+# Health check
+curl -k https://10.10.20.120:1443/health
+
+# Test P2P register
+curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/device/p2p-register \
+  -H "X-Subject-Token: <token>" -H "Content-Type: application/json" \
+  -d '{"sn":"SN123456","user":"admin","password":"admin123","channels":4}'
+```

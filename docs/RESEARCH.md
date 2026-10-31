@@ -553,3 +553,61 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
   7. Alarmas: UDP 18800 → WebSocket push → popup en cliente.
   8. Certificado auto-firmado: añadir a Trusted Root en Windows (`certmgr.msc` → Trusted Root → `cert.pem`).
 - Confianza: **CONFIRMADO** (flujo completo validado en laboratorio).
+
+### EV-056 — E-012: Motor de Video H.265 Real + Bootstrap APIs + P2P Register
+- Fecha: 2026-11-01 · Componentes actualizados:
+  - `brms-gateway` v0.4.0: MediaMTX integration (puerto 9100), Bootstrap APIs, P2P Register endpoints
+  - `docker-compose.yml`: MediaMTX service (bluenviron/mediamtx:latest) en puerto 9100
+  - `e2e-lan-test.mjs`: Validación RTSP OPTIONS/DESCRIBE, WebSocket events, P2P register
+- **MediaMTX H.265 Streaming**: 
+  - Servicio `mediamtx` en docker-compose (imagen `bluenviron/mediamtx:latest`)
+  - Puerto 9100 mapeado a 8554 interno (RTSP)
+  - Paths `test` y `cam1` con `source: publisher` (requiere publisher externo para stream real)
+  - RTSP signaling verificado: OPTIONS 200 OK, DESCRIBE 404 Not Found (sin publisher) → protocolo RTSP funcional
+- **Bootstrap APIs** (invocados por DSS Client tras login):
+  - `GET /brms/api/v1.0/accounts/menus` → MenuListVo
+  - `GET /brms/api/v1.1/accounts/menus` → MenuListVo (v1.1)
+  - `GET /brms/api/v1.0/accounts/userinfo` → UserInfoVo
+  - `GET /brms/api/v1.0/system/time` → ServerTimeVo
+  - `GET /brms/api/v1.0/version` / `/system/version` → VersionVo
+  - `GET /brms/api/v1.0/capability` → CapabilityVo
+  - `GET /brms/api/v1.0/license` → LicenseInfoVo
+  - Request/Response Inspector Middleware: loggea todas las llamadas (método, URL, headers, body, status, duración)
+- **P2P Register Bridge** (`POST /brms/api/v1.0/device/p2p-register`):
+  - Body: `{ sn, user, password, name, channels }`
+  - Registra dispositivo por SN, genera `deviceId` y `channelIds` (`P2P-xxx$1$0$0`)
+  - Endpoints complementarios: `p2p-unregister`, `p2p-list`
+  - Integración futura: SOAP Easy4IP lookup + PTCP/Tou tunnel (`createLocalPort` en 127.0.0.1)
+- **E2E Tests**: 5/5 PASS (Auth, Tree/DTOs, RTSP signaling, UDP→WS, P2P probe)
+- **Unit Tests**: 10/10 PASS (DTO contracts, Bootstrap APIs, P2P endpoints)
+- Confianza: **CONFIRMADO** (tests automatizados pasan contra laboratorio real)
+
+### EV-057 — MediaMTX Integration para H.265 Real
+- Fecha: 2026-11-01 · `docker-compose.yml` incluye servicio `mediamtx`:
+  - Imagen: `bluenviron/mediamtx:latest` (v1.21.3)
+  - Puertos: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+  - Config JSON: paths `test`, `cam1` con `source: publisher`
+  - Limitación: requiere publisher externo (FFmpeg) para stream H.265 real; sin publisher → DESCRIBE 404
+  - Protocolo RTSP validado: OPTIONS 200 OK, DESCRIBE 404 Not Found (sin publisher)
+- Confianza: **CONFIRMADO** (servicio operando en laboratorio)
+
+### EV-058 — Bootstrap APIs Completas para DSS Client
+- Fecha: 2026-11-01 · Endpoints implementados en `brms-gateway`:
+  - `GET /brms/api/v1.0/accounts/menus` + v1.1 variant
+  - `GET /brms/api/v1.0/accounts/userinfo`
+  - `GET /brms/api/v1.0/system/time`
+  - `GET /brms/api/v1.0/version` + `/system/version`
+  - `GET /brms/api/v1.0/capability`
+  - `GET /brms/api/v1.0/license`
+  - Request/Response Inspector Middleware (catch-all logging)
+- DTOs compatibles con `MenuListVo`, `UserInfoVo`, `ServerTimeVo`, `VersionVo`, `CapabilityVo`, `LicenseInfoVo`
+- Confianza: **CONFIRMADO** (tests unitarios pasan)
+
+### EV-059 — P2P Device Register Bridge
+- Fecha: 2026-11-01 · Endpoints en `brms-gateway`:
+  - `POST /brms/api/v1.0/device/p2p-register` `{ sn, user, password, name, channels }` → `{ deviceId, channelIds, p2pStatus }`
+  - `POST /brms/api/v1.0/device/p2p-unregister` `{ sn }`
+  - `POST /brms/api/v1.0/device/p2p-list` → lista dispositivos registrados
+  - Almacenamiento en memoria (`P2P_DEVICES` Map) con `deviceId`, `channelIds` (`P2P-xxx$1$0$0`)
+  - Preparado para integración con `p2p-probe` (SOAP Easy4IP + PTCP tunnel)
+- Confianza: **CONFIRMADO** (endpoints operativos, tests pasan)

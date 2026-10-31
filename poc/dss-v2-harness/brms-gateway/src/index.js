@@ -4,7 +4,6 @@ import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs';
 import https from 'node:https';
-import net from 'node:net';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -15,11 +14,49 @@ const __dirname = dirname(__filename);
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 
+// ===== REQUEST INSPECTOR MIDDLEWARE (Catch-All) =====
+app.addHook('onRequest', async (req, reply) => {
+  const start = Date.now();
+  req.startTime = start;
+  
+  // Log incoming request
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    url: req.url,
+    headers: {
+      'content-type': req.headers['content-type'],
+      'x-subject-token': req.headers['x-subject-token'] ? 'PRESENT' : 'ABSENT',
+      'user-agent': req.headers['user-agent'],
+      host: req.headers.host
+    },
+    query: req.query,
+    body: req.body
+  };
+  
+  console.log('[REQ]', JSON.stringify(logEntry));
+  
+  // Store for response logging
+  req.logEntry = logEntry;
+});
+
+app.addHook('onResponse', async (req, reply) => {
+  const duration = Date.now() - (req.startTime || Date.now());
+  const logEntry = {
+    ...req.logEntry,
+    statusCode: reply.statusCode,
+    durationMs: duration,
+    responseHeaders: reply.getHeaders()
+  };
+  console.log('[RES]', JSON.stringify(logEntry));
+});
+
 const REALM = process.env.REALM || 'DSS-V2-LAB';
 const PORT = parseInt(process.env.PORT || '11443', 10);
 const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '1443', 10);
 const RTSP_PORT = parseInt(process.env.RTSP_PORT || '9100', 10);
 const PUBLIC_HOST = process.env.PUBLIC_HOST || '127.0.0.1';
+const MEDIAMTX_URL = process.env.MEDIAMTX_URL || 'rtsp://mediamtx:8554';
 const SSL_KEY = process.env.SSL_KEY || '/certs/key.pem';
 const SSL_CERT = process.env.SSL_CERT || '/certs/cert.pem';
 const USE_HTTPS = process.env.HTTPS === 'true';
@@ -79,6 +116,92 @@ app.get('/brms/api/v1.0/accounts/current', { preHandler: auth }, async (req) => 
 }));
 app.post('/brms/api/v1.0/accounts/unauthorize', { preHandler: auth }, async (req) => { TOKENS.delete(req.headers['x-subject-token']); return envelope({ success: true }); });
 
+// ===== BOOTSTRAP ENDPOINTS (called after login) =====
+app.get('/brms/api/v1.0/accounts/menus', { preHandler: auth }, async () => envelope({
+  menus: [
+    { id: '1', name: 'Monitor', parentId: '0', sort: 1, icon: 'monitor', url: '/monitor' },
+    { id: '2', name: 'Playback', parentId: '0', sort: 2, icon: 'playback', url: '/playback' },
+    { id: '3', name: 'Alarm', parentId: '0', sort: 3, icon: 'alarm', url: '/alarm' },
+    { id: '4', name: 'Device', parentId: '0', sort: 4, icon: 'device', url: '/device' },
+    { id: '5', name: 'Config', parentId: '0', sort: 5, icon: 'config', url: '/config' }
+  ]
+}));
+
+app.get('/brms/api/v1.1/accounts/menus', { preHandler: auth }, async () => envelope({
+  menuList: [
+    { menuId: '1', menuName: 'Monitor', parentId: '0', sort: 1, icon: 'monitor', url: '/monitor', children: [] },
+    { menuId: '2', menuName: 'Playback', parentId: '0', sort: 2, icon: 'playback', url: '/playback', children: [] },
+    { menuId: '3', menuName: 'Alarm', parentId: '0', sort: 3, icon: 'alarm', url: '/alarm', children: [] },
+    { menuId: '4', menuName: 'Device', parentId: '0', sort: 4, icon: 'device', url: '/device', children: [] },
+    { menuId: '5', menuName: 'Config', parentId: '0', sort: 5, icon: 'config', url: '/config', children: [] }
+  ]
+}));
+
+app.get('/brms/api/v1.0/accounts/userinfo', { preHandler: auth }, async (req) => envelope({
+  userId: '1',
+  username: req.user.userName,
+  userType: '1',
+  topLevel: '1',
+  realName: 'Administrator',
+  email: 'admin@dss-v2.lab',
+  phone: '',
+  remark: '',
+  createTime: '2026-01-01 00:00:00',
+  lastLoginTime: new Date().toISOString(),
+  lastLoginIp: req.ip
+}));
+
+app.get('/brms/api/v1.0/system/time', { preHandler: auth }, async () => envelope({
+  serverTime: Math.floor(Date.now() / 1000),
+  timezone: 'UTC',
+  ntpServer: 'pool.ntp.org'
+}));
+
+app.get('/brms/api/v1.0/version', { preHandler: auth }, async () => envelope({
+  version: 'V8.008.0000000.0',
+  buildDate: '2026-09-30',
+  buildNumber: 'R.20260930',
+  productName: 'DSS Ultimate',
+  protocolVersion: '1.0'
+}));
+
+app.get('/brms/api/v1.0/system/version', { preHandler: auth }, async () => envelope({
+  version: 'V8.008.0000000.0',
+  buildDate: '2026-09-30',
+  buildNumber: 'R.20260930',
+  productName: 'DSS Ultimate'
+}));
+
+app.get('/brms/api/v1.0/capability', { preHandler: auth }, async () => envelope({
+  capabilities: {
+    maxDevices: 1000,
+    maxChannels: 2000,
+    maxUsers: 100,
+    supportP2P: true,
+    supportRTSPS: true,
+    supportHLS: true,
+    supportMulticast: true,
+    supportPTZ: true,
+    supportAlarm: true,
+    supportANPR: true,
+    supportAccessControl: true,
+    supportFaceRecognition: true,
+    supportVehicle: true,
+    supportMap: true,
+    supportVideoWall: false
+  }
+}));
+
+app.get('/brms/api/v1.0/license', { preHandler: auth }, async () => envelope({
+  licenseInfo: {
+    type: 'trial',
+    maxDevices: 1000,
+    maxChannels: 2000,
+    expireTime: '2027-12-31 23:59:59',
+    features: ['base', 'p2p', 'rtsp', 'hls', 'ptz', 'alarm', 'anpr', 'access', 'face', 'vehicle']
+  }
+}));
+
 // ===== TREE =====
 app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => envelope({
   orgList: [{ orgId: '1', orgName: 'Root', parentId: '0', orgType: 1, sort: 1 }]
@@ -104,16 +227,19 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  // Use PUBLIC_HOST for external clients
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${channelId}?token=${token}`;
-  // Store session for RTSP server validation
+  // Use MediaMTX for real H.265 streaming
+  // MediaMTX path names must be alphanumeric/underscore/dot/minus/slash
+  // Use a simple path "test" for all channels (MediaMTX limitation)
+  const mediamtxPath = 'test';
+  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${mediamtxPath}?token=${token}`;
+  const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
+  // Store session for token validation
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now() });
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
     token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
-    hlsUrl: `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`,
-    fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
+    hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
 });
 app.post('/brms/api/v1.0/MTS/Video/StopVideo', { preHandler: auth }, async (req) => {
@@ -231,103 +357,87 @@ app.post('/brms/api/v1.0/alarm/procedures', { preHandler: auth }, async () => en
 app.post('/brms/api/v1.0/alarm/dprecord', { preHandler: auth }, async () => envelope({ alarmDprecordVo: { alarmCode: '', alarmTime: '', carColor: '', carImgUrl: '', carNum: '', carSpeed: 0, carType: '', carWayCode: '', channelId: '', channelName: '', peccancyType: '' } }));
 app.post('/brms/api/v1.0/alarm/picrecord/wanted', { preHandler: auth }, async () => envelope({ alarmPicrecordWantedVo: { alarmCode: '', alarmTime: '', blacklistType: '', carColor: '', carImgUrl: '', carNum: '', carNumcolor: '', carType: '', channelId: '', channelName: '' } }));
 
-// ===== P2P STATUS =====
+// ===== P2P STATUS & REGISTER =====
 app.get('/brms/api/v1.0/p2p/status', { preHandler: auth }, async () => envelope({
   status: 'available',
   easy4ip: 'www.easy4ip.com',
   profile: 'tools'
 }));
 
+// P2P Device Register by SN
+// Called by DSS Client to register a device by Serial Number
+// Body: { sn, user, password, name, channels }
+// Returns: { deviceId, channelIds, p2pStatus }
+const P2P_DEVICES = new Map();
+
+app.post('/brms/api/v1.0/device/p2p-register', { preHandler: auth }, async (req, reply) => {
+  const { sn, user, password, name, channels = 1 } = req.body;
+  if (!sn) return reply.code(400).send(envelope(null, 400, 'Missing SN'));
+  
+  // Check if already registered
+  if (P2P_DEVICES.has(sn)) {
+    const existing = P2P_DEVICES.get(sn);
+    return envelope({
+      deviceId: existing.deviceId,
+      channelIds: existing.channelIds,
+      p2pStatus: 'already_registered',
+      message: 'Device already registered'
+    });
+  }
+  
+  // Generate device ID and channel IDs
+  const deviceId = 'P2P-' + genToken().slice(0, 12);
+  const channelIds = [];
+  for (let i = 1; i <= channels; i++) {
+    channelIds.push(`${deviceId}$${i}$0$0`);
+  }
+  
+  // Store P2P device info
+  P2P_DEVICES.set(sn, {
+    sn,
+    deviceId,
+    name: name || `P2P Device ${sn}`,
+    user: user || 'admin',
+    channelIds,
+    registeredAt: Date.now(),
+    status: 'online'
+  });
+  
+  // Also add to device tree (simulated)
+  // In real implementation, this would trigger SOAP lookup to Easy4IP and PTCP tunnel creation
+  
+  return envelope({
+    deviceId,
+    channelIds,
+    p2pStatus: 'registered',
+    message: 'Device registered successfully. P2P tunnel creation simulated.'
+  });
+});
+
+// P2P Device Unregister
+app.post('/brms/api/v1.0/device/p2p-unregister', { preHandler: auth }, async (req) => {
+  const { sn } = req.body;
+  if (!sn) return reply.code(400).send(envelope(null, 400, 'Missing SN'));
+  
+  P2P_DEVICES.delete(sn);
+  return envelope({ success: true, message: 'Device unregistered' });
+});
+
+// P2P Device List
+app.post('/brms/api/v1.0/device/p2p-list', { preHandler: auth }, async () => {
+  const devices = Array.from(P2P_DEVICES.values()).map(d => ({
+    sn: d.sn,
+    deviceId: d.deviceId,
+    name: d.name,
+    status: d.status,
+    channelIds: d.channelIds,
+    registeredAt: d.registeredAt
+  }));
+  return envelope({ devices });
+});
+
 // ===== HEALTH =====
-app.get('/health', async () => ({ status: 'ok', version: '0.2.0', realm: REALM, rtspPort: RTSP_PORT, publicHost: PUBLIC_HOST }));
-
-// ===== RTSP SERVER =====
-function createRtspServer() {
-  const server = net.createServer((socket) => {
-    let buffer = '';
-    console.log('[RTSP] Client connected:', socket.remoteAddress, socket.remotePort);
-
-    socket.on('data', (chunk) => {
-      buffer += chunk.toString();
-      // Process complete RTSP requests (separated by double CRLF)
-      while (buffer.includes('\r\n\r\n')) {
-        const endIdx = buffer.indexOf('\r\n\r\n');
-        const request = buffer.slice(0, endIdx + 4);
-        buffer = buffer.slice(endIdx + 4);
-
-        const lines = request.split('\r\n');
-        if (lines.length === 0) continue;
-        const requestLine = lines[0];
-        const [method, url, version] = requestLine.split(' ');
-
-        // Parse headers
-        const headers = {};
-        for (let i = 1; i < lines.length - 1; i++) {
-          const colonIdx = lines[i].indexOf(':');
-          if (colonIdx > 0) {
-            const key = lines[i].slice(0, colonIdx).trim().toLowerCase();
-            const value = lines[i].slice(colonIdx + 1).trim();
-            headers[key] = value;
-          }
-        }
-
-        // Extract token from URL query
-        const urlObj = new URL(`http://localhost${url}`);
-        const token = urlObj.searchParams.get('token');
-        const channelId = urlObj.pathname.slice(1); // remove leading /
-
-        console.log('[RTSP]', method, url, 'from', socket.remoteAddress);
-
-        let response = '';
-        if (method === 'OPTIONS') {
-          response = 'RTSP/1.0 200 OK\r\nCSeq: ' + (headers.cseq || '1') + '\r\nPublic: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN\r\n\r\n';
-        } else if (method === 'DESCRIBE') {
-          // Validate token
-          const session = RTSP_SESSIONS.get(token);
-          if (!session) {
-            response = 'RTSP/1.0 401 Unauthorized\r\nCSeq: ' + (headers.cseq || '1') + '\r\n\r\n';
-          } else {
-            // Generate SDP with H265
-            const sdp = `v=0\r
-o=- ${session.session} 1 IN IP4 ${PUBLIC_HOST}\r
-s=${channelId}\r
-t=0 0\r
-a=control:*\r
-m=video 0 RTP/AVP 96\r
-a=rtpmap:96 H265/90000\r
-a=control:track1\r
-`;
-            response = 'RTSP/1.0 200 OK\r\nCSeq: ' + (headers.cseq || '1') + '\r\nContent-Type: application/sdp\r\nContent-Base: rtsp://' + PUBLIC_HOST + ':' + RTSP_PORT + '/' + channelId + '/\r\nContent-Length: ' + Buffer.byteLength(sdp) + '\r\n\r\n' + sdp;
-          }
-        } else if (method === 'SETUP') {
-          response = 'RTSP/1.0 200 OK\r\nCSeq: ' + (headers.cseq || '1') + '\r\nTransport: RTP/AVP;unicast;client_port=5000-5001;server_port=6000-6001\r\nSession: ' + (session?.session || 'mock') + '\r\n\r\n';
-        } else if (method === 'PLAY') {
-          response = 'RTSP/1.0 200 OK\r\nCSeq: ' + (headers.cseq || '1') + '\r\nSession: ' + (session?.session || 'mock') + '\r\nRange: npt=0.000-\r\n\r\n';
-        } else if (method === 'TEARDOWN') {
-          response = 'RTSP/1.0 200 OK\r\nCSeq: ' + (headers.cseq || '1') + '\r\nSession: ' + (session?.session || 'mock') + '\r\n\r\n';
-        } else {
-          response = 'RTSP/1.0 405 Method Not Allowed\r\nCSeq: ' + (headers.cseq || '1') + '\r\n\r\n';
-        }
-
-        socket.write(response);
-      }
-    });
-
-    socket.on('error', (err) => {
-      console.log('[RTSP] Client error:', err.message);
-    });
-
-    socket.on('close', () => {
-      console.log('[RTSP] Client disconnected');
-    });
-  });
-
-  server.listen(RTSP_PORT, '0.0.0.0', () => {
-    console.log(`RTSP Server listening on 0.0.0.0:${RTSP_PORT}`);
-  });
-
-  return server;
-}
+app.get('/health', async () => ({ status: 'ok', version: '0.3.0', realm: REALM, rtspPort: RTSP_PORT, publicHost: PUBLIC_HOST, mediamtxUrl: MEDIAMTX_URL }));
 
 // ===== WEBSOCKET SERVER =====
 function createWebSocketServer(httpsServer) {
@@ -409,9 +519,6 @@ async function start() {
       // Start WebSocket server on same HTTPS server
       createWebSocketServer(httpsServer);
     }
-
-    // Start RTSP server
-    createRtspServer();
 
     const udp = dgram.createSocket('udp4');
     udp.on('message', (msg, rinfo) => {

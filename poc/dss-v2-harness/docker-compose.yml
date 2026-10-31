@@ -6,7 +6,6 @@ services:
     ports:
       - "1443:1443"
       - "11443:11443"
-      - "9100:9100"
       - "18800:18800/udp"
       - "19800:19800/udp"
     volumes:
@@ -20,6 +19,22 @@ services:
       - REALM=DSS-V2-LAB
       - PUBLIC_HOST=10.10.20.120
       - RTSP_PORT=9100
+      - MEDIAMTX_URL=rtsp://mediamtx:8554
+    networks:
+      - dss-network
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    ports:
+      - "9100:8554"  # RTSP port (mapped to 9100 for DSS Client)
+      - "1935:1935"  # RTMP
+      - "8888:8888"  # HLS
+      - "8889:8889"  # WebRTC
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
     networks:
       - dss-network
     restart: unless-stopped
