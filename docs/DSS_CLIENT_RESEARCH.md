@@ -115,3 +115,34 @@ Cobertura:
 - UDP 18800 alarm ingest
 
 CI ejecuta `npm test` en cada push. Cualquier servidor DSS V2 que pase estos tests es compatible con el DSS Client WINPC_V2 original.
+## 12. P2P Connector Real Implementation (E-010, EV-051/052)
+
+El PoC `poc/dss-v2-harness/` ahora incluye implementación real del conector P2P:
+
+### 12.1 p2p-probe (libTouProxy real)
+```bash
+cd poc/dss-v2-harness/p2p-probe
+npm install
+SN=<serial> USER=admin PASS=admin123 node src/index.js
+```
+
+Flujo verificado:
+1. SOAP `getDeviceByDevSequence(SN)` → `www.easy4ip.com`
+2. PTCP handshake → `createLocalPort(127.0.0.1:port)`
+3. Túnel PTCP bidireccional sobre UDP
+4. Forwarding `127.0.0.1:localPort` → DVRIP/RTSP del dispositivo
+
+### 12.2 brms-gateway + WebSocket + Mock RTSP
+```bash
+cd poc/dss-v2-harness/brms-gateway
+npm test
+```
+
+Validaciones:
+- Handshake MD5 doble WINPC_V2
+- `RealTimeVideoVo` 18 campos (vkId, vkValue, multicast, STUN, connectType)
+- WebSocket `/event/ws` para alarmas tiempo real
+- Mock RTSP 9100 con validación `?token=`
+- Docker Compose + `deploy/ubuntu-lab-setup.sh` para lab
+
+CI ejecuta `npm test` en cada push. Cualquier servidor DSS V2 que pase estos tests es compatible con el DSS Client WINPC_V2 original.

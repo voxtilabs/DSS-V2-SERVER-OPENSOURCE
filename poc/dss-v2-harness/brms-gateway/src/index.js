@@ -2,6 +2,14 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+console.log('CWD:', process.cwd());
+console.log('__dirname:', __dirname);
+console.log('__filename:', __filename);
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
@@ -87,10 +95,15 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const vkId = 'vk-' + genToken().slice(0, 8);
   const url = `rtsp://127.0.0.1:9100/${channelId}?token=${token}`;
   return envelope({
-    connectType: 1, ip: '127.0.0.1', minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
+    connectType: 999, ip: '127.0.0.1', minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: 9100, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16)
+    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
+    hlsUrl: `https://127.0.0.1:11443/brms/api/v1.1/video/live/channel/${channelId}/hls?test=7`,
+    fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || '',
+    _debug: 'v7_FORCE_READ'
   });
+// THROW ERROR IF FILE READ: throw new Error('FILE READ VERIFICATION');
+// SYNTAX ERROR IF FILE NOT READ: const x = ;
 });
 
 app.post('/brms/api/v1.0/MTS/Video/StopVideo', { preHandler: auth }, async () => envelope({ success: true }));

@@ -181,3 +181,64 @@ Global `tagmast_pClient` pointer. `DHProxyClientInit` falla si ya existe: `"SDK 
 - Crypto helpers: `doubleMd5(user, pass)`, `makeSig(user, realm, temp, randomKey)` validados contra DPSDK
 
 Uso: `SN=<serial> USER=admin PASS=admin123 node src/index.js`
+## 12. ProxyClientImpl Vtable & PTCP State Machine (E-010, EV-049/050)
+
+### 12.1 Vtable CProxyClientImpl (libTouProxy)
+```cpp
+// Offset 0x00: destructor
+// Offset 0x08: getState() -> uint32_t (0=uninit, 1=ready, 2=error)
+// Offset 0x10: createLocalPort(ctx, localPort, remoteIp, ...) -> int
+// Offset 0x18: deletePort(port) -> int
+// Offset 0x20: getDeviceInfo(callback) -> void  // async, jsonDevInfo
+```
+
+Direcciones confirmadas (P2PDll.dll pkgB 0b1082ef...):
+- `getState`: 0x1800107c0
+- `createLocalPort`: 0x18001c8e0
+- `deletePort`: 0x18001d150
+- `DHProxyClientAddPortEx` core: 0x18001d1d0
+- vtable base: hereda `INotify` (0x18002e240)
+
+### 12.2 PTCP/Tou State Machine
+```mermaid
+stateDiagram-v2
+  [*] --> Init: DHProxyClientInit
+  Init --> DNS: getDomainIP(agenthost)
+  DNS --> Instance: CProxyClientImpl singleton
+  Instance --> Connect: P2P_Connect
+  Connect --> Bind: createLocalPort(0.0.0.0:port)
+  Bind --> Validate: remoteIp==127.0.0.1||::1
+  Validate --> Listen: socket listen
+  Listen --> Register: CPortResource[key=port]
+  Register --> Relay: /relay/agent + agenthost
+  Relay --> Tunnel: PTCP over UDP
+  Tunnel --> Forward: 127.0.0.1:port <-> Device
+  Tunnel --> DeviceInfo: vtable[4] -> jsonDevInfo
+```
+
+### 12.3 PTCP Packet Format
+```c
+struct PtcpHeader {
+  uint32_t cmd;      // 1=HELLO, 2=CHALLENGE, 3=RESPONSE, 4=DATA, 5=KEEPALIVE, 6=BYE
+  uint32_t seq;
+  uint32_t payload_len;
+  uint32_t flags;
+};
+// Payload: JSON (jsonDevInfo) o binario (video/audio)
+```
+Keepalive: 30s (`Dahua::Tou::CProxyChannel::sendKeepAlive`)
+
+## 13. p2p-probe Real Implementation (E-010, EV-051)
+
+```bash
+cd poc/dss-v2-harness/p2p-probe
+npm install
+SN=<serial> USER=admin PASS=admin123 node src/index.js
+```
+
+Implementación (`src/index.js`):
+- `soapGetDeviceByDevSequence(SN)` → SOAP exacto EV-034 a `www.easy4ip.com`
+- `touHandshake(relayHost, relayPort, localPort)` stub para `DHProxyClientAddPortEx`
+- Crypto helpers: `doubleMd5(user, pass)`, `makeSig(user, realm, temp, randomKey)` validados contra DPSDK
+
+Uso: `SN=<serial> USER=admin PASS=admin123 node src/index.js`

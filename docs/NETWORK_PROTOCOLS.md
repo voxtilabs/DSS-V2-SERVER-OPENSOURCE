@@ -218,3 +218,83 @@ ALARM|deviceCode=CAM001|type=Intrusion|channel=1\r\n
 ```
 
 Gateway recibe en `dgram` socket `0.0.0.0:18800` (backup 19800), parsea, loggea, reinyecta en canal de eventos interno.
+## 17. ProxyClientImpl Vtable & PTCP State Machine (E-010, EV-049/050)
+
+### 17.1 Vtable CProxyClientImpl (libTouProxy)
+```cpp
+class CProxyClientImpl : public INotify {
+  // vtable entries (offset from vtable base):
+  // 0x00: destructor
+  // 0x08: getState() -> uint32_t
+  // 0x10: createLocalPort(bindCtx, localPort, remoteIp, ...) -> int
+  // 0x18: deletePort(port) -> int
+  // 0x20: getDeviceInfo(callback) -> void (async, jsonDevInfo via callback)
+  // ...
+};
+```
+
+Offsets confirmados (x64, 8 bytes/entry):
+- `vtable[0x00]`: destructor
+- `vtable[0x08]`: `getState` (0x1800107c0)
+- `vtable[0x10]`: `createLocalPort` (0x18001c8e0)
+- `vtable[0x18]`: `deletePort` (0x18001d150)
+- `vtable[0x20]`: `getDeviceInfo` → callback con `jsonDevInfo`
+
+### 17.2 PTCP/Tou State Machine
+```mermaid
+stateDiagram-v2
+  [*] --> Init: DHProxyClientInit
+  Init --> DNS_Resolve: getDomainIP(agenthost)
+  DNS_Resolve --> Create_Instance: CProxyClientImpl singleton
+  Create_Instance --> Connect: P2P_Connect/AddPort
+  Connect --> Bind_Local: createLocalPort(0.0.0.0:port)
+  Bind_Local --> Validate_IP: remoteIp == 127.0.0.1 or ::1
+  Validate_IP --> Listen_UDP: socket listen
+  Listen_UDP --> Register_Port: CPortResource[key=localPort]
+  Register_Port --> Relay_Handshake: /relay/agent + agenthost
+  Relay_Handshake --> PTCP_Tunnel: PTCP over UDP
+  PTCP_Tunnel --> Forward_Data: 127.0.0.1:localPort <-> Device
+  PTCP_Tunnel --> Get_Device_Info: vtable[0x20] -> jsonDevInfo
+```
+
+### 17.3 Packet Format (PTCP/Tou over UDP)
+- Header: `uint32_t cmd; uint32_t seq; uint32_t payload_len; uint32_t flags;`
+- Commands: `0x01=HELLO`, `0x02=CHALLENGE`, `0x03=RESPONSE`, `0x04=DATA`, `0x05=KEEPALIVE`, `0x06=BYE`
+- Payload: JSON (`jsonDevInfo`) o datos binarios (video/audio)
+- Keepalive cada 30s (`Dahua::Tou::CProxyChannel::sendKeepAlive`)
+
+## 18. p2p-probe Real Implementation (E-010, EV-051)
+
+```bash
+cd poc/dss-v2-harness/p2p-probe
+npm install
+SN=<serial> USER=admin PASS=admin123 node src/index.js
+```
+
+Flujo implementado:
+1. `soapGetDeviceByDevSequence(SN)` → `www.easy4ip.com` (SOAP EV-034)
+2. `touHandshake(relayHost, relayPort, localPort)`:
+   - DNS resolve `agenthost:`
+   - PTCP handshake: `HELLO` → `CHALLENGE` → `RESPONSE` (SN + credenciales)
+   - `createLocalPort` bind `127.0.0.1:localPort`
+   - Tunnel established → bidirectional `dgram` forward
+3. Loop: `127.0.0.1:localPort` ↔ PTCP tunnel ↔ Device
+
+Tests: `npm test` (handshake → tunnel → loopback echo).
+
+## 19. MTS/RTSP + WebSocket Events (E-010, EV-052)
+
+### 19.1 WebSocket Event Stream
+```javascript
+// Endpoint: ws://host:11443/brms/api/v1.0/event/ws
+// Subscription: POST /brms/api/v1.0/event/subscription
+// Payload: { eventTypes: ["ANPR", "Intrusion", ...] }
+// Server pushes: { type: "ANPR_EBA", data: "...", timestamp: "..." }
+```
+
+### 19.2 Mock RTSP 9100
+```bash
+# Validate token from StartVideo
+rtsp://127.0.0.1:9100/1000171$1$0$0?token=MOCK-xxx
+```
+Handles: `OPTIONS`, `DESCRIBE` (SDP H.265), `SETUP`, `PLAY`, `TEARDOWN`.

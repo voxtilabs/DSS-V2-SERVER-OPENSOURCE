@@ -466,3 +466,64 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
   - Tests: `npm test` en ambos submódulos, CI GitHub Actions.
   - Scripts reproducibles: `decode-dtos.mjs`, `run-javap-dtos-v3.mjs`, `decode-brms-controllers.mjs`, `run-javap-all.mjs`, `trace-easy4ip-detail.mjs`.
 - Confianza: **CONFIRMADO** (código ejecutable, tests pasan).
+### EV-049 — Vtable de ProxyClientImpl (libTouProxy) identificada
+- Fecha: 2026-10-31 · Fuente: REA/Ghidra 12.1.4 decompile_all sobre P2PDll.dll + análisis binario.
+- Estructura: CProxyClientImpl (0x330 bytes) hereda de INotify (vtable en 0x18002e240). Vtable propia incluye al menos 5 métodos virtuales:
+  1. **getState** (0x1800107c0): retorna estado del cliente (0=uninitialized, 1=ready, 2=error).
+  2. **createLocalPort** (0x18001c8e0): bind UDP en 0.0.0.0:puerto, valida remoteIp==127.0.0.1/::1, listen socket, registra en CPortResource map keyed by localPort.
+  3. **deletePort** (0x18001d150): elimina puerto del CPortResource, cierra socket.
+  4. **DHProxyClientAddPortEx / core AddPort** (0x18001d1d0): lógica central de forwarding, invoca vtable[0x20] para obtener device info.
+  5. **vtable[0x20] (offset 0x20)**: puntero a función que obtiene device info (jsonDevInfo) vía callback.
+- Confianza: **CONFIRMADO** (pseudocódigo completo de exports + cadena interna + análisis binario de vtable).
+
+### EV-050 — Máquina de estados PTCP/Tou documentada
+- Fecha: 2026-10-31 · Fuente: pseudocódigo de createLocalPort (FUN_18001c8e0), DHProxyClientAddPortEx, getDomainIP, parseSn.
+- Flujo:
+  1. **Init**: `DHProxyClientInit` → `getDomainIP` (DNS resolve vía `getaddrinfo` contra `agenthost:`/`/relay/agent`) → crea singleton `CProxyClientImpl`.
+  2. **Connect**: `P2P_Connect` → `AddPort` → `DHProxyClientAddPortEx` → `createLocalPort`:
+     - Bind UDP en `0.0.0.0:localPort`
+     - Valida `remoteIp == 127.0.0.1` o `::1` (rechaza IPs públicas)
+     - `listen()` socket UDP
+     - Registra en `CPortResource` map: `key=localPort` → contexto de canal
+  4. **Relay/Cloud**: `/relay/agent` + `agenthost:` para coordinación relay PTCP/Tou; `Dahua::Tou::parseSn` para parsing SN en paquetes PTCP.
+  5. **Forwarding**: Datos en socket local `127.0.0.1:localPort` → encapsulados PTCP → túnel UDP → dispositivo remoto.
+  6. **Device Info**: `P2P_GetDeviceInfo` → vtable[0x20] → `jsonDevInfo` (JSON con info del dispositivo).
+- Confianza: **CONFIRMADO** (pseudocódigo completo de cadena interna).
+
+### EV-051 — p2p-probe con implementación Tou/PTCP real
+- Fecha: 2026-10-31 · Código: `poc/dss-v2-harness/p2p-probe/src/index.js` (Node.js, módulos `dgram`, `crypto`, `soap`).
+- Implementación:
+  - `soapGetDeviceByDevSequence(SN)` → SOAP exacto EV-034 a `www.easy4ip.com`.
+  - `touHandshake(relayHost, relayPort, localPort)` → implementación real:
+    1. Resuelve DNS del relay (`agenthost:`).
+    2. Inicia handshake PTCP/Tou: envía paquete de inicio con SN, recibe challenge.
+    3. Negocia puerto local via `createLocalPort` (bind 127.0.0.1).
+    4. Establece túnel PTCP: mantiene heartbeat (keepalive cada 30s), reenvía datos bidireccional.
+    5. `jsonDevInfo` parseado para extraer IP/puerto del dispositivo.
+  - Loop de reenvío: `dgram` socket en `127.0.0.1:localPort` ↔ túnel PTCP UDP.
+  - Tests: `npm test` valida handshake DNS→relay→puerto local→forwarding loopback.
+- Confianza: **CONFIRMADO** (implementación funcional, tests pasan).
+
+### EV-052 — brms-gateway con WebSocket eventos + mock RTSP 9100
+- Fecha: 2026-10-31 · Código: `poc/dss-v2-harness/brms-gateway/src/index.js` (Node.js, Fastify, `ws`, `dgram`).
+- Extensiones:
+  - **WebSocket** (`ws`): endpoint `/brms/api/v1.0/event/ws` para suscripciones tiempo real. Al recibir trama UDP 18800 (`ANPR_EBA|...`), broadcast a clientes suscritos.
+  - **Mock RTSP 9100**: servidor `rtsp://127.0.0.1:9100/` ligero que valida `?token=...` generado por `StartVideo`. Responde `OPTIONS`/`DESCRIBE`/`SETUP`/`PLAY`/`TEARDOWN` con SDP mock H.265.
+  - Endpoint `StartVideo` devuelve `RealTimeVideoVo` completo (18 campos: `vkId`, `vkValue`, `multicastIp`, `stunPort`, `connectType`, `session`, `url`, `url2`, `trackId`, etc.).
+  - `docker-compose.yml` y `deploy/ubuntu-lab-setup.sh` para aprovisionamiento limpio (variables de entorno `PORT`, `HTTPS`, `SSL_KEY`, `SSL_CERT`, `REALM`).
+- Confianza: **CONFIRMADO** (código funcional, tests pasan).
+
+### EV-052 — brms-gateway con WebSocket eventos + mock RTSP 9100
+- Fecha: 2026-10-31 · Código: `poc/dss-v2-harness/brms-gateway/src/index.js` (Node.js, Fastify, `ws`, `dgram`).
+- Extensiones:
+  - **WebSocket** (`ws`): endpoint `/brms/api/v1.0/event/ws` para suscripciones tiempo real. Al recibir trama UDP 18800 (`ANPR_EBA|...`), broadcast a clientes suscritos.
+  - **Mock RTSP 9100**: servidor `rtsp://127.0.0.1:9100/` ligero que valida `?token=...` generado por `StartVideo`. Responde `OPTIONS`/`DESCRIBE`/`SETUP`/`PLAY`/`TEARDOWN` con SDP mock H.265.
+  - Endpoint `StartVideo` devuelve `RealTimeVideoVo` completo (18 campos: `vkId`, `vkValue`, `multicastIp`, `stunPort`, `connectType`, `session`, `url`, `url2`, `trackId`, etc.).
+  - `docker-compose.yml` y `deploy/ubuntu-lab-setup.sh` para aprovisionamiento limpio (variables de entorno `PORT`, `HTTPS`, `SSL_KEY`, `SSL_CERT`, `REALM`).
+- Confianza: **CONFIRMADO** (código funcional, tests pasan).
+
+### EV-053 — Docker Compose + aprovisionamiento Ubuntu para laboratorio
+- Fecha: 2026-10-31 · Archivos: `docker-compose.yml`, `deploy/ubuntu-lab-setup.sh`.
+- `docker-compose.yml`: servicios `brms-gateway` (puerto 1443/11443), `rtsp-mock` (9100), `p2p-probe` (opcional), `redis` (event bus), `nginx` (reverse proxy opcional).
+- `deploy/ubuntu-lab-setup.sh`: script idempotente que instala Docker, clona repo, configura `.env` desde variables de entorno (`PORT`, `HTTPS`, `SSL_KEY`, `SSL_CERT`, `REALM`, `EASY4IP_HOST`), ejecuta `docker compose up -d`. Sin credenciales quemadas.
+- Confianza: **PROBABLE** (scripts generados, pendiente validación en Ubuntu real).

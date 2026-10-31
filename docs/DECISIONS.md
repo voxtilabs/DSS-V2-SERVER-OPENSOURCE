@@ -80,3 +80,14 @@ Formato: ADR-XXXX · Status · Fecha · Contexto · Decisión · Consecuencias.
 - Status: aceptada · Fecha: 2026-10-31 · Contexto: EV-042/043/048 (PoC funcional con tests).
 - Decisión: mantener `poc/dss-v2-harness/` como código fuente del proyecto (licencia MIT), con `npm test` obligatorio en CI. El Mock Gateway valida compatibilidad DTO 1:1 con Client original; el P2P Probe documenta el contrato SOAP/PTCP para futura reimplementación nativa (ADR-0009).
 - Consecuencias: CI ejecuta `npm test` en `brms-gateway/` y `p2p-probe/` en cada push; cobertura de handshake MD5, DTO contracts y alarm UDP es obligatoria para merge.
+## ADR-012 — PTCP/Tou Reimplementation in Node.js for PoC
+- Status: aceptada · Fecha: 2026-10-31 · Contexto: EV-049/050 (vtable + state machine documentados).
+- Decisión: reimplementar protocolo PTCP/Tou en Node.js (`poc/dss-v2-harness/p2p-probe/`) usando `dgram` (UDP) + máquina de estados explícita, en lugar de binding a `libTouProxy.dll` (licencia, ADR-0004).
+- Detalles: handshake `HELLO/CHALLENGE/RESPONSE` sobre UDP, `createLocalPort` bind `127.0.0.1`, keepalive 30s, forwarding bidireccional `dgram`. JSON `jsonDevInfo` para device info.
+- Consecuencias: control total del cable, auditoría posible; requiere validación con SN legítimo en laboratorio (E-011).
+
+## ADR-013 — WebSocket + Mock RTSP en brms-gateway
+- Status: aceptada · Fecha: 2026-10-31 · Contexto: EV-052 (MTS/RTSP + WebSocket events).
+- Decisión: añadir servidor WebSocket (`ws`) en `brms-gateway` para eventos tiempo real y mock RTSP 9100 con validación token para compatibilidad MTS.
+- Detalles: WebSocket endpoint `/event/ws` broadcast eventos UDP 18800; mock RTSP valida `?token=` y responde `OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN` con SDP H.265 mock.
+- Consecuencias: permite probar cliente DSS contra gateway mock sin hardware real; `docker-compose.yml` para despliegue reproducible.

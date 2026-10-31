@@ -107,3 +107,21 @@ El Mock Gateway (`poc/dss-v2-harness/brms-gateway/`) implementa **todos los DTOs
 5. WebSocket opcional para eventos en tiempo real (`DPSDK_StartWebsocketServer` observado en client gen).
 
 Tests de compatibilidad: `npm test` en `poc/dss-v2-harness/brms-gateway/`.
+## 8. PTCP/Tou Protocol & ProxyClientImpl (E-010, EV-049/050)
+
+Para compatibilidad P2P completa con DSS Client:
+
+1. **Vtable CProxyClientImpl** (offsets x64):
+   - `vtable[0]`: destructor
+   - `vtable[1]`: `getState() -> uint32` (0=uninit, 1=ready, 2=error)
+   - `vtable[2]`: `createLocalPort(bindCtx, localPort, remoteIp, ...) -> int`
+   - `vtable[3]`: `deletePort(port) -> int`
+   - `vtable[4]`: `getDeviceInfo(callback) -> void` (async, entrega `jsonDevInfo`)
+
+2. **PTCP/Tou Wire Protocol** (UDP):
+   - Puerto local bind: `0.0.0.0:localPort` (validación `remoteIp==127.0.0.1`)
+   - Relay: `/relay/agent` + `agenthost:` (DNS)
+   - Paquetes: `cmd(4) | seq(4) | len(4) | flags(4) | payload`
+   - Keepalive 30s
+
+3. **Integración DSS V2**: reimplementar `createLocalPort` + túnel PTCP en `poc/dss-v2-harness/p2p-probe/`.
