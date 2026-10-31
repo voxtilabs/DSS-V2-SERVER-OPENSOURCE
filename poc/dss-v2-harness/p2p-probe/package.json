@@ -1,0 +1,14 @@
+{
+  "name": "dss-v2-p2p-probe",
+  "version": "0.1.0",
+  "description": "P2P protocol probe for Easy4IP / libTouProxy (EV-031/032)",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "probe": "node src/index.js",
+    "test": "node --test src/test/*.test.js"
+  },
+  "dependencies": {
+    "node-forge": "^1.3.1"
+  }
+}
