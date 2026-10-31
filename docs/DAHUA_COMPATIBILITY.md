@@ -125,3 +125,73 @@ Para compatibilidad P2P completa con DSS Client:
    - Keepalive 30s
 
 3. **Integración DSS V2**: reimplementar `createLocalPort` + túnel PTCP en `poc/dss-v2-harness/p2p-probe/`.
+
+## 9. E-011: E2E Integration Lab Deployment & DSS Client Connection (EV-054/055)
+
+### 9.1 Lab Deployment Verified
+- **Server**: Ubuntu 26.04 at 10.10.20.120 (Node 20.20.2, Docker 29.9.2)
+- **Container**: `dss-v2-harness-brms-gateway:latest`
+- **Exposed Ports**:
+  - 1443/TCP: HTTPS BRMS API (self-signed cert CN=10.10.20.120)
+  - 11443/TCP: HTTP BRMS API
+  - 9100/TCP: RTSP Mock (OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN + SDP H.265)
+  - 18800/UDP: Alarm Ingest Primary
+  - 19800/UDP: Alarm Ingest Backup
+  - WebSocket: `wss://10.10.20.120:1443/brms/api/v1.0/event/ws`
+
+### 9.2 E2E Test Suite Results (All 5 PASS)
+| Test | Validation |
+|------|------------|
+| E2E-1 | Auth handshake 401→200 (double MD5, WINPC_V2) + keepalive/current |
+| E2E-2 | Tree/orgs + devices + channels (exact DTOs) |
+| E2E-3 | MTS StartVideo → RTSP URL + **TCP probe OPTIONS/DESCRIBE** → `RTSP/1.0 200 OK` + H.265 SDP |
+| E2E-4 | UDP 18800 → WebSocket push (event `type:ALARM` received) |
+| E2E-5 | P2P probe manual profile (`restart: "no"`) |
+
+Unit tests: 10/10 PASS in brms-gateway.
+
+### 9.3 DSS Client Windows Connection Guide
+**Prerequisites:**
+- Install `DSS Client V8.008` (M-001/M-002)
+- Import `cert.pem` (CN=10.10.20.120) to Trusted Root CA: `certmgr.msc` → Trusted Root Certification Authorities → Certificates → Import
+
+**Connection Steps:**
+1. Launch DSS Client
+2. Server IP: `10.10.20.120`
+3. Port: `1443`
+4. Username: `admin`
+5. Password: `admin123`
+6. Click **Login**
+
+**Client Flow (Auto-handled):**
+1. Client sends `POST /brms/api/v1.0/accounts/authorize` with `{"userName": "admin"}`
+2. Server returns HTTP 401 with `realm: "DSS-V2-LAB"`, `randomKey`, `challengeKey`
+3. Client computes:
+   - `temp = md5(md5("admin" + md5("admin123")))`
+   - `signature = md5(md5("admin:DSS-V2-LAB:" + temp) + ":" + randomKey)`
+4. Client sends `POST /brms/api/v1.0/accounts/authorize` with `{"userName": "admin", "randomKey": "...", "signature": "...", "clientType": "WINPC_V2", "challengeKey": "..."}`
+5. Server returns `{"token": "...", "duration": 86400}`
+6. All subsequent requests include `X-Subject-Token: <token>`
+
+**Live View:**
+- Tree: `POST /brms/api/v1.0/tree/orgs|devices|channels` → `channelId: "1000171$1$0$0"`
+- Start Video: `POST /brms/api/v1.0/MTS/Video/StartVideo` with `{"channelId": "1000171$1$0$0", "streamType": 1, "dataType": 1}`
+- Returns RTSP URL: `rtsp://10.10.20.120:9100/1000171$1$0$0?token=<token>`
+- Client opens RTSP: `OPTIONS` → `DESCRIBE` → `SETUP` → `PLAY` → H.265 playback
+
+**Alarms:**
+- UDP 18800: `ANPR_EBA|CAM001|plate=ABC1234\r\n`
+- Gateway broadcasts via WebSocket `wss://10.10.20.120:1443/brms/api/v1.0/event/ws`
+- Client receives real-time event popup
+
+### 9.4 Verification Commands
+```bash
+# Unit tests
+cd poc/dss-v2-harness/brms-gateway && npm test
+
+# E2E tests (from Windows)
+node --test poc/dss-v2-harness/e2e-lan-test.mjs
+
+# Server health
+curl -k https://10.10.20.120:1443/health
+```

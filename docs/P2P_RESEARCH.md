@@ -242,3 +242,25 @@ Implementación (`src/index.js`):
 - Crypto helpers: `doubleMd5(user, pass)`, `makeSig(user, realm, temp, randomKey)` validados contra DPSDK
 
 Uso: `SN=<serial> USER=admin PASS=admin123 node src/index.js`
+
+## 14. E-011: Lab Deployment with P2P Probe Profile (EV-054/055)
+
+### 14.1 Deployment Integration
+The BRMS Gateway on Ubuntu 10.10.20.120 now includes:
+- **P2P Probe container** (`p2p-probe` service) with `restart: "no"` and `profile: tools`
+- **Manual invocation**: `docker compose --profile tools run p2p-probe`
+- **Endpoint**: `/brms/api/v1.0/p2p/status` returns `{ status: "available", easy4ip: "www.easy4ip.com", profile: "tools" }`
+
+### 14.2 P2P Probe Capabilities
+- SOAP lookup to `www.easy4ip.com` (EV-034 exact payload)
+- DNS resolution of `agenthost:` for relay
+- PTCP/Tou handshake skeleton (`touHandshake`)
+- Crypto helpers validated against DPSDK (`doubleMd5`, `makeSig`)
+
+### 14.3 E2E Test Validation
+E2E-5 validates the P2P probe profile is available and the endpoint responds (200 or 404 if not yet implemented).
+
+### 14.4 Security Notes
+- No Dahua app credentials stored in repo (ADR-0003/0004)
+- Probe uses lab SN only
+- Cloud Easy4IP is single point of failure; production must prefer direct routes

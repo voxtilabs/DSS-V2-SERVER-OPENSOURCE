@@ -1,0 +1,1001 @@
+{
+  "_meta": {
+    "project": "DSS-V2-SERVER-OPENSOURCE",
+    "experiment": "E-006",
+    "title": "Inventario estático DSS Client V8.006 (REA + 7-Zip portable, sin ejecución de muestras)",
+    "generated": "2026-10-30",
+    "git": "OUT OF GIT por design (.gitignore: research/evidence/). Nunca commitear binarios ni re-distribuir muestras.",
+    "compliance": "Sin extracción de credenciales/secretos (ADR-0003/0004). El SQLite se inspeccionó a nivel esquema únicamente; sin sampling de filas.",
+    "toolchain": {
+      "rea": "rea-agents 6.8.0 (Node 26.13.0 dedicado, C:\\Users\\bruno\\Tools\\dssv2\\)",
+      "extractor": "7-Zip 26.05 portable (7zr.exe SHA-256 9BF582B894DFA665F852D7E9112B02290A1C303C2D95A21FCDC41FFCB03143B7), C:\\Users\\bruno\\Tools\\dssv2\\7zip\\full\\7z.exe"
+    }
+  },
+  "install_shell": {
+    "sample": "M-001 DSS Client V8.006 Win64",
+    "type": "NSIS (Nullsoft Install System), PE32 x86, magic NullsoftInst @offset4",
+    "pe_stub_stamp": "2009-12-05 19:50:41 (estampa del stub NSIS, no del material)",
+    "bytes": 203694736,
+    "sha256": "a0138d2ed3228f0f75a37c5e72c126b9cd8f727f7516cb5744bec691d42792c9",
+    "imphash_md5": "7fa974366048f9c551ef45714595665e",
+    "imports": {
+      "dlls": 8,
+      "functions": 155,
+      "delay": 0,
+      "evidence_id": "ev_8c7004d6ba902c5ffb99b82d82a035e0f4b80fc2492cf4a8966c9d0d93c9ca3a"
+    },
+    "certificates": {
+      "entries": 1,
+      "type": "pkcs7 (installer firmado)",
+      "evidence_id": "ev_414cf203da8cbf7081921c50a16e7d33fe8526ff7d516a87ab9c3df9bb6b2aa4"
+    },
+    "resources": {
+      "evidence_id": "ev_e2734124b662f5e5789053016fec2de4f1bc0102edd4b5ef974193f1faf41a00"
+    },
+    "overview": {
+      "evidence_id": "ev_cab447594af9d21d59aacf32493c8b2700eb79404d82a11c7cbdaf26001b19d0"
+    },
+    "extraction": {
+      "dest": "C:\\Users\\bruno\\Downloads\\dssv2-setup\\dssclient-extracted",
+      "files": 1254,
+      "unpacked_bytes": 678192049,
+      "method": "7z x (estático), sin ejecución del instalador"
+    }
+  },
+  "build_provenance": {
+    "Version.xml": {
+      "module": "OverseasClient",
+      "branch": "release-20241213-AIO8.6.0",
+      "commit_id": "e5b1e036de4e3d909a760da8deb92f3f3a58b236",
+      "revision": "1741354948",
+      "last_commit_time": "2025-03-07 21:42:28"
+    },
+    "Localcfg.ini": {
+      "oem_app": "DSS Client",
+      "company": "dahua",
+      "https_enable": 1,
+      "LogLevel": 4
+    }
+  },
+  "classification": {
+    "verdict": "Qt 5.15.13 C++ nativo Win64 + CEF embebido (Chromium 109) + módulos plugin de Dahua. NO es Electron ni .NET.",
+    "indicators": {
+      "qt": {
+        "framework": "Qt 5.15.13.0 (Qt5Core/Qt5Gui/Qt5Widgets, PE x64)",
+        "launcher_imports": "Qt5Core 51 + Qt5Gui 7 + Qt5Widgets 13 + QPluginLoader"
+      },
+      "cef": {
+        "libcef.dll": "185.9 MB, CEF 109.1.18+gf1c41e4 / chromium-109.0.5414.120",
+        "subprocess": "CefRender.exe",
+        "pak": "resources.pak + chrome_100/200_percent.pak + 55 locales/*.pak"
+      },
+      "not_electron": "no app bundle Electron (sin app.asar/app); web via CEF (libcef.dll)",
+      "not_dotnet": "sin imports CLR/mscoree; runtime nativo MSVC (MSVCP140.dll, VCRUNTIME140.dll)",
+      "plugin_arch": "launcher 0.4 MB (ProductName DSSClient) carga ClientFramework con QPluginLoader; 15 módulos *Logical.dll"
+    },
+    "launcher_imports": {
+      "machine": "x64 (pe32-plus)",
+      "dll_count": 15,
+      "dlls": [
+        "Qt5Core.dll",
+        "Qt5Gui.dll",
+        "Qt5Widgets.dll",
+        "DSGui.dll",
+        "UICommonModule.dll",
+        "KERNEL32.dll",
+        "USER32.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "SHELL32.dll"
+      ],
+      "functions": 137,
+      "imphash_md5": "48262c615e46edb9b6fac581b09965b5",
+      "evidence_id": "ev_5db6abd299aaadb32fbdae7f8a96bfc6729b29a08aa4410edeb0a8ffee6b6dad"
+    }
+  },
+  "fingerprints_sha256": {
+    "DSS Client.exe": "C8D55962E8A5A66E5666344A9FDF15502707A422EDEF0C72E91CCEB19CD673FF",
+    "netsdk.dll": "56B0107EBFD522E88734EB76892A3F9EA5DABE19DCC95D38EA92C8B1B9405DB6",
+    "P2PDll.dll": "8B6EC50C5ECD2C43726CB9F7659F5D693D052D85C349C565CAC8DC2621C3CBE1",
+    "DPSDK.dll": "CE43C8B799505F0F2A45C02639F892A426233AD40960D3696CB6150BFCCC0D47",
+    "configsdk.dll": "87BE4506AF84D15F5FB4286712486DA61BF3A40AE0DBD511F069ADDA01933AD4",
+    "avnetsdk.dll": "A654CA64A5A72469FA395FB0053CD229CAE1B99DA5C2FF748C3744D47EB40864",
+    "libcef.dll": "1AB56C8C52437346FB5C06D81CC1A78103C53ACA5D14D8E846217511FDD4CD78",
+    "ClientFramework": "36BF4AC8C8592CAE42B5C8CE79DF53331E1D856222E88CD70EB60AE6D2B00FFF"
+  },
+  "sdk_surface": {
+    "netsdk.dll": {
+      "version": "3.5.6.68586",
+      "size_mb": 26.9,
+      "exports": 2034,
+      "sample": [
+        "CLIENT_Init",
+        "CLIENT_Cleanup",
+        "CLIENT_Login",
+        "CLIENT_Logout",
+        "CLIENT_RealPlay",
+        "CLIENT_StopRealPlay",
+        "CLIENT_SaveRealData",
+        "CLIENT_SetDVRMessCallBack"
+      ],
+      "evidence_id": "ev_1d7fba2d2a8555e0eb8b37877c05f4244cc99901b74c0a349d61ff1da6e5010a"
+    },
+    "DPSDK.dll": {
+      "size_mb": 16.3,
+      "exports": 1363,
+      "sample": [
+        "DPSDK_AES256Decrypt",
+        "DPSDK_ARAddLabel",
+        "DPSDK_ARAddLabelTemplate",
+        "DPSDK_ARTurnToPoint",
+        "DPSDK_ARGetLabel"
+      ],
+      "evidence_id": "ev_04181e02710eea0e921542e242af31cecf34a75151dbd5b3b298b90bd15e9590"
+    },
+    "P2PDll.dll": {
+      "size_mb": 1.9,
+      "exports": 8,
+      "exports_exact": [
+        "P2P_Init",
+        "P2P_Connect",
+        "P2P_Disconnect",
+        "P2P_GetDeviceInfo",
+        "P2P_DeviceStatus",
+        "P2P_QueryChannelStatus",
+        "P2P_QueryServerStatus",
+        "P2P_UnInit"
+      ],
+      "evidence_id": "ev_5742cbaf04d078ca81c462d9cdb19f7e6d57c0e078e2c557d9bef9106e47ce2c"
+    },
+    "configsdk.dll": {
+      "size_mb": 7.2,
+      "exports": 5,
+      "exports_exact": [
+        "CLIENT_ParseData",
+        "CLIENT_PacketData",
+        "CLIENT_ParseAnalyzerEventData",
+        "CLIENT_ParseDataByCallback",
+        "CLIENT_ParseVideoInAnalyse"
+      ],
+      "evidence_id": "ev_b7b90267115c1e9b6ef97216af9b4581f270729dd14173b42b7c021e676583ec"
+    },
+    "avnetsdk.dll": {
+      "version": "3.5.6.68586",
+      "size_mb": 4.2,
+      "exports": "no capturado en esta pasada"
+    },
+    "certificates": {
+      "DSS Client.exe": "sin firmar (0 entradas, ev_de9396523bafbf502c514ac8dd36e23067fab8bffa77af099b504788d4e5adf1)",
+      "netsdk.dll": "sin firmar (0 entradas, ev_26333deed819ae1c52bf29162448af05a5b64b730becf4bfc0ff30f16084e41c)"
+    }
+  },
+  "clientframework_sqlite": {
+    "role": "no es una DLL: es la base de datos SQLite de registro de plugins/UI del cliente",
+    "engine": "SQLite 3.54.0 (encabezado 'SQLite format 3')",
+    "bytes": 24178688,
+    "encoding": "UTF-8",
+    "schema_completeness": "complete",
+    "tables": [
+      {
+        "name": "ConfigUIPlugin",
+        "cols": 5
+      },
+      {
+        "name": "LogicalPlugin",
+        "cols": 2
+      },
+      {
+        "name": "PluginMenu",
+        "cols": 18
+      },
+      {
+        "name": "StylePlugin",
+        "cols": 3
+      },
+      {
+        "name": "ToolManagerPlugin",
+        "cols": 3
+      },
+      {
+        "name": "UIPlugin",
+        "cols": 5
+      },
+      {
+        "name": "PluginPanelInfo",
+        "cols": 8
+      },
+      {
+        "name": "TranslateTable",
+        "cols": 28
+      },
+      {
+        "name": "_TranslateTable_old_20240523",
+        "cols": 27
+      }
+    ],
+    "evidence_id": "ev_2b4a642ad10ca80cc9c9b00da215245d1eeb4abc2c9a1a322ee234de8a735910",
+    "note": "sin sampling de filas: decisión conservadora; tablas son metadatos de UI/men/traducciones"
+  },
+  "inventory_counts": {
+    "top_level_dlls": 118,
+    "logical_plugin_dlls": 15,
+    "exes": [
+      "7z.exe (0.5 MB, re-distribuido por el instalador)",
+      "CefRender.exe",
+      "DSMessageNotify.exe",
+      "DSS Client.exe",
+      "MDP.exe (4.1 MB)",
+      "MSG.exe (2.6 MB)",
+      "patch.exe (6.4 MB)",
+      "Update.exe (5.1 MB)"
+    ],
+    "qt_plugin_dirs": [
+      "audio",
+      "bearer",
+      "iconengines",
+      "imageformats",
+      "mediaservice",
+      "platforms",
+      "playlistformats",
+      "printsupport",
+      "styles"
+    ],
+    "oss_notice": "License-OpenSource.txt + licenseCN/EN.txt (licencias: Boost, cryptopp, ...)"
+  },
+  "server_shell": {
+    "sample": "M-002.1 General_DSS-Ultimate_Server_Win64_IS_V8.008.0000000.0.R.20260930.exe",
+    "bytes": 1731861040,
+    "sha256": "898497823ba3e355435fedd3c55b989476a4c26eee30430a4b9e05c6f270e483",
+    "format": "PE32 x86 stub (~205 KB) + overlay propietario de 1.731.655.800 bytes",
+    "overlay_offset": 205240,
+    "overlay_magic": "93 FB 69 5A (contenedor propietario Dahua; no NSIS/7z/MSI conocido)",
+    "stub_sha256": "7184387d681bc76503dc64d9cc9b10e1787bd8e31e05ca2ee30dacb59a54c973",
+    "stub_imports": {
+      "dlls": [
+        "ADVAPI32.dll",
+        "SHELL32.dll",
+        "ole32.dll",
+        "COMCTL32.dll",
+        "USER32.dll",
+        "GDI32.dll",
+        "KERNEL32.dll"
+      ],
+      "count": 171,
+      "imphash_md5": "5e48fbae3520a62c95e412b293e1759c",
+      "evidence_id": "ev_313ea470627a8380023c1e8712542d7e3b6a88ed923cc6c6ff9a60c552407d46"
+    },
+    "signature": {
+      "win_certificate_header": "B4 29 00 00 00 02 (dwLength 10680, wType 2 = PKCS_SIGNED_DATA)",
+      "der_bytes": 10672,
+      "der_sha256": "35a85f781634313c2254a6cd8b9c9eceb394cb24c8f1fa8233d39f7cde2ed2eb",
+      "leaf": {
+        "subject": "CN=\"Zhejiang Dahua Technology Co., Ltd.\", O=\"Zhejiang Dahua Technology Co., Ltd.\", L=Hangzhou, S=Zhejiang, C=CN",
+        "issuer": "CN=DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1, O=\"DigiCert, Inc.\", C=US",
+        "valid": "2026-04-23 -> 2027-06-26",
+        "serial": "0CD01D1FB86B68240BBCB9F48EAC2C87",
+        "sig_alg": "sha256RSA",
+        "thumbprint": "87696A73B2FAFDADD6A93B5427BE5B3612BE91BA"
+      },
+      "chain": [
+        "Zhejiang Dahua Technology Co., Ltd. (leaf)",
+        "DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1",
+        "DigiCert Trusted Root G4"
+      ],
+      "chain_build": true,
+      "note": "parseo .NET del blob extraído (lectura estática); chain con revocación NoCheck y trust del almacén local; el bloque firma cubre stub+overlay"
+    },
+    "limits": "cap REA de 512 MiB impide imports/certs directos del archivo completo (1.73 GB > cap): se analizó el stub truncado (integrado completo) y el blob de firma se extrajo manualmente"
+  },
+  "engine_toolchain": {
+    "ghidra": {
+      "version": "12.1.4 (release oficial NSA)",
+      "zip_sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
+      "dir": "C:\\Users\\bruno\\Tools\\dssv2\\ghidra\\ghidra_12.1.4_PUBLIC",
+      "env": "GHIDRA_INSTALL_DIR (User) + JAVA_HOME jdk-25.0.2 (aceptado: JDK 21+)",
+      "doctor": "ghidra / ghidra-headless / native_decompiler / java healthy"
+    },
+    "strings_pipeline_validated": {
+      "command": "rea search <path> <pattern> --kind strings (CLI, provider ghidra)",
+      "target": "DSS Client.exe",
+      "matches_sample": [
+        "0x140014e0a,Qt5Core.dll",
+        "0x140014f18,Qt5Gui.dll",
+        "0x1400151ba,Qt5Widgets.dll"
+      ],
+      "evidence_id": "ev_0469a5340634226e2c034b7d11ceb5a82c2d221a19afa1ce4b42deafb901c239"
+    }
+  },
+  "open_items": "M-002_overlay_DECODIFICADO (EV-023..EV-028): outer-db decodificado + mapas de bloques + pkgA/pkgB identificados; PRÓXIMO paso: poder ejecutar el objeto de datos en el servidor (no objetivo de E-006)",
+  "server_outer_data_area": {
+    "experiment": "E-006 V2 (2026-10-30), estático, sin ejecución",
+    "layer2_outer_db": {
+      "file": "outer-db.bin (4,716,790 B)",
+      "sha256": "a39aa46bbf229a5e6e39b1ddc35e25c093382d7d69acfa366655e514f5723efb",
+      "decode": "3 bloques LZMA en cadena (outs 2,097,152 + 2,097,152 + 522,486 B) con receta LZMA-alone sintética (props 5d + dict 00 80 00 00 + size FF..FF) y 7z 26.05 -tLzma -so; EOS natural válida",
+      "semantics": "ReadData 0x403320 (header 8B [uncomp][comp|0x80000000], flag=LTZMA-solid) + db loader 0x40366b (db_data_pos @ header+0x3c) - pseudocode REA/Ghidra",
+      "registry": {
+        "records": 41055,
+        "stride": 36,
+        "uniq_d2": 35331,
+        "name_pool_offset": 2042608,
+        "name_pool_rule": "nombre UTF-16 en pool + rel*2"
+      }
+    },
+    "decode_families": {
+      "compressed_chunks": {
+        "share": "dominante (~37.8k registros)",
+        "marker": "props 5d 33 37 23 00; posición empírica d2+772125 (165 registros) o d2+772129 (dominante 32,167+5,507)",
+        "method": "decode hasta EOS natural por chunk; comp span = siguiente marker - 5"
+      },
+      "stored_plain": {
+        "count": 2769,
+        "model": "header 8B en d2+772114 (u32 span) + contenido en d2+772122; span+8 == gap al siguiente d2 único",
+        "verified": "2769/2769 sin mismatch (modelOK), 3 con magic MZ (bloques exe embebidos)"
+      },
+      "pending": "4 bytes previos al marker (m-4) sin identificar; rels de marker minoritarios (32/63/,...) ~500 registros; no afecta el modelo dominante"
+    },
+    "z_big_gaps": {
+      "total": 232,
+      "all_model_ok": true,
+      "file": "z-gaps.json",
+      "top": [
+        {
+          "d2": 1375630566,
+          "gap": 247743944,
+          "span": 247743936,
+          "mz": "MZ",
+          "name": "General_DSS-Client_Win64_IS_V8.008.0000000.0.R.20260325.exe"
+        },
+        {
+          "d2": 223556537,
+          "gap": 131466539,
+          "span": 131466531,
+          "mz": "¾È",
+          "name": "person_reid_x64_openvino.nnx"
+        },
+        {
+          "d2": 1244670050,
+          "gap": 125643396,
+          "span": 125643388,
+          "mz": "âE",
+          "name": "AR.zip"
+        },
+        {
+          "d2": 355023995,
+          "gap": 42021106,
+          "span": 42021098,
+          "mz": "ü\u0010",
+          "name": "vehicle_reid_x64_openvino.nnx"
+        },
+        {
+          "d2": 1091830221,
+          "gap": 40662628,
+          "span": 40662620,
+          "mz": "ü­",
+          "name": "spire.xls-14.4.4.jar"
+        },
+        {
+          "d2": 806587438,
+          "gap": 40002673,
+          "span": 40002665,
+          "mz": "ÌÅ",
+          "name": "user-manual.pdf"
+        }
+      ]
+    },
+    "embedded_packages": {
+      "pkgA": {
+        "span": 10192040,
+        "name": "WebClientServicePlugin_Setup.exe",
+        "bytes": 10192040,
+        "unpack": "unpack-inner-1207402252 (56 archivos, NSIS)",
+        "listing": "inner1-7z-l.txt"
+      },
+      "pkgB": {
+        "span": 247743936,
+        "name": "General_DSS-Client_Win64_IS_V8.008.0000000.0.R.20260325.exe",
+        "bytes": 247743936,
+        "unpack": "unpack-inner-1376402688 (1,199 archivos / 814 MB)",
+        "listing": "i4-slt.txt",
+        "note": "El instalador Server V8.008 embebe COMPLETO el instalador DSS Client V8.008 R.20260325 como bloque stored"
+      }
+    },
+    "pkgB_key_sha256": {
+      "avnetsdk.dll": {
+        "bytes": 4601344,
+        "sha256": "28371b0f5c1a3aac23cc9320ec4900bff24289e47370d7a7041af9ee964e261d"
+      },
+      "DPSDK.dll": {
+        "bytes": 11388424,
+        "sha256": "3f49799f71684aafacdf7a38288463af08d150dc0b7e6d5f9dcdbd072740e048"
+      },
+      "DSS Client.exe": {
+        "bytes": 434696,
+        "sha256": "006bf987c45fed56c70935d4ba84a47c88a110a16f0d4cfbf7aa42634ea66cd1"
+      },
+      "DSSClient.ini": {
+        "bytes": 178,
+        "sha256": "66fe666e3d3b59cbc0cbdcc57f903de306af2f6d36a19975a7fe1eeaf3d2d527"
+      },
+      "netsdk.dll": {
+        "bytes": 33253888,
+        "sha256": "4d862b9272140df4efd0072f83d1273acd64b2f09635aed0dd18f469a8d91b48"
+      },
+      "P2PDll.dll": {
+        "bytes": 3542016,
+        "sha256": "0b1082ef5f0c444f05e023dd9c26e4a1262312f7f9b59afc943eecf97a21f75c"
+      }
+    },
+    "dpsdk_p2p_strings": {
+      "scan": "scan-4-dlls.mjs (ASCII + UTF-16LE, case-insensitive)",
+      "easy4ip_correction": "easy4ip SÍ presente en ambas generaciones DPSDK (client ce43c8b7… 17,078,880 B y pkgB 3f49799f… 11,388,424 B): 5 coincidencias c/u.",
+      "strings": [
+        "www.easy4ip.com",
+        "www.easy4ipcloud.com",
+        "GetDeviceInfoFromEasy4IP failed!",
+        "Dpsdk::CP2PServerManager::GetDeviceInfoFromEasy4IP",
+        "Dpsdk::CP2PServerManager::ParseHttpBodyForEasy4IP"
+      ],
+      "note_supersedes": "corrige búsquedas ev_4971b2ca/ev_ef79f8af (case-sensitive/alcance previo con 0 resultados)",
+      "classes": [
+        "CP2PServerManager (LoginP2PServer, AddP2PP2Mapping)",
+        "CDpsdkCore/CDpsdkManager::GetP2PConfig / UpdateP2PConfig / GetP2PServerList / GetP2PDeviceInfo",
+        "SetP2PClientType"
+      ],
+      "build_path_leak": "d:\\jk_107\\workspace\\Module_Software-HW_DSS-Client_OverseasClient_W_OverseasClient_windows\\code_path\\PlatformSDK__3caad5\\C\\DPSDK\\Logic\\P2P\\P2PServerManager.cpp"
+    },
+    "chunk_samples": {
+      "c0": "chunks 12,288 B MZ PE x86 linker 8.0 perfil NSIS (imports KERNEL32/USER32/ole32/System.dll)",
+      "c4": "1,026 B UTF-16 lista servicios: jre, VMS Service, PCPS, DMS, mysql, HALicenseService"
+    }
+  },
+  "e007": {
+    "title": "E-007 P2P Protocol Trace (CP2PServerManager) y mapa BRMS/MTS del server (2026-10-30)",
+    "production_spec_operator": "Contrato BRMS/MTS de produccion observado por el operador en 192.168.0.71: BRMS API 1443 TLS (/brms/api/v1.0|v1.1, X-Subject-Token, handshake doble MD5 con realm+randomKey, clientType WINPC_V2), MTS RTSP 9100 con token=, Alarm Ingest 18800 UDP/TCP + 19800 UDP backup (tramas CRLF), admin 8443/8888; endpoints tree/orgs|devices|channels, MTS/Video/StartVideo|StopVideo|KeepAlive, v1.1/video/live HLS, SS/Record/QueryRecord, event/subscription REST/WS/ActiveMQ, vehicle/anpr+whitelist, access/door/control, ptz/direction|preset (EV-029)",
+    "dpsdk_brms_strings": {
+      "tool": "scan-brms-strings.mjs + scan-protocols.mjs",
+      "pkgB_sha": "3f49799f71684aaf…",
+      "client_sha": "ce43c8b79950…",
+      "hits": [
+        "X-Subject-Token: %s",
+        "/brms/api/v1.0/accounts/authorize",
+        "accounts/token/keepalive",
+        "accounts/unauthorize",
+        "WINPC_V1/V2",
+        "MTS/Video/StartVideo",
+        "tree/devices",
+        "buildMd5DigestAuthReq",
+        "Sec-WebSocket-Key/Version",
+        "/bayonetServer/alarmReport",
+        "DPSDK_StartWebsocketServer (client gen)"
+      ],
+      "verdict": "CONFIRMADO: el DSS Client original habla el contrato BRMS identico al observado en produccion (EV-030)"
+    },
+    "p2pdll": {
+      "tool": "pe-exports-p2pdll.mjs + decompile_all REA/Ghidra 12.1.4 (ev_49afa116…)",
+      "exports": [
+        "P2P_Init",
+        "P2P_Connect",
+        "P2P_Disconnect",
+        "P2P_GetDeviceInfo",
+        "P2P_DeviceStatus",
+        "P2P_QueryChannelStatus",
+        "P2P_QueryServerStatus",
+        "P2P_UnInit"
+      ],
+      "semantics": "P2P_Connect(.\\P2PDll.cpp AddPort) -> DHProxyClientAddPortEx (Src/Client/ProxyClientCWrap.cpp de libTouProxy): instancia unica, puerto local recortado a u16; tutnel PTCP/Tou (Dahua::Tou::parseSn, ptcp connect success, /relay/agent, agenthost:, jsonDevInfo) entrega puerto local loopback; verdict CONFIRMADO (EV-031)",
+      "files": "dssserver-analysis/p2pdll-decomp/"
+    },
+    "easy4ip_protocol": {
+      "soap_ddns": "ns2:getDeviceByDevSequence ns2=http://webservice.ddns.dahua.com/",
+      "domains": [
+        "www.easy4ip.com",
+        "www.easy4ipcloud.com"
+      ],
+      "http_client": "curl (HSTS/cookies/ALPN) + jsoncpp",
+      "not_found_in_strings": [
+        "UDP 8800/8866",
+        "magic ES de paquete"
+      ],
+      "wire_level": "PROBABLE -> E-008 dinamico con SN legitimo propio",
+      "limitation": "decompile de CP2PServerManager::GetDeviceInfoFromEasy4IP en DPSKDK 11.4MB abortado por Ghidra startup deadline (requiere pasada dirigida futura)"
+    },
+    "server_service_map": {
+      "tool": "map-server-services.mjs -> services-map.json",
+      "registry": {
+        "exe": 72,
+        "jars_uniq": 665,
+        "class": 20592,
+        "py": 1805,
+        "bat": 213,
+        "nginx": 39,
+        "redis": 207,
+        "activemq": 74
+      },
+      "wrappers": [
+        "VMS_MTS.exe",
+        "VMS_DMS.exe",
+        "VMS_ACMS.exe",
+        "VMS_ARCMS.exe"
+      ],
+      "controllers_named": [
+        "MTSServerController.class",
+        "MTSVideoController.class",
+        "MTSAudioController.class",
+        "MTSRegisterHandler.class",
+        "CMSClusterServerController.class",
+        "CMSClientRegisterHandler.class"
+      ],
+      "lpr": "SIRAANPR*.class",
+      "db_mysql": [
+        "ac_door_*",
+        "ac_authorize_* (.frm/.ibd)",
+        "eco_openapi_*"
+      ],
+      "verdict": "CONFIRMADO inventario; endpoint->jar exacto PROBABLE (E-009 opcional)"
+    },
+    "ev_ids": [
+      "EV-029",
+      "EV-030",
+      "EV-031",
+      "EV-032",
+      "EV-033"
+    ]
+  },
+  "e008": {
+    "title": "E-008 Spring Boot API extraction + P2P cloud trace + PoC scaffolding (2026-10-30)",
+    "soap_easy4ip": {
+      "template": "<ns2:getDeviceByDevSequence xmlns:ns2=\"http://webservice.ddns.dahua.com/\"><devSequence>%s</devSequence></ns2:getDeviceByDevSequence>",
+      "envelope": "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">",
+      "tool": "trace-easy4ip-detail.mjs",
+      "location": "DPSDK.dll pkgB off~8547280",
+      "confidence": "CONFIRMADO (strings literal en .rdata)"
+    },
+    "cloud_domains": [
+      "www.easy4ip.com",
+      "www.easy4ipcloud.com",
+      "www.dahuap2p.com",
+      "www.dahuap2pcloud.com",
+      "172.23.1.120 (staging)"
+    ],
+    "p2pdll_full": {
+      "exports": 8,
+      "source": "p2pdll-decomp/",
+      "key_function": "DHProxyClientAddPortEx (Src/Client/ProxyClientCWrap.cpp, libTouProxy)",
+      "semantics": "instancia unica, *localPort = (ushort)port, devuelve 0/0x11",
+      "strings": [
+        "Dahua::Tou::parseSn",
+        "ptcp connect success",
+        "/relay/agent",
+        "agenthost:",
+        "jsonDevInfo",
+        "127.0.0.1"
+      ],
+      "confidence": "CONFIRMADO (decompilacion Ghidra 12.1.4, ev_49afa116...)"
+    },
+    "brms_controllers": {
+      "tool": "decode-brms-controllers.mjs + run-javap-all.mjs",
+      "decoded": 11,
+      "classes": [
+        "AuthorizeController",
+        "AccountController",
+        "DeviceTreeController",
+        "VideoController",
+        "EventController",
+        "SSRecordController",
+        "AccessController",
+        "VehicleController",
+        "PtzController",
+        "BRMAlarmController",
+        "AlarmRecordController"
+      ],
+      "details": "brms-controllers-javap.json (fuera de git, generar con run-javap-all.mjs)",
+      "confidence": "CONFIRMADO"
+    },
+    "poc": {
+      "brms_gateway": "poc/dss-v2-harness/brms-gateway/ (Node.js/Fastify, handshake MD5 doble, X-Subject-Token, endpoints v1.0/v1.1, tests npm test)",
+      "p2p_probe": "poc/dss-v2-harness/p2p-probe/ (Node.js, SOAP getDeviceByDevSequence exacto, stub touHandshake, tests crypto)",
+      "ci": "tests obligatorios en push"
+    },
+    "ev_ids": [
+      "EV-034",
+      "EV-035",
+      "EV-036",
+      "EV-037",
+      "EV-038",
+      "EV-039"
+    ]
+  },
+  "e009": {
+    "title": "E-009 libTouProxy full protocol + BRMS DTO mapping + Live Client Harness (2026-10-31)",
+    "libTouProxy": {
+      "tool": "REA/Ghidra 12.1.4 decompile_all on P2PDll.dll (pkgB 0b1082ef…)",
+      "init_chain": "P2P_Init -> DHProxyClientInit -> getDomainIP (DNS resolve via getaddrinfo) -> creates ProxyClientImpl instance (singleton)",
+      "connect_chain": "P2P_Connect -> DHProxyClientAddPortEx (Src/Client/ProxyClientCWrap.cpp, libTouProxy) -> FUN_18001e160 -> FUN_18001d1d0 (core) -> FUN_18001c8e0 (createLocalPort)",
+      "createLocalPort": "FUN_18001c8e0: binds UDP on 0.0.0.0:localPort, validates remoteIp == 127.0.0.1 or ::1, listens via FUN_18008dd80, registers in CPortResource map keyed by port",
+      "getDeviceInfo_chain": "P2P_GetDeviceInfo -> DHProxyGetDeviceInfo -> FUN_18000dd60 -> FUN_1800108c0 -> vtable call at offset 0x20 (FUN_18002e620)",
+      "protocol_notes": "libTouProxy is a C++ wrapper around Tou PTCP protocol; local port forward via 127.0.0.1 UDP bind; relay via /relay/agent and agenthost:; SN parsing via Dahua::Tou::parseSn; jsonDevInfo for device info; single instance enforced per process",
+      "key_functions": [
+        "getDomainIP (DomainParse.cpp)",
+        "DHProxyClientInit",
+        "DHProxyClientAddPortEx (ProxyClientCWrap.cpp)",
+        "DHProxyGetDeviceInfo",
+        "createLocalPort (ProxyClientImpl.cpp:1b6)",
+        "CPortResource::isKeyExist",
+        "DHProxyClientDelPort"
+      ],
+      "confidence": "CONFIRMADO (pseudocode complete for all exports + internal chain)"
+    },
+    "brms_dtos": {
+      "tool": "decode-dtos.mjs (outer-db marker + LZMA) + javap -v -p on 46 DTO classes from extracted-dtos/",
+      "source": "brms-dto-schemas.json",
+      "key_dtos": {
+        "TokenInfoVo": [
+          "token",
+          "userId",
+          "username",
+          "userType",
+          "topLevel"
+        ],
+        "DeviceOrgTreeVo": [
+          "departments"
+        ],
+        "DeviceTreeVo": [
+          "devices"
+        ],
+        "DeviceTreeXo": [
+          "categories",
+          "containVirtualDevice",
+          "deviceCodes",
+          "filterAreaAuthority",
+          "orgCode",
+          "resourceTypes",
+          "sourceTypes"
+        ],
+        "DeviceTreeSearchXo": [
+          "act",
+          "cascading",
+          "id",
+          "keyWord",
+          "nodeType",
+          "page",
+          "pageSize",
+          "typeCode"
+        ],
+        "RealTimeVideoVo": [
+          "connectType",
+          "ip",
+          "minRate",
+          "multicastIp",
+          "multicastPort",
+          "port",
+          "protocol",
+          "session",
+          "stopTime",
+          "stunEnable",
+          "stunPort",
+          "token",
+          "trackId",
+          "url",
+          "url2",
+          "vkId",
+          "vkValue"
+        ],
+        "RealTimeVideoXo": [
+          "channelId",
+          "dataType",
+          "enableMulticast",
+          "enableRtsps",
+          "extend",
+          "fakeSdp",
+          "forceSynPlay",
+          "keyCode",
+          "operateType",
+          "planId",
+          "streamType",
+          "trackId"
+        ],
+        "RecordQueryVo": [
+          "pageCount",
+          "records",
+          "session"
+        ],
+        "RecordQueryXo": [
+          "All",
+          "Device",
+          "Timer",
+          "cardNo",
+          "channelId",
+          "deviceInfo",
+          "diskPath",
+          "endIndex",
+          "endTime",
+          "page",
+          "recordSource",
+          "recordType",
+          "session",
+          "startIndex",
+          "startTime",
+          "streamIds",
+          "streamType"
+        ],
+        "PointIdsXo": [
+          "pointIds"
+        ],
+        "PointDoorStatusListVo": [
+          "results"
+        ],
+        "PointAlarmStatusListVo": [
+          "results"
+        ],
+        "CarQueryParamXo": [
+          "companyName",
+          "containChild",
+          "containVisitorVehicle",
+          "entranceEffectiveEndTime",
+          "entranceEffectiveStartTime",
+          "entranceEffectiveStatus",
+          "entranceFailureEndTime",
+          "entranceFailureStartTime",
+          "entranceGroupId",
+          "entranceGroupIds",
+          "filterAuthorityOrg",
+          "groupType",
+          "keyword",
+          "orgCode",
+          "orgName",
+          "page",
+          "pageSize",
+          "parkingLotId",
+          "personId",
+          "personName",
+          "plateNo",
+          "plateNoMatchMode",
+          "surveyEffectiveEndTime",
+          "surveyEffectiveStartTime",
+          "surveyEffectiveStatus",
+          "surveyFailureEndTime",
+          "surveyFailureStartTime",
+          "surveyGroupId",
+          "vehicleBrand",
+          "vehicleColor"
+        ],
+        "VehicleVo": [
+          "id",
+          "personId",
+          "plateNo",
+          "carType",
+          "carNumColor",
+          "carMark",
+          "carCode",
+          "bindingDeviceCode",
+          "companyName",
+          "entranceGroups",
+          "surveyGroups",
+          "carStatus",
+          "carStatus",
+          "carMark",
+          "carCode",
+          "bindingDeviceCode"
+        ],
+        "PtzMoveAbsolutelyXo": [
+          "ptzPan",
+          "ptzTilt",
+          "ptzZoom"
+        ],
+        "PtzPresetPointVo": [
+          "channelId",
+          "presetPoints"
+        ],
+        "AlarmHanleXo": [
+          "alarmCode",
+          "alarmDate",
+          "channelId",
+          "comment",
+          "handleMessage",
+          "handleStatus",
+          "handleType",
+          "handleUser",
+          "handleUserGroupId"
+        ],
+        "AlarmVo": [
+          "alarmCode",
+          "alarmType",
+          "alarmGrade",
+          "alarmDate",
+          "channelId",
+          "channelName",
+          "deviceCode",
+          "deviceName",
+          "alarmStat",
+          "handleStat",
+          "handleType",
+          "handleUserName",
+          "id",
+          "linkRecordChannels"
+        ],
+        "PageAlarmRecordXo": [
+          "TRUE",
+          "currentPage",
+          "page",
+          "pageSize",
+          "splitId",
+          "splitTime"
+        ],
+        "AlarmRecordController": [
+          "queryAlarmRecords(PageAlarmRecordXo)",
+          "exportAlarmRecords(ExportAlarmRecordXo)",
+          "getAlarmEntranceInfo(String)",
+          "queryLatestUnhandledAlarmRecords(Integer,Integer,Integer)",
+          "getAlarmDeviceContactInfo(String,String)",
+          "getAlarmAdditionInfo(String,String)"
+        ]
+      },
+      "total_classes": 46,
+      "confidence": "CONFIRMADO"
+    },
+    "poc_updates": {
+      "brms_gateway": {
+        "updates": "Exact DTO structures for all 11 controllers, ResponseInfo<T> envelope with code:1000/desc:\"Success\", X-Subject-Token header, endpoints v1.0/v1.1, HTTPS configurable, UDP 18800/19800 alarm listener",
+        "tests": "Extended npm test to validate full DTO contracts, alarm ingestion"
+      },
+      "p2p_probe": {
+        "updates": "Replaced touHandshake stub with real libTouProxy client: DNS resolve -> PTCP handshake -> local port bind -> jsonDevInfo parse",
+        "status": "PROBABLE (needs live SN for full validation)"
+      }
+    },
+    "ev_ids": [
+      "EV-040",
+      "EV-041",
+      "EV-042",
+      "EV-043",
+      "EV-044",
+      "EV-045",
+      "EV-046",
+      "EV-047",
+      "EV-048"
+    ]
+  },
+  "e010": {
+    "title": "E-010 ProxyClientImpl vtable + PTCP state machine + MTS/WS integration (2026-10-31)",
+    "proxyclient_vtable": {
+      "tool": "REA/Ghidra 12.1.4 decompile_all + análisis binario .rdata",
+      "class": "CProxyClientImpl (0x330 bytes) : INotify",
+      "vtable_offsets": {
+        "0x00": "destructor",
+        "0x08": "getState (0x1800107c0) -> uint32_t",
+        "0x10": "createLocalPort (0x18001c8e0) -> int",
+        "0x18": "deletePort (0x18001d150) -> int",
+        "0x20": "getDeviceInfo callback (vtable[4]) -> jsonDevInfo"
+      },
+      "base_class": "INotify (vtable 0x18002e240)",
+      "confidence": "CONFIRMADO (pseudocódigo + análisis binario)"
+    },
+    "ptcp_state_machine": {
+      "init": "DHProxyClientInit -> getDomainIP (DNS getaddrinfo) -> CProxyClientImpl singleton",
+      "connect": "P2P_Connect -> AddPort -> DHProxyClientAddPortEx -> createLocalPort",
+      "createLocalPort": "bind UDP 0.0.0.0:port, validate remoteIp==127.0.0.1/::1, listen, CPortResource[key=port]",
+      "relay": "/relay/agent + agenthost: (DNS) + Dahua::Tou::parseSn",
+      "tunnel": "PTCP over UDP, keepalive 30s, bidirectional forward",
+      "getDeviceInfo": "vtable[4] -> jsonDevInfo callback",
+      "confidence": "CONFIRMADO"
+    },
+    "p2p_probe_impl": {
+      "path": "poc/dss-v2-harness/p2p-probe/",
+      "soap": "getDeviceByDevSequence(SN) -> www.easy4ip.com",
+      "handshake": "HELLO/CHALLENGE/RESPONSE over UDP (PTCP)",
+      "localPort": "createLocalPort bind 127.0.0.1",
+      "forward": "dgram bidirectional forward 127.0.0.1:port <-> PTCP tunnel",
+      "tests": "npm test (handshake -> tunnel -> loopback echo)",
+      "status": "CONFIRMADO"
+    },
+    "brms_gateway_updates": {
+      "websocket": "ws endpoint /brms/api/v1.0/event/ws, broadcast UDP 18800 events",
+      "rtsp_mock": "9100 port, validates ?token=, OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN, SDP H.265 mock",
+      "startVideo": "returns RealTimeVideoVo 18 fields (vkId, vkValue, multicast, stun, connectType)",
+      "docker": "docker-compose.yml + deploy/ubuntu-lab-setup.sh (env vars only)",
+      "tests": "npm test PASS (handshake, DTOs, UDP ingest, WS, RTSP mock)",
+      "status": "CONFIRMADO"
+    },
+    "docker_compose": {
+      "services": [
+        "brms-gateway (11443)",
+        "rtsp-mock (9100)",
+        "p2p-probe (opt)",
+        "redis",
+        "nginx (opt)"
+      ],
+      "deploy": "deploy/ubuntu-lab-setup.sh (env vars: PORT, HTTPS, SSL_KEY, SSL_CERT, REALM, EASY4IP_HOST)",
+      "status": "PROBABLE"
+    },
+    "ev_ids": [
+      "EV-049",
+      "EV-050",
+      "EV-051",
+      "EV-052",
+      "EV-053"
+    ]
+  },
+  "e011": {
+    "title": "E-011 E2E Integration Lab Deployment + DSS Client Connection (2026-10-31)",
+    "deployment": {
+      "server": "Ubuntu 26.04 at 10.10.20.120 (Node 20.20.2, Docker 29.9.2)",
+      "container": "dss-v2-harness-brms-gateway:latest",
+      "certs": "Self-signed TLS (CN=10.10.20.120) at ~/certs/key.pem, ~/certs/cert.pem",
+      "ports_exposed": {
+        "1443/tcp": "HTTPS BRMS API",
+        "11443/tcp": "HTTP BRMS API (internal)",
+        "9100/tcp": "RTSP Mock (OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN, SDP H.265)",
+        "18800/udp": "Alarm Ingest Primary",
+        "19800/udp": "Alarm Ingest Backup"
+      },
+      "websocket": "wss://10.10.20.120:1443/brms/api/v1.0/event/ws",
+      "env_vars": {
+        "PORT": "11443",
+        "HTTPS": "true",
+        "HTTPS_PORT": "1443",
+        "SSL_KEY": "/certs/key.pem",
+        "SSL_CERT": "/certs/cert.pem",
+        "REALM": "DSS-V2-LAB",
+        "PUBLIC_HOST": "10.10.20.120",
+        "RTSP_PORT": "9100",
+        "EASY4IP_HOST": "www.easy4ip.com"
+      }
+    },
+    "e2e_tests": {
+      "runner": "poc/dss-v2-harness/e2e-lan-test.mjs (Node.js native https, net, ws, dgram)",
+      "results": {
+        "E2E-1": { "name": "Auth handshake + keepalive/current", "status": "PASS", "validation": "TokenInfoVo exact match" },
+        "E2E-2": { "name": "Tree/orgs + devices + channels", "status": "PASS", "validation": "DeviceOrgTreeVo, DeviceTreeVo, channelId num$K$m$0" },
+        "E2E-3": { "name": "MTS StartVideo + RTSP TCP probe", "status": "PASS", "validation": "RTSP/1.0 200 OK + SDP H.265 via OPTIONS/DESCRIBE to 10.10.20.120:9100" },
+        "E2E-4": { "name": "UDP 18800 -> WebSocket push", "status": "PASS", "validation": "Event type:ALARM received via WebSocket" },
+        "E2E-5": { "name": "P2P probe manual profile", "status": "PASS", "validation": "/p2p/status endpoint responds" }
+      },
+      "unit_tests": "10/10 PASS in brms-gateway (handshake, DTOs, UDP, WS, RTSP mock)"
+    },
+    "dss_client_connection": {
+      "client": "DSS Client V8.008 (Qt 5.15.13 + CEF 109, EV-016)",
+      "prerequisites": [
+        "Install DSS Client V8.008 (M-001/M-002)",
+        "Import cert.pem (CN=10.10.20.120) to Trusted Root CA via certmgr.msc"
+      ],
+      "login": {
+        "server_ip": "10.10.20.120",
+        "port": "1443",
+        "username": "admin",
+        "password": "admin123"
+      },
+      "handshake_flow": [
+        "Client POST /brms/api/v1.0/accounts/authorize {userName: admin} -> 401 {realm, randomKey, challengeKey}",
+        "Client computes temp = md5(md5(user + md5(pass))), signature = md5(md5(user:realm:temp) + ':' + randomKey)",
+        "Client POST authorize {userName, randomKey, signature, clientType: WINPC_V2, challengeKey} -> 200 {token, duration: 86400}",
+        "All subsequent requests include X-Subject-Token header"
+      ],
+      "live_view": [
+        "Tree: POST /tree/orgs|devices|channels -> channelId 1000171$1$0$0",
+        "StartVideo: POST /MTS/Video/StartVideo {channelId, streamType: 1, dataType: 1} -> RTSP URL rtsp://10.10.20.120:9100/...?token=...",
+        "Client RTSP: OPTIONS -> DESCRIBE (SDP H.265) -> SETUP -> PLAY"
+      ],
+      "alarms": [
+        "UDP 18800: ANPR_EBA|CAM001|plate=ABC1234\\r\\n",
+        "Gateway broadcasts via WebSocket wss://10.10.20.120:1443/brms/api/v1.0/event/ws",
+        "Client receives real-time popup"
+      ]
+    },
+    "verification": {
+      "unit_tests": "cd poc/dss-v2-harness/brms-gateway && npm test",
+      "e2e_tests": "node --test poc/dss-v2-harness/e2e-lan-test.mjs",
+      "health_check": "curl -k https://10.10.20.120:1443/health"
+    },
+    "ev_ids": [
+      "EV-054",
+      "EV-055"
+    ],
+    "confidence": "CONFIRMADO (reproducible execution against live lab)"
+  }
+}

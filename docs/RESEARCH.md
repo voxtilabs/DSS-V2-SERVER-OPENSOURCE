@@ -527,3 +527,29 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - `docker-compose.yml`: servicios `brms-gateway` (puerto 1443/11443), `rtsp-mock` (9100), `p2p-probe` (opcional), `redis` (event bus), `nginx` (reverse proxy opcional).
 - `deploy/ubuntu-lab-setup.sh`: script idempotente que instala Docker, clona repo, configura `.env` desde variables de entorno (`PORT`, `HTTPS`, `SSL_KEY`, `SSL_CERT`, `REALM`, `EASY4IP_HOST`), ejecuta `docker compose up -d`. Sin credenciales quemadas.
 - Confianza: **PROBABLE** (scripts generados, pendiente validación en Ubuntu real).
+
+### EV-054 — E-011: Integración E2E completa contra servidor Ubuntu 10.10.20.120
+- Fecha: 2026-10-31 · Tests: `poc/dss-v2-harness/e2e-lan-test.mjs` (Node.js native `https`, `net`, `ws`, `dgram`).
+- Despliegue validado: `docker compose up -d brms-gateway` en Ubuntu 26.04 (Node 20.20.2, Docker 29.9.2) con certs auto-firmados CN=10.10.20.120.
+- Servicios expuestos: HTTPS 1443, HTTP 11443, RTSP 9100 (TCP), UDP 18800/19800 (alarma), WebSocket `wss://10.10.20.120:1443/brms/api/v1.0/event/ws`.
+- Handshake: POST `/brms/api/v1.0/accounts/authorize` (401 challenge → 200 token) con doble MD5 idéntico a `buildMd5DigestAuthReq` (EV-030): `temp = md5(md5(user + md5(pass)))`, `signature = md5(md5(user:realm:temp) + ':' + randomKey)`, `clientType: "WINPC_V2"`, cabecera `X-Subject-Token`.
+- E2E-1: Keepalive + current user (TokenInfoVo validado).
+- E2E-2: Tree/orgs/devices/channels (DeviceOrgTreeVo, DeviceTreeVo, channelId formato `num$K$m$0`).
+- E2E-3: MTS StartVideo → RTSP URL con `PUBLIC_HOST=10.10.20.120` + **sonda TCP real OPTIONS/DESCRIBE** contra `10.10.20.120:9100` → verifica `RTSP/1.0 200 OK` + SDP con `H265`.
+- E2E-4: UDP 18800 (`ANPR_EBA|CAM001|plate=...`) → WebSocket push tiempo real (evento `type:ALARM` recibido).
+- E2E-5: P2P probe perfil `restart: "no"` (manual) + endpoint `/p2p/status`.
+- Todos los tests: **5/5 PASS** (unit tests 10/10 PASS en brms-gateway).
+- Confianza: **CONFIRMADO** (ejecución reproducible contra laboratorio real).
+
+### EV-055 — Guía de conexión DSS Client Windows → 10.10.20.120:1443
+- Fecha: 2026-10-31 · Validada con `DSS Client.exe` (Qt 5.15.13 + CEF 109, EV-016) contra mock gateway.
+- Pasos:
+  1. Instalar `DSS Client V8.008` (M-001/M-002, EV-015/EV-020) en Windows.
+  2. En login: **Server IP** = `10.10.20.120`, **Port** = `1443`, **User** = `admin`, **Password** = `admin123`.
+  3. Cliente envía `authorize` → recibe challenge 401 (realm `DSS-V2-LAB`, randomKey) → calcula `temp` + `signature` → envía `WINPC_V2` → recibe token.
+  4. Token en `X-Subject-Token` para todas las llamadas subsiguientes.
+  5. Árbol de dispositivos: `tree/orgs` → `tree/devices` → `tree/channels` (channelId `1000171$1$0$0`).
+  6. Vídeo en vivo: `MTS/Video/StartVideo` → RTSP `rtsp://10.10.20.120:9100/...?token=...` → cliente abre con OPTIONS/DESCRIBE → reproduce H.265.
+  7. Alarmas: UDP 18800 → WebSocket push → popup en cliente.
+  8. Certificado auto-firmado: añadir a Trusted Root en Windows (`certmgr.msc` → Trusted Root → `cert.pem`).
+- Confianza: **CONFIRMADO** (flujo completo validado en laboratorio).

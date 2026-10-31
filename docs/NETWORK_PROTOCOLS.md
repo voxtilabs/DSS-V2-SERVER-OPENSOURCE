@@ -298,3 +298,58 @@ Tests: `npm test` (handshake → tunnel → loopback echo).
 rtsp://127.0.0.1:9100/1000171$1$0$0?token=MOCK-xxx
 ```
 Handles: `OPTIONS`, `DESCRIBE` (SDP H.265), `SETUP`, `PLAY`, `TEARDOWN`.
+
+## 20. E-011: E2E Integration Lab Deployment (EV-054/055)
+
+### 20.1 Deployment Topology
+- **Ubuntu Lab Server**: 10.10.20.120 (Ubuntu 26.04, Node 20.20.2, Docker 29.9.2)
+- **BRMS Gateway Container**: `dss-v2-harness-brms-gateway:latest`
+- **Ports Exposed**:
+  - 1443/TCP: HTTPS BRMS API (self-signed cert CN=10.10.20.120)
+  - 11443/TCP: HTTP BRMS API (internal)
+  - 9100/TCP: RTSP Mock Server (OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN)
+  - 18800/UDP: Alarm Ingest Primary
+  - 19800/UDP: Alarm Ingest Backup
+  - WebSocket: `wss://10.10.20.120:1443/brms/api/v1.0/event/ws`
+
+### 20.2 Environment Variables
+```bash
+PORT=11443
+HTTPS=true
+HTTPS_PORT=1443
+SSL_KEY=/certs/key.pem
+SSL_CERT=/certs/cert.pem
+REALM=DSS-V2-LAB
+PUBLIC_HOST=10.10.20.120
+RTSP_PORT=9100
+EASY4IP_HOST=www.easy4ip.com
+```
+
+### 20.3 E2E Test Suite Results (All PASS)
+| Test | Description | Validation |
+|------|-------------|------------|
+| E2E-1 | Auth handshake (401→200) + keepalive/current | TokenInfoVo exact match |
+| E2E-2 | Tree/orgs + devices + channels | DeviceOrgTreeVo, DeviceTreeVo, channelId `num$K$m$0` |
+| E2E-3 | MTS StartVideo → RTSP URL + **TCP probe OPTIONS/DESCRIBE** | `RTSP/1.0 200 OK` + SDP H.265 |
+| E2E-4 | UDP 18800 → WebSocket push | Event `type:ALARM` received |
+| E2E-5 | P2P probe manual profile | `/p2p/status` endpoint |
+
+### 20.4 DSS Client Windows Connection Guide
+1. Install `DSS Client V8.008` (M-001/M-002)
+2. Add `cert.pem` (CN=10.10.20.120) to Trusted Root CA (`certmgr.msc`)
+3. Login: Server IP `10.10.20.120`, Port `1443`, User `admin`, Password `admin123`
+4. Client performs MD5 handshake (WINPC_V2) → receives token
+5. Live View: `MTS/Video/StartVideo` → RTSP `rtsp://10.10.20.120:9100/...?token=...` → OPTIONS/DESCRIBE → H.265 playback
+6. Alarms: UDP 18800 → WebSocket push → Client popup
+
+### 20.5 Verification Commands
+```bash
+# Unit tests
+cd poc/dss-v2-harness/brms-gateway && npm test
+
+# E2E tests (from Windows)
+node --test poc/dss-v2-harness/e2e-lan-test.mjs
+
+# Check server health
+curl -k https://10.10.20.120:1443/health
+```

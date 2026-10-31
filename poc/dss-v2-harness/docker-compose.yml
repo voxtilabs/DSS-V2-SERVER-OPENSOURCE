@@ -1,0 +1,40 @@
+services:
+  brms-gateway:
+    build:
+      context: ./brms-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "1443:1443"
+      - "11443:11443"
+      - "9100:9100"
+      - "18800:18800/udp"
+      - "19800:19800/udp"
+    volumes:
+      - ../certs:/certs:ro
+    environment:
+      - PORT=11443
+      - HTTPS=true
+      - HTTPS_PORT=1443
+      - SSL_KEY=/certs/key.pem
+      - SSL_CERT=/certs/cert.pem
+      - REALM=DSS-V2-LAB
+      - PUBLIC_HOST=10.10.20.120
+      - RTSP_PORT=9100
+    networks:
+      - dss-network
+    restart: unless-stopped
+
+  p2p-probe:
+    build:
+      context: ./p2p-probe
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - EASY4IP_HOST=www.easy4ip.com
+    restart: "no"
+    profiles:
+      - tools
+
+networks:
+  dss-network:
+    driver: bridge
