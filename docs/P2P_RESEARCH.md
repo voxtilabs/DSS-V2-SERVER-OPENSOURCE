@@ -70,3 +70,16 @@ No se declara conclusión hasta reproducirlo en el laboratorio con dispositivos 
 | E-005 | PoC DSS V2 P2P CONNECTOR: criterio de aceptación — video real de un NVR detrás de NAT |
 
 Documento asociado para DSS Client/Server: ver `docs/DSS_CLIENT_RESEARCH.md`.
+
+
+## 6. Evidencia estática DPSDK/P2PDll (E-006 V2, 2026-10-30)
+
+Fuente: `scan-4-dlls.mjs` sobre las 4 DLLs (client V8.006 `dssclient-extracted` y server-pkgB `unpack-inner-1376402688`) — ver EV-026/EV-027.
+
+| Capa | Hallazgo | Confianza |
+|---|---|---|
+| DPSDK.dll (generaciones client `: ce43c8b7…` y server-pkgB `3f49799f…`) | `www.easy4ip.com`, `www.easy4ipcloud.com`, `GetDeviceInfoFromEasy4IP`, `ParseHttpBodyForEasy4IP`, `CP2PServerManager` (`LoginP2PServer`, `AddP2PP2Mapping`), `GetP2PConfig/UpdateP2PConfig/GetP2PServerList/GetP2PDeviceInfo`, `SetP2PClientType`, `pP2PServerDomain` | CONFIRMADO |
+| P2PDll.dll (8 exports `P2P_*`) | transporte: `p2pchannel timeout`, `Use P2P Link! %p localPort:%d, remotePort[%d]`, `all fail,p2p:` | CONFIRMADO |
+| Build path filtrada (pkgB DPSDK) | `d:\jk_107\workspace\Module_Software-HW_DSS-Client_OverseasClient_W_OverseasClient_windows\code_path\PlatformSDK__3caad5\C\DPSDK\Logic\P2P\P2PServerManager.cpp` | CONFIRMADO |
+
+Corrección de registro: búsquedas previas case-sensitive con `easy4ip: 0 resultados` (`ev_4971b2ca`/`ev_ef79f8af`) quedan supersedidas (EV-027). El plan de laboratorio (E-003/E-005) gana un objetivo concreto: logar el flujo `LoginP2PServer → GetP2PServerList → GetDeviceInfoFromEasy4IP` capturando DNS/TLS de `*.easy4ip*.com`.

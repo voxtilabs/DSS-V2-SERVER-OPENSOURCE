@@ -34,6 +34,12 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 | EV-020 | M-002 DSS Ultimate V8.8 descargado y verificado (Server Win64 IS V8.008 R.20260930) | CONFIRMADO | Cerrada |
 | EV-021 | Instalador Server V8.008: stub 205 KB + overlay propietario (magic `93 FB 69 5A`), firmado por Dahua (DigiCert G4, cadena verificada) | CONFIRMADO | Cerrada |
 | EV-022 | Ghidra 12.1.4 operativo con REA; strings nativos validados con direcciones exactas | CONFIRMADO | Cerrada |
+| EV-023 | Data-area del instalador Server V8.008 decodificado estaticamente: outer-db.bin (4,716,790 B) con registro de 41,055 archivos | CONFIRMADO | Cerrada |
+| EV-024 | Mapa de bloques del data-area: 2 familias (chunks LZMA con marker props + stored/plain con header 8B) verificadas por script | CONFIRMADO | Cerrada |
+| EV-025 | pkgA embebido = WebClientServicePlugin_Setup.exe (10.19 MB) extraido (56 archivos) | CONFIRMADO | Cerrada |
+| EV-026 | pkgB embebido = instalador DSS Client completo V8.008 R.20260325 (247.74 MB, 1,199 archivos / 814 MB) dentro del instalador Server | CONFIRMADO | Cerrada |
+| EV-027 | easy4ip (Easy4IPCloud) CONFIRMADO en ambas generaciones DPSDK.dll (client y pkgB); corrige busquedas previas con 0 resultados | CONFIRMADO | Cerrada |
+| EV-028 | Tabla Z de 232 bloques stored grandes (>1 MB): 100% verificada por span; contenido con nombres reales (modelos .nnx, AR.zip, manuals, APK, vcredists) | CONFIRMADO | Cerrada |
 
 ## Fichas
 
@@ -227,3 +233,48 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Limitación operativa: el servidor MCP REA hereda el entorno al arrancar — **reiniciar
   OpenCode** para que las herramientas MCP (`list_strings`, decompilación) vean el provider
   (el CLI ya funciona); Hopper/IDA/jadx/Kuna siguen sin configurar (innecesarios por ahora).
+
+
+### EV-023 — Data-area del instalador Server V8.008 decodificado (outer-db.bin)
+- Fecha: 2026-10-30 · Fuente: E-006 V2, análisis estático del overlay `93 FB 69 5A` (M-002.1, sin ejecución).
+- Evidencia: capa 2 decodificada con receta LZMA-alone sintética (props `5d` + dict `00 80 00 00` + size `FF..FF` + payload crudo; `7z e -y -tLzma -so`): 3 bloques en cadena (outputs 2,097,152 + 2,097,152 + 522,486 B) → **`outer-db.bin` 4,716,790 B, SHA-256 `a39aa46bbf229a5e6e39b1ddc35e25c093382d7d69acfa366655e514f5723efb`**.
+- Registro: 41,055 entradas stride-36 (35,331 `d2` distintos) + pool de nombres UTF-16 en offset 2,042,608 (nombre en `pool + rel*2`).
+- Semántica confirmada por pseudocódigo REA/Ghidra: `ReadData 0x403320` (header 8B `[uncomp][comp|0x80000000]`, bit alto = LZMA-solid) y loader de db `0x40366b` (`db_data_pos` en header+0x3c).
+- Confianza: **CONFIRMADO** (archivo decodificado + hash + decodes verificados en disco).
+- Limitaciones: nombres con `rel` grande dependen de la regla `rel*2`; nombres Unicode no-ASCII no resueltos.
+
+### EV-024 — Mapa de bloques del data-area: 2 familias verificadas por script
+- Fecha: 2026-10-30 · Fuente: `verify-outer-map.mjs`, `analysis42/43/44.mjs` sobre outer-db.bin + exe (34,126 markers props `5d 33 37 23 00`).
+- Resultado:
+  1. **Chunks comprimidos** (familia dominante, ≈37.8k registros): marker props a `d2+772125` (165 registros) o `d2+772129` (dominante: 32,167 con d9=20; 5,507 con d9=11); descompresión por chunk hasta **EOS natural**; span comprimido = siguiente marker − 5. Chunk0 → MZ 12,288 B (stub PE x86 linker 8.0, perfil NSIS); chunk c4 → lista UTF-16 de servicios (`jre`, `VMS Service`, `PCPS`, `DMS`, `mysql`, `HALicenseService`).
+  2. **Stored/plain** (2,769 registros): header 8B en `d2+772114` (u32 span) + contenido en `d2+772122`; verificación `span+8 == gap` contra el siguiente `d2` único → **2,769/2,769 con match, 0 mismatches**; solo 3 con magic `MZ` (los bloques exe embebidos).
+- Confianza: **CONFIRMADO** (ambas familias reproducidas por script con contadores exactos).
+- Pendiente (menor): 4 bytes previos al marker (`m−4`, sin igualdad con compLen/compLen+4 en 32,412 casos) y ≈500 markers con rel minoritario (32/63/…); no afectan el modelo dominante.
+
+### EV-025 — pkgA embebido = WebClientServicePlugin_Setup.exe
+- Fecha: 2026-10-30 · Fuente: `z-gaps.json` + `unpack-inner-1207402252/` (extracción 7z estática).
+- Evidencia: bloque stored en raw 1,207,402,252 (`d2` 1,206,630,130, span 10,192,040, MZ verificado en `raw`, span guard OK); nombre resuelto en pool: **`WebClientServicePlugin_Setup.exe`**; listado ground-truth en `inner1-7z-l.txt`.
+- Resultado: 56 archivos extraídos (plugins NSIS, runtime api-ms-win-crt, `nsProcess.dll`, etc.).
+- Confianza: **CONFIRMADO**.
+
+### EV-026 — pkgB embebido = instalador DSS Client COMPLETO dentro del instalador Server
+- Fecha: 2026-10-30 · Fuente: `z-gaps.json` + `unpack-inner-1376402688/` + listado `i4-slt.txt`.
+- Evidencia: bloque stored en raw 1,376,402,688 (`d2` 1,375,630,566, gap 247,743,944, span guard OK, MZ en `raw`); nombre en pool: **`General_DSS-Client_Win64_IS_V8.008.0000000.0.R.20260325.exe`**.
+- Resultado: **el instalador Server V8.008 embebe, como bloque stored íntegro, el instalador DSS Client V8.008 R.20260325**; extracción estática: 1,199 archivos / ~814 MB; incluye `DPSDK.dll` 11,388,424 B, `P2PDll.dll` 3,542,016 B, `netsdk.dll` 33,253,888 B, `avnetsdk.dll`, `DSS Client.exe`, `DSSClient.ini`, `ss_svac3dec.dll`.
+- SHA-256 clave (pkgB): DPSDK `3f49799f71684aafacdf7a38288463af08d150dc0b7e6d5f9dcdbd072740e048`, P2PDll `0b1082ef5f0c444f05e023dd9c26e4a1262312f7f9b59afc943eecf97a21f75c`, netsdk `4d862b9272140df4efd0072f83d1273acd64b2f09635aed0dd18f469a8d91b48` (completos en `pkgB-key-sha256.json`, fuera de git).
+- Confianza: **CONFIRMADO**.
+- Nota: los binarios SDK del servidor difieren de los del instalador client V8.006 (EV-019): son generaciones distintas → comparativa de versiones pendiente (propuesta E-007).
+
+### EV-027 — easy4ip CONFIRMADO en DPSDK.dll (corrige búsquedas previas con 0 resultados)
+- Fecha: 2026-10-30 · Fuente: `scan-4-dlls.mjs` (extracción ASCII + UTF-16LE, case-insensitive) sobre 4 DLLs (2 generaciones c/u).
+- Evidencia: **5 coincidencias `easy4ip` en CADA generación de DPSDK.dll** (client `ce43c8b7…` 17,078,880 B y server-pkgB `3f49799f…` 11,388,424 B): `www.easy4ip.com`, `www.easy4ipcloud.com`, `GetDeviceInfoFromEasy4IP failed!`, `Dpsdk::CP2PServerManager::GetDeviceInfoFromEasy4IP`, `Dpsdk::CP2PServerManager::ParseHttpBodyForEasy4IP`.
+- Clases P2P en ambas generaciones: `CP2PServerManager` (`LoginP2PServer`, `AddP2PP2Mapping`), `CDpsdkCore/CDpsdkManager::GetP2PConfig / UpdateP2PConfig / GetP2PServerList / GetP2PDeviceInfo`, `SetP2PClientType`; `P2PDll.dll` expone el transporte (`p2pchannel timeout`, `Use P2P Link! %p localPort:%d, remotePort[%d]`; 8 exports `P2P_*` según EV-019).
+- Ruta de build filtrada en pkgB DPSDK: `d:\jk_107\workspace\Module_Software-HW_DSS-Client_OverseasClient_W_OverseasClient_windows\code_path\PlatformSDK__3caad5\C\DPSDK\Logic\P2P\P2PServerManager.cpp` (linaje común Client/Overseas).
+- **Corrección**: las búsquedas anteriores que concluyeron `easy4ip: 0 resultados` (`ev_4971b2ca`/`ev_ef79f8af`) quedan **supersedidas** por este barrido case-insensitive; EV-005 (NetSDK standalone sin ruta P2P operativa sin `libP2PDll` + credenciales de app) queda REFORZADO por `pP2PServerDomain`, `GetP2PServerList` y la clase `CP2PServerManager`.
+- Confianza: **CONFIRMADO** (cadenas exactas con conteo por archivo y SHA-256 de las muestras escaneadas).
+
+### EV-028 — Tabla Z de 232 bloques stored grandes (>1 MB)
+- Fecha: 2026-10-30 · Fuente: `verify-z-table.mjs` → `z-gaps.json` (brecha de `d2` > 1,000,000 sobre los 35,331 `d2` únicos; guard `span+8 == gap` + peek de 2 bytes contra el exe).
+- Resultado: 232 brechas, **232/232 con modelOK**; contenido identificado por nombre del registro: modelos AI `*_reid_x64_openvino.nnx`, `DSOD_PIC_FL_x64_openvino.nnx`, `AR.zip` (125.6 MB), `spire.xls-14.4.4.jar`, `timeshape-2025b.28.jar`, `user-manual.pdf` (webclient), `resetpass-generator-1.0-jar-with-dependencies.jar`, `General_MPT220_Android_Phone_Chn_IS_V8.007…apk`, `vcredist_x64_vs2008/2015_2019.exe`, `msodbcsql_17.msi`, `_mssql.cp311-win_amd64.pyd` (Python 3.11 embebido).
+- Confianza: **CONFIRMADO** (coordenadas exactas y nombres en `z-gaps.json`, fuera de git).
+- Uso en DSS V2: el mapa del data-area (servicios del servidor, entorno Python 3.11, modelos AI) alimenta la matriz de equivalencias de `docs/ARCHITECTURE.md`.

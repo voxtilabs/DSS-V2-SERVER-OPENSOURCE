@@ -68,3 +68,18 @@ Fase 3 — Dinámico (con autorización):
 
 Fase 4 — Síntesis:
 9. Producir matriz funcional (Client↔Server) y decidir dónde aporta la compatibilidad.
+
+
+## 8. El instalador Server V8.008 embebe al Client (E-006 V2, 2026-10-30)
+
+Descubrimiento (EV-026): dentro del data-area del instalador **DSS Ultimate Server V8.008 R.20260930** viaja, como bloque stored íntegro (247,743,936 B, `span+8 == gap` verificado, MZ en `: raw`), el instalador completo **`General_DSS-Client_Win64_IS_V8.008.0000000.0.R.20260325.exe`**. Es decir: el paquete de servidor distribuye el cliente oficial (nuevo build R.20260325, distinto del V8.006 de M-001) y no hay que descargar el client aparte.
+
+SDKs incluidos en ese árbol (hashes completos en `pkgB-key-sha256.json`, fuera de git):
+
+| DLL | Bytes | SHA-256 |
+|---|---|---|
+| DPSDK.dll | 11,388,424 | `3f49799f71684aafacdf7a38288463af08d150dc0b7e6d5f9dcdbd072740e048` |
+| P2PDll.dll | 3,542,016 | `0b1082ef5f0c444f05e023dd9c26e4a1262312f7f9b59afc943eecf97a21f75c` |
+| netsdk.dll | 33,253,888 | `4d862b9272140df4efd0072f83d1273acd64b2f09635aed0dd18f469a8d91b48` |
+
+Estas generaciones difieren de las del instalador client V8.006 (EV-019): comparativa de versiones/exports → propuesta E-007.
