@@ -212,6 +212,157 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(protocols && Array.isArray(protocols.items) && protocols.items.length > 0);
   });
 
+  // ===== E-025: device add / discovery / catalogs / launcher bridge =====
+  it('E-025 device/discover/cost-time + summary: real ONVIF probe payload', async () => {
+    // The real client sends the same body as the add form (deviceIp/devicePort/
+    // protocolType=99/deviceCategory/deviceType) BEFORE POST /device.
+    const body = JSON.stringify({
+      deviceIp: '127.0.0.1', devicePort: 1, protocolType: '99',
+      deviceCategory: '1', deviceType: '6', deviceName: 'EBA1', encoderChannelCount: 1
+    });
+    const cost = await (await fetch(`${BASE}/brms/api/v1.1/device/discover/cost-time`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+    })).json();
+    assert.equal(cost.code, 1000);
+    assert.ok(typeof cost.data.costTime === 'number' && cost.data.costTime > 0, 'costTime must be measured');
+    assert.equal(cost.data.deviceIp, '127.0.0.1');
+
+    const sum = await (await fetch(`${BASE}/brms/api/v1.1/device/discover/summary`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+    })).json();
+    assert.equal(sum.code, 1000);
+    assert.ok(sum.data.manufacturer, 'summary must carry a manufacturer');
+    assert.ok([0, 1].includes(sum.data.online), 'summary must report online flag');
+    assert.equal(sum.data.deviceName, 'EBA1');
+  });
+
+  it('E-025 POST /device: ONVIF add returns a device record + channels', async () => {
+    const add = await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceIp: '127.0.0.1', devicePort: 1, protocolType: '99', deviceCategory: '1',
+        deviceType: '6', deviceName: 'EBA1', serverCode: 'video#local',
+        encoderChannelCount: 1, loginPass: '0123456789abcdef0123456789abcdef'
+      })
+    });
+    assert.equal(add.status, 200);
+    const j = await add.json();
+    assert.equal(j.code, 1000);
+    assert.ok(j.data.deviceCode, 'deviceCode generated');
+    assert.ok(Array.isArray(j.data.results) && j.data.results.length === 1, 'results[] is the web SPA shape');
+    assert.ok(Array.isArray(j.data.channels) && j.data.channels.length === 1);
+    assert.equal(j.data.channels[0].channelId.split('$').length, 4, 'channelId must be code$no$0$0');
+    // loginPass (the MD5 hash sent by the client) is never echoed back
+    assert.ok(!JSON.stringify(j.data).includes('0123456789abcdef0123456789abcdef'), 'loginPass must not be echoed');
+  });
+
+  it('E-025 device/page + tree/devices(channels) include the added device', async () => {
+    const page = await (await fetch(`${BASE}/brms/api/v1.1/device/page`)).json();
+    assert.ok(page.data.total >= 2, 'mock device + E-025 add');
+    const tree = await (await fetch(`${BASE}/brms/api/v1.0/tree/devices`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(tree.data.deviceList) && tree.data.deviceList.some((d) => d.deviceName === 'EBA1'));
+    const chans = await (await fetch(`${BASE}/brms/api/v1.0/tree/channels`)).json();
+    assert.ok(Array.isArray(chans.data.channelList) && chans.data.channelList.every((c) => c.channelId.includes('$')));
+    const stats = await (await fetch(`${BASE}/brms/api/v1.1/device/statistics/count-by-device-category/list?keyword=&orgCode=&domain=0&permitted=0&sourceType=1&containChild=1`)).json();
+    assert.ok(Array.isArray(stats.data.results) && stats.data.results.some((r) => r.deviceCount > 0));
+  });
+
+  it('E-025 network / timezone / role / function / subsystem / omms alert types', async () => {
+    const net = await (await fetch(`${BASE}/brms/api/v1.1/system/network/list`)).json();
+    assert.ok(Array.isArray(net.data.list) && net.data.list.length > 0 && net.data.list[0].ip);
+
+    const srvTz = await (await fetch(`${BASE}/brms/api/v1.1/config/server/timezone`)).json();
+    assert.ok(srvTz.data.timezone);
+
+    const tz = await (await fetch(`${BASE}/brms/api/v1.1/config/timezone/list`)).json();
+    assert.ok(Array.isArray(tz.data.list) && tz.data.list.length > 0);
+
+    const role = await (await fetch(`${BASE}/brms/api/v1.1/role/page`)).json();
+    assert.ok(Array.isArray(role.data.list) && role.data.list.some((r) => r.roleName === 'Administrator'));
+
+    const fn = await (await fetch(`${BASE}/brms/api/v1.1/function/available/list`)).json();
+    assert.ok(Array.isArray(fn.data.list) && fn.data.list.length > 0 && fn.data.list[0].functionCode);
+
+    const sub = await (await fetch(`${BASE}/brms/api/v1.1/subsystem/available/list`)).json();
+    assert.ok(Array.isArray(sub.data.subsystemList) && sub.data.subsystemList.length > 0);
+
+    const alert = await (await fetch(`${BASE}/omms/api/v1.1/alert/rule/alert-type/list`)).json();
+    assert.equal(alert.code, 1000);
+    assert.ok(Array.isArray(alert.data.list) && alert.data.list.length > 0 && alert.data.list[0].alertType);
+  });
+
+  it('E-025 launcher page exposes the real QT/CEF bridge contract', async () => {
+    const html = await (await fetch(`${BASE}/web/client-module/`)).text();
+    // web -> native entry point injected by CefRender.exe
+    assert.ok(html.includes('window.ClientObject.MainCall'), 'must call ClientObject.MainCall');
+    // token acquisition (the E-024 page never asked native -> 401)
+    assert.ok(html.includes("'getToken'"), 'must ask the native for the token');
+    // native module hand-off
+    assert.ok(html.includes("'switchMenuTab'"), 'tile click must hand off via switchMenuTab');
+    assert.ok(html.includes('menuCode') && html.includes('pluginName') && html.includes('externData'));
+    // native -> web dispatcher
+    assert.ok(html.includes('window.webAPICaller') && html.includes("localStorage.getItem('token')"));
+  });
+
+  it('E-025 discover/device/join/batch + check/exist + delete/batch', async () => {
+    const join = await fetch(`${BASE}/brms/api/v1.1/discover/device/join/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devices: [{ deviceIp: '127.0.0.1', devicePort: 1, protocolType: '99', deviceName: 'Discovered Cam', encoderChannelCount: 1 }] })
+    });
+    const jj = await join.json();
+    assert.equal(jj.code, 1000);
+    assert.ok(jj.data.total >= 1);
+
+    const chk = await (await fetch(`${BASE}/brms/api/v1.1/device/check/exist`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceIp: '127.0.0.1', devicePort: 1 })
+    })).json();
+    assert.equal(chk.data.exist, true);
+
+    const del = await (await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceCodes: [jj.data.results[jj.data.results.length - 1].deviceCode] })
+    })).json();
+    assert.equal(del.code, 1000);
+    assert.ok(del.data.removed >= 1);
+  });
+
+  it('E-025 p2p easy4ip parse: HTTP 200 + empty <return/> means not published', async () => {
+    // Real cloud answer for a serial that is not on Easy4IP (captured live):
+    //   HTTP/1.1 200 OK ... <return></return>
+    const parsed = await (await fetch(`${BASE}/brms/api/v1.0/p2p/easy4ip/probe?sn=`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(parsed.code, 1000);
+    assert.equal(parsed.data.ok, false);
+
+    // The live payload builder must expose the three real states.
+    const { probeEasy4IP } = await import('../e025-devices.js');
+    const probe = await probeEasy4IP('E2E-NOT-REACHABLE-SERIAL', '127.0.0.1', 600);
+    assert.equal(probe.ok, false, 'unreachable Easy4IP host must be an honest failure');
+    assert.ok(probe.error);
+  });
+
+  it('E-025 p2p register does a REAL Easy4IP serial lookup (no fake success)', async () => {
+    const r = await fetch(`${BASE}/brms/api/v1.0/device/p2p-register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ sn: 'E2E-INVALID-SERIAL', user: 'admin', password: 'admin123', name: 'E2E P2P Cam', channels: 1 })
+    });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.ok(j.data.deviceId, 'deviceId is issued');
+    // either the cloud resolved it or the payload must carry the real reason
+    assert.ok(['registered', 'unresolved'].includes(j.data.p2pStatus));
+    assert.ok(typeof j.data.easy4ip === 'object', 'easy4ip probe result must be exposed');
+    if (j.data.p2pStatus === 'unresolved') {
+      assert.ok(j.data.message.length > 0, 'unresolved must explain the real cause');
+    }
+
+    const bad = await fetch(`${BASE}/brms/api/v1.0/p2p/easy4ip/probe`, { headers: { 'X-Subject-Token': token } });
+    const badJson = await bad.json();
+    assert.equal(badJson.code, 1000);
+    assert.equal(badJson.data.ok, false);
+    assert.ok(badJson.data.error.includes('sn'), 'missing sn must be a clear error');
+  });
+
   // UDP Alarm Ingest test (skipped due to timing issues in CI)
   it.skip('UDP 18800 receives alarm text and forwards', async () => {
     const udp = dgram.createSocket('udp4');

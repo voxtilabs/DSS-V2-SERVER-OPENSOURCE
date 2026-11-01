@@ -17,6 +17,51 @@ import {
   buildDeviceTypeResults,
   buildDictionaryResults
 } from './e024-catalogs.js';
+// E-025: device add/discovery, network/timezone/roles/functions/subsystems
+// catalogs, real ONVIF + Easy4IP probes and the RAM-only device registry.
+import {
+  DEVICE_REGISTRY,
+  DISCOVERED_DEVICES,
+  normalizeDeviceInput,
+  allChannels,
+  buildAlertTypeListPayload,
+  buildArsListPayload,
+  buildDeviceAddBatchPayload,
+  buildDeviceAddPayload,
+  buildDeviceCheckExistPayload,
+  buildDeviceDeleteBatchPayload,
+  buildDeviceDiscoverAsyncBatchPayload,
+  buildDeviceMoveBatchPayload,
+  buildDevicePagePayload,
+  buildDevicePasswordChangeBatchPayload,
+  buildDeviceTimezoneUpdateBatchPayload,
+  buildDeviceUnauthorizedPagePayload,
+  buildDiscoverDeviceInitPayload,
+  buildDiscoverDevicePagePayload,
+  buildDiscoverDetailPayload,
+  buildDiscoverJoinBatchPayload,
+  buildDiscoverCostTimePayload,
+  buildDiscoverSummaryPayload,
+  buildFunctionAvailablePayload,
+  buildNetworkListPayload,
+  buildP2PStatusPayload,
+  buildRolePagePayload,
+  buildServerTimezonePayload,
+  buildStatisticsCategoryPayload,
+  buildSubsystemAvailablePayload,
+  buildTimezoneListPayload,
+  probeEasy4IP,
+  probeEasy4IPReachability,
+  probeOnvifDevice,
+  registerArsDevice,
+  seedInitialDevices
+} from './e025-devices.js';
+// E-025: the mock camera is part of the device registry so /device/page,
+// /tree/* and the statistics all report the same set of devices.
+seedInitialDevices();
+// E-025: launcher page with the real QT/CEF bridge (see the module for the
+// evidence extracted from CefRender.exe / PluginFactory.dll / real bundles).
+import { LAUNCHER_PAGE_HTML } from './e025-launcher-page.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -794,8 +839,10 @@ app.get('/IPMS/API/entrance/parking-lot/binding-vto-itc', async () => envelope({
 // ===== E-020: remaining bootstrap 404s + launcher devices + fallbacks =====
 
 // Qt-side device lists (observed 404: /admin/API/tree/devices).
+// E-025: serve the live registry (manual adds + discoveries + auto-register)
+// instead of the static mock so the tree always reflects the devices.
 app.get('/admin/API/tree/devices', async () => envelope({
-  deviceList: [TREE_DEVICE], list: [TREE_DEVICE], channelList: TREE_CHANNELS
+  deviceList: [...DEVICE_REGISTRY.values()], list: [...DEVICE_REGISTRY.values()], channelList: allChannels()
 }));
 app.get('/admin/API/tree/equipment-tree', async () => envelope({
   orgList: [TREE_ORG], deviceList: [TREE_DEVICE], channelList: TREE_CHANNELS
@@ -913,6 +960,143 @@ app.get('/brms/api/v1.1/config/p2p', async () => envelope({ p2pEnable: 0, enable
 app.get('/brms/api/v1.1/config/p2p/server/list', async () => envelope({ list: [] }));
 app.get('/brms/api/v1.1/config/configTypes', async () => envelope({ list: [], configTypes: [] }));
 
+// ===== E-025: DEVICE ADD / DISCOVER / NETWORK / TIMEZONE / ROLES / SUBSYSTEMS =
+// Every route below previously hit the generic [FALLBACK] (empty envelope) or
+// 404'd. The real client contracts it expects are in ./e025-devices.js.
+// Order of calls when the user presses "Add" in the ONVIF dialog (E-025 trace):
+//   discover/cost-time -> discover/summary -> POST /device -> device/page.
+
+// Real reachability probe: ONVIF SOAP for ONVIF/RTSP protocols, plain TCP
+// connect for Dahua/etc, and Easy4IP SOAP when the device is added by serial
+// (P2P / DDIP). Never makes the request fail: it degrades to offline.
+async function probeDeviceFor(input) {
+  if (input.devSequence && !input.deviceIp) {
+    const easy = await probeEasy4IP(input.devSequence);
+    return { ...easy, online: easy.ok ? easy.ipAddress ? true : false : false, source: 'easy4ip' };
+  }
+  if (input.protocolType === '99' || input.protocolType === '68') {
+    return probeOnvifDevice(input.deviceIp, input.devicePort);
+  }
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const sock = net.createConnection({ host: input.deviceIp, port: Number(input.devicePort) || 37777, timeout: 1500 }, () => {
+      sock.end();
+      resolve({ ok: true, online: true, costTimeMs: Date.now() - started, note: 'tcp connect only' });
+    });
+    sock.on('timeout', () => { sock.destroy(); resolve({ ok: false, online: false, costTimeMs: Date.now() - started, error: 'tcp timeout' }); });
+    sock.on('error', (err) => resolve({ ok: false, online: false, costTimeMs: Date.now() - started, error: err.code || err.message }));
+  });
+}
+
+// --- discovery pre-flight calls ---
+for (const p of ['/brms/api/v1.1/device/discover/cost-time', '/brms/api/v1.0/device/discover/cost-time', '/brms/api/v1.1/discover/device/cost-time']) {
+  app.post(p, async (req) => {
+    const input = normalizeDeviceInput(req.body);
+    const probe = await probeDeviceFor(input);
+    return envelope(buildDiscoverCostTimePayload(req.body, probe));
+  });
+}
+for (const p of ['/brms/api/v1.1/device/discover/summary', '/brms/api/v1.0/device/discover/summary', '/brms/api/v1.1/discover/device/summary']) {
+  app.post(p, async (req) => {
+    const input = normalizeDeviceInput(req.body);
+    const probe = await probeDeviceFor(input);
+    return envelope(buildDiscoverSummaryPayload(req.body, probe));
+  });
+}
+for (const p of ['/brms/api/v1.1/device/discover/detail', '/brms/api/v1.0/device/discover/detail', '/brms/api/v1.1/discover/device/detail']) {
+  app.post(p, async (req) => {
+    const input = normalizeDeviceInput(req.body);
+    const probe = await probeDeviceFor(input);
+    return envelope(buildDiscoverDetailPayload(req.body, probe));
+  });
+}
+app.post('/brms/api/v1.1/device/discover/async/batch', async () => envelope(buildDeviceDiscoverAsyncBatchPayload()));
+
+// --- add device (the ONVIF failure root cause) ---
+const addDeviceHandler = async (req) => {
+  const input = normalizeDeviceInput(req.body || {});
+  if (!input.deviceIp && !input.devSequence) {
+    return envelope({ success: false, errorCode: 1002, errorMsg: 'deviceIp (or devSequence for P2P) is required', results: [] }, 1000, 'deviceIp (or devSequence for P2P) is required');
+  }
+  const probe = await probeDeviceFor(input);
+  const identity = {
+    manufacturer: probe.manufacturer || '',
+    model: probe.model || '',
+    firmwareVersion: probe.firmwareVersion || '',
+    serialNumber: probe.serialNumber || input.devSequence,
+    hardwareId: probe.hardwareId || '',
+    ipAddress: probe.ipAddress
+  };
+  console.log('[E025-ADD]', JSON.stringify({
+    deviceIp: input.deviceIp, devicePort: input.devicePort, protocolType: input.protocolType,
+    deviceCategory: input.deviceCategory, deviceType: input.deviceType, deviceName: input.deviceName,
+    online: probe.online !== false, manufacturer: identity.manufacturer, model: identity.model,
+    serial: identity.serialNumber, costTimeMs: probe.costTimeMs
+  }));
+  return envelope(buildDeviceAddPayload(req.body || {}, identity));
+};
+app.post('/brms/api/v1.1/device', addDeviceHandler);
+app.post('/brms/api/v1.0/device', addDeviceHandler);
+app.post('/admin/API/device', addDeviceHandler);
+app.post('/brms/api/v1.1/device/add/batch', async (req) => envelope(buildDeviceAddBatchPayload(req.body)));
+app.post('/brms/api/v1.1/device/check/exist', async (req) => envelope(buildDeviceCheckExistPayload(req.body)));
+app.post('/brms/api/v1.1/device/delete/batch', async (req) => envelope(buildDeviceDeleteBatchPayload(req.body)));
+app.post('/brms/api/v1.1/device/move/batch', async (req) => envelope(buildDeviceMoveBatchPayload(req.body)));
+app.post('/brms/api/v1.1/device/password/change/batch', async (req) => envelope(buildDevicePasswordChangeBatchPayload(req.body)));
+app.post('/brms/api/v1.1/device/timezone/update/batch', async (req) => envelope(buildDeviceTimezoneUpdateBatchPayload(req.body)));
+
+// --- device lists ---
+app.get('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
+app.get('/brms/api/v1.0/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
+app.post('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload({ ...req.query, ...(req.body || {}) })));
+app.get('/brms/api/v1.1/discover/device/page', async () => envelope(buildDiscoverDevicePagePayload()));
+app.get('/brms/api/v1.1/device/channel/page', async () => {
+  const list = allChannels();
+  return envelope({ list, results: list, channelList: list, items: list, total: list.length, pageNo: 1, pageSize: list.length || 20 });
+});
+app.get('/brms/api/v1.1/device/unauthorized/page', async () => envelope(buildDeviceUnauthorizedPagePayload()));
+app.post('/brms/api/v1.1/device/unauthorized/add/batch', async () => envelope({ success: true, results: [], list: [] }));
+app.post('/brms/api/v1.1/device/unauthorized/delete/batch', async () => envelope({ success: true, results: [], list: [] }));
+
+// --- discovery join (LAN scan result -> device tree) ---
+app.post('/brms/api/v1.1/discover/device/init', async (req) => envelope(buildDiscoverDeviceInitPayload(req.body)));
+app.post('/brms/api/v1.1/discover/device/join/batch', async (req) => envelope(buildDiscoverJoinBatchPayload(req.body)));
+app.post('/brms/api/v1.1/discover/device/network/update', async () => envelope({ success: true }));
+
+// --- statistics / network / timezone / roles / functions / subsystems ---
+app.get('/brms/api/v1.1/device/statistics/count-by-device-category/list', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), req.query)));
+app.get('/brms/api/v1.1/system/network/list', async () => envelope(buildNetworkListPayload()));
+app.get('/brms/api/v1.1/config/server/timezone', async () => envelope(buildServerTimezonePayload('UTC')));
+app.get('/brms/api/v1.1/config/timezone/list', async () => envelope(buildTimezoneListPayload()));
+const roleHandler = async () => envelope(buildRolePagePayload());
+app.get('/brms/api/v1.1/role/page', roleHandler);
+app.post('/brms/api/v1.1/role/page', roleHandler);
+app.get('/brms/api/v1.1/role/list', roleHandler);
+app.get('/brms/api/v1.1/role/all/list', roleHandler);
+app.get('/brms/api/v1.1/function/available/list', async () => envelope(buildFunctionAvailablePayload()));
+app.get('/brms/api/v1.1/subsystem/available/list', async () => envelope(buildSubsystemAvailablePayload()));
+app.get('/brms/api/v1.1/subsystem/register/warning', async () => envelope({ warningList: [], list: [], total: 0 }));
+// OMMS (alarm service) previously 404'd -> "abnormal data" in the Event Center.
+app.get('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(buildAlertTypeListPayload()));
+app.post('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(buildAlertTypeListPayload()));
+
+// --- GET variants of the tree (launcher prefetch used GET -> fallback) ---
+app.get('/brms/api/v1.0/tree/orgs', async () => envelope({
+  orgList: [{ orgId: '1', orgCode: '001', orgName: 'Root', parentId: '0', orgType: 1, sort: 1, deviceNum: Math.max(1, DEVICE_REGISTRY.size), childCount: 0, status: 1 }]
+}));
+app.get('/brms/api/v1.0/tree/devices', async () => envelope({
+  deviceList: [...DEVICE_REGISTRY.values()], list: [...DEVICE_REGISTRY.values()], orgCode: '001', containVirtualDevice: '1', total: DEVICE_REGISTRY.size
+}));
+app.get('/brms/api/v1.0/tree/channels', async () => {
+  const channelList = allChannels();
+  return envelope({ channelList, list: channelList, total: channelList.length });
+});
+// Same dynamic data on the admin API base used by the native Qt stack.
+app.get('/brms/api/v1.1/tree/device-tree', async () => {
+  const deviceList = [...DEVICE_REGISTRY.values()];
+  return envelope({ orgList: [{ orgId: '1', orgCode: '001', orgName: 'Root', parentId: '0', orgType: 1, sort: 1 }], deviceList, channelList: allChannels() });
+});
+
 // ===== E-021: exact contracts for the routes that hit [FALLBACK] in the live
 // launcher trace (E-021 objective 1) =====
 
@@ -963,216 +1147,44 @@ app.get('/admin/api/v1.1/domain/download/urlInfo', async (req) => {
   return envelope({ code: 1000, desc: 'Success', data: `https://${host}/web/client-module/` });
 });
 
-// Self-built launcher page at /web/client-module/ (CEF entry point)
-// Contract: reads localStorage.menuRights (injected by Qt), registers webAPICaller bridge,
-// fetches v1.0 tree/orgs, tree/devices, tree/channels, accounts/current with X-Subject-Token,
-// renders tiles keyed by REAL menu codes recovered from leveldb cache.
+// ===== E-025: LAUNCHER PAGE (real QT/CEF bridge) =====
+// The bridge contract lives in ./e025-launcher-page.js:
+//   web  -> native:  ClientObject.MainCall(method, jsonParam, callbackName)
+//   native -> web:   window.webAPICaller(callbackName|action, jsonPayload)
+//   token:           MainCall('getToken','',cb) -> webAPICaller(cb,{token,
+//                    resourceToken})  (the E-024 page never asked, so
+//                    accounts/current answered 401 -> "init error (token=no)")
+//   tile click:      MainCall('switchMenuTab', JSON({menuCode,pluginName,
+//                    menuName,externData}), cb)
 app.get('/web/client-module/', async (req, reply) => {
   reply.type('text/html; charset=utf-8');
-  return `<!DOCTYPE html>
-<html lang="en"><head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>DSS Client - Launcher</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f6fa;min-height:100vh;padding:20px}
-    .container{max-width:1200px;margin:0 auto}.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e1e4e8}
-    .title{font-size:24px;font-weight:600;color:#1a1a2e}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
-    .tile{background:#fff;border:1px solid #e1e4e8;border-radius:8px;padding:20px;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;align-items:center;text-align:center;text-decoration:none;color:#1a1a2e}
-    .tile:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.1);border-color:#1890ff}.icon{width:48px;height:48px;margin-bottom:12px;display:flex;align-items:center;justify-content:center;background:#f0f5ff;border-radius:8px;color:#1890ff;font-size:24px}.name{font-size:14px;font-weight:500}.code{font-size:11px;color:#8c9196;margin-top:4px;font-family:monospace}
-    .status{margin-top:24px;padding:16px;background:#fff;border:1px solid #e1e4e8;border-radius:8px;font-size:13px;color:#595d64}
-  </style>
-</head><body>
-  <div class="container">
-    <div class="header"><div class="title">DSS Launcher</div></div>
-    <div class="grid" id="grid"></div>
-    <div class="status" id="status">Loading modules...</div>
-  </div>
-  <script>
-(function(){
-  // webAPICaller bridge (injected by Qt via UpdataToken / AddMenuRightsToWeb)
-  window.webAPICaller = function(action, payload) {
-    console.log('[webAPICaller]', action, payload);
-    if (action === 'updateToken') {
-      localStorage.setItem('token', payload.token);
-      localStorage.setItem('resourceToken', payload.resourceToken);
-      if (payload.language) localStorage.setItem('language', payload.language);
-      if (payload.userId) localStorage.setItem('userId', payload.userId);
-      if (payload.skin) localStorage.setItem('skin', payload.skin);
-      if (payload.displaytimezone) localStorage.setItem('displaytimezone', payload.displaytimezone);
-    } else if (action === 'menuRightsChange') {
-      // Qt notifies menu rights changed - reload from localStorage
-      renderTiles();
-    }
-  };
-  function parseMenuRights() {
-    try { return JSON.parse(localStorage.getItem('menuRights')) || {}; }
-    catch (e) { return {}; }
-  }
-  function getToken() { return localStorage.getItem('token') || ''; }
-  // ===== E-023: COMPLETE tile registry with Monitoring Center + all Settings =====
-  // Codes mapped from real server catalog + MainFormPlugin/PluginFactory strings.
-  // Native Qt modules (Monitoring Center, Playback, E-Map, TV Wall, etc.) are opened
-  // via webAPICaller('openNativeModule', {moduleCode, moduleName, modulePath}).
-  // Web modules (DeepXplore, Maintenance Center, etc.) use Vue router paths.
-  const TILE_REGISTRY = {
-    // 001000 - Resource Management
-    '001000': { name: 'Resource', icon: '🗂', native: true, moduleCode: '001000', moduleName: 'Resource Management' },
-    '001001': { name: 'Device', icon: '🖥', native: true, moduleCode: '001001', moduleName: 'Device Management' },
-    '001002': { name: 'User', icon: '👤', native: true, moduleCode: '001002', moduleName: 'User Management' },
-    '001003': { name: 'Storage', icon: '💾', native: true, moduleCode: '001003', moduleName: 'Storage Management' },
-    // 002000 - Event Center / Monitoring Center (NATIVE QT PLUGINS)
-    '002000': { name: 'Monitoring Center', icon: '📹', native: true, moduleCode: '002000', moduleName: 'Monitoring Center' },
-    '002001': { name: 'Live View', icon: '📺', native: true, moduleCode: '002001', moduleName: 'Live View', modulePath: '/liveView' },
-    '002001001': { name: 'Live View', icon: '📺', native: true, moduleCode: '002001001', moduleName: 'Live View', modulePath: '/liveView' },
-    '002001002': { name: 'Combined Event Rules', icon: '🔗', native: true, moduleCode: '002001002' },
-    '002001003': { name: 'Alarm Config', icon: '🔔', native: true, moduleCode: '002001003' },
-    '002001004': { name: 'Generic Event Config', icon: '⚙️', native: true, moduleCode: '002001004' },
-    '002002': { name: 'E-Map', icon: '🗺', native: true, moduleCode: '002002', moduleName: 'E-Map', modulePath: '/eMap' },
-    '002003': { name: 'Base Info', icon: '📋', native: true, moduleCode: '002003', moduleName: 'Base Info' },
-    '002004': { name: 'Control Library', icon: '📚', native: true, moduleCode: '002004', moduleName: 'Control Library' },
-    '002005': { name: 'Access Control', icon: '🚪', native: true, moduleCode: '002005', moduleName: 'Access Control', modulePath: '/accessControl/area' },
-    '002006': { name: 'Video Intercom', icon: '📞', native: true, moduleCode: '002006', moduleName: 'Video Intercom' },
-    '002007': { name: 'Attendance', icon: '📅', native: true, moduleCode: '002007', moduleName: 'Attendance' },
-    '002008': { name: 'Visitor', icon: '👥', native: true, moduleCode: '002008', moduleName: 'Visitor Management' },
-    '002009': { name: 'Parking Lot', icon: '🅿️', native: true, moduleCode: '002009', moduleName: 'Parking Lot' },
-    '002010': { name: 'Intelligence Analysis', icon: '🧠', native: true, moduleCode: '002010', moduleName: 'Intelligence Analysis' },
-    '002011': { name: 'Record Plan', icon: '📹', native: true, moduleCode: '002011', moduleName: 'Record Plan' },
-    '002012': { name: 'Maintenance Config', icon: '🔧', native: true, moduleCode: '002012', moduleName: 'Maintenance Config' },
-    '002013': { name: 'TV Wall', icon: '🖥', native: true, moduleCode: '002013', moduleName: 'TV Wall', modulePath: '/tvWall' },
-    '002015': { name: 'Visual Tracking', icon: '🎯', native: true, moduleCode: '002015', moduleName: 'Visual Tracking', modulePath: '/monitoringCenter/videoTrack' },
-    // 003000 - System / Cascade
-    '003000': { name: 'System', icon: '⚙️', native: true, moduleCode: '003000', moduleName: 'System Management' },
-    '003001': { name: 'Cascade', icon: '🔗', native: true, moduleCode: '003001', moduleName: 'Cascade' },
-    '003002': { name: 'License', icon: '📜', native: true, moduleCode: '003002', moduleName: 'License' },
-    '003003': { name: 'System Config', icon: '⚙️', native: true, moduleCode: '003003', moduleName: 'System Config' },
-    '003004': { name: 'Backup', icon: '💽', native: true, moduleCode: '003004', moduleName: 'Backup' },
-    '003005': { name: 'Third Party', icon: '🔌', native: true, moduleCode: '003005', moduleName: 'Third Party' },
-    // 004000 - Intelligent / DeepXplore / Maintenance Center / Access Center (WEB MODULES)
-    '004000': { name: 'Intelligent Center', icon: '🧠', native: false, moduleCode: '004000', moduleName: 'Intelligent Center' },
-    '004001': { name: 'Event History', icon: '📜', native: false, path: '/eventHistory' },
-    '004002': { name: 'Search Center', icon: '🔍', native: false, path: '/deepXplore/explorer' },
-    '004003': { name: 'DeepXplore', icon: '🔬', native: false, path: '/deepXplore/explorer' },
-    '004004': { name: 'Maintenance Center', icon: '🛠', native: false, path: '/maintenance/workbench' },
-    '004005': { name: 'Access Center', icon: '🏢', native: false, path: '/accessCenter' },
-    '004006': { name: 'Entrance Center', icon: '🚪', native: false, path: '/entranceCenter' },
-    '004007': { name: 'Intelligence Center', icon: '🧠', native: false, path: '/intelligenceCenter' },
-    '004008': { name: 'Face Recognition', icon: '👤', native: false, path: '/faceRecognition' },
-    // 010000 - Logs / Record Download
-    '010000': { name: 'Logs & Records', icon: '📝', native: true, moduleCode: '010000', moduleName: 'Logs & Records' },
-    '010001': { name: 'Logs', icon: '📝', native: true, moduleCode: '010001', moduleName: 'Logs', modulePath: '/logs' },
-    '010002': { name: 'Record Download', icon: '⬇️', native: true, moduleCode: '010002', moduleName: 'Record Download', modulePath: '/recordDownload' },
-    // 011000 - Web Applications
-    '011000': { name: 'Web Apps', icon: '🌐', native: false, moduleCode: '011000', moduleName: 'Web Applications' },
-    '011001': { name: 'Retail', icon: '🏪', native: false, path: '/webApp/retail' },
-    '011002': { name: 'Education', icon: '🎓', native: false, path: '/webApp/education' }
-  };
-  // Module prefixes that appear as parent tiles (6-digit prefix)
-  const MODULE_PREFIXES = ['001000','002000','003000','004000','010000','011000'];
-  // Native Qt module codes that should invoke webAPICaller
-  const NATIVE_MODULE_CODES = new Set([
-    '001000','001001','001002','001003',
-    '002000','002001','002001001','002002','002003','002004','002005','002006','002007','002008','002009','002010','002011','002012','002013','002015',
-    '003000','003001','003002','003003','003004','003005',
-    '010000','010001','010002'
-  ]);
-  async function fetchV10(path) {
-    const token = getToken();
-    const res = await fetch(path, { headers: token ? { 'X-Subject-Token': token } : {} });
-    if (!res.ok) throw new Error(path + ' ' + res.status);
-    return res.json();
-  }
-  async function init() {
-    try {
-      // Preload v1.0 tree data (launcher does this on init)
-      await Promise.all([
-        fetchV10('/brms/api/v1.0/tree/orgs'),
-        fetchV10('/brms/api/v1.0/tree/devices'),
-        fetchV10('/brms/api/v1.0/tree/channels'),
-        fetchV10('/brms/api/v1.0/accounts/current')
-      ]);
-      document.getElementById('status').textContent = 'Ready - ' + new Date().toLocaleTimeString();
-      renderTiles();
-    } catch (e) {
-      console.error('Init failed:', e);
-      document.getElementById('status').textContent = 'Init error: ' + e.message + ' (token=' + (getToken()?'yes':'no') + ')';
-    }
-  }
-  function renderTiles() {
-    const mr = parseMenuRights();
-    const rights = mr.menuRights || [];
-    const forbidden = mr.forbiddenMenus || [];
-    const allowed = rights.filter(c => !forbidden.includes(c));
-    const grid = document.getElementById('grid');
-    grid.innerHTML = '';
-    // Show module-level prefixes that have allowed children
-    const shown = new Set();
-    for (const code of allowed) {
-      const prefix = code.slice(0, 6);
-      if (MODULE_PREFIXES.includes(prefix) && !shown.has(prefix)) {
-        const info = TILE_REGISTRY[prefix] || { name: prefix, icon: '📦', native: false };
-        addTile(info, prefix);
-        shown.add(prefix);
-      }
-    }
-    // Also show direct leaf tiles for codes that have explicit registry
-    for (const code of allowed) {
-      if (TILE_REGISTRY[code] && !MODULE_PREFIXES.includes(code.slice(0,6))) {
-        addTile(TILE_REGISTRY[code], code);
-      }
-    }
-    if (grid.children.length === 0) {
-      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#8c9196;padding:40px">No modules available (menuRights empty or token missing)</div>';
-    }
-  }
-  function addTile(info, code) {
-    const grid = document.getElementById('grid');
-    const div = document.createElement('div');
-    div.className = 'tile';
-    div.style.cursor = 'pointer';
-    div.innerHTML = '<div class="icon">' + info.icon + '</div><div class="name">' + info.name + '</div><div class="code">' + code + '</div>';
-    div.addEventListener('click', (e) => {
-      e.preventDefault();
-      console.log('Tile clicked:', code, info);
-      // E-023: Native Qt modules -> webAPICaller('openNativeModule', {...})
-      // Web modules -> navigate to path
-      if (info.native && window.webAPICaller) {
-        const payload = {
-          moduleCode: info.moduleCode || code,
-          moduleName: info.moduleName || info.name,
-          modulePath: info.modulePath || ''
-        };
-        console.log('[webAPICaller] openNativeModule', payload);
-        window.webAPICaller('openNativeModule', payload);
-      } else if (info.path) {
-        console.log('Navigate to web path:', info.path);
-        window.location.href = info.path;
-      } else {
-        console.log('No action for:', code);
-      }
-    });
-    grid.appendChild(div);
-  }
-  // Listen for Qt-injected updates
-  window.addEventListener('storage', (e) => {
-    if (e.key === 'menuRights') renderTiles();
-  });
-  init();
-})();
-<\/script></body></html>`;
+  return LAUNCHER_PAGE_HTML;
 });
+app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/client-module/'); });
 
 // Catch-all benign responders for the rest of the microservice families
 // (172-path client inventory: accessControl, alarm-host, alarmBusiness,
 // vtalk, devicesManager, system/timezone, menus/client ...). Nothing in the
 // bootstrap may 404 or a module aborts with "data abnormal". [FALLBACK]
 // marks the exact hit so shapes get refined next cycle.
+// E-025: every service prefix the client's DPSDK inventory knows about, so an
+// unknown route returns code 1000 instead of the 404 that produced the
+// "network abnormal / abnormal data" toasts (observed: /omms/api 404).
 function fallbackLog(req) {
   console.log('[FALLBACK]', JSON.stringify({ timestamp: new Date().toISOString(), method: req.method, url: req.url, code: 1000 }));
 }
-for (const PREFIX of ['/admin/API', '/admin/api', '/brms/api', '/cfgs/api', '/obms/api', '/ipms/api', '/emap/api', '/IPMS/API', '/OBMS/API', '/EMAP/API', '/CFGS/API']) {
+const SERVICE_PREFIXES = [
+  '/admin/API', '/admin/api',
+  '/brms/api', '/cfgs/api', '/obms/api', '/ipms/api', '/emap/api', '/emapService', '/omms/api',
+  '/otms/api', '/OTMS/API', '/iams/api', '/erms/api', '/ecos/api', '/faceService', '/alarmProcess',
+  '/accessControlServer', '/alarmhost/v1', '/vehicleServer', '/videoService', '/psib', '/sira/api',
+  '/IPMS/API', '/OBMS/API', '/EMAP/API', '/CFGS/API', '/OMCMS/API', '/OMMS/API'
+];
+for (const PREFIX of SERVICE_PREFIXES) {
   app.get(PREFIX + '/*', async (req) => { fallbackLog(req); return envelope({ list: [], total: 0 }); });
   app.post(PREFIX + '/*', async (req) => { fallbackLog(req); return envelope({}); });
+  app.put(PREFIX + '/*', async (req) => { fallbackLog(req); return envelope({}); });
+  app.delete(PREFIX + '/*', async (req) => { fallbackLog(req); return envelope({}); });
 }
 
 function auth(req, reply, done) {
@@ -1290,23 +1302,20 @@ app.get('/brms/api/v1.0/license', { preHandler: auth }, async () => envelope({
 }));
 
 // ===== TREE =====
+// E-025: the POST tree routes are what the native Qt stack calls after a login
+// and after an add; they must return the live device registry so a manually
+// added / discovered / auto-registered device shows up in the client tree.
 app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => envelope({
-  orgList: [{ orgId: '1', orgName: 'Root', parentId: '0', orgType: 1, sort: 1 }]
+  orgList: [{ orgId: '1', orgCode: '001', orgName: 'Root', parentId: '0', orgType: 1, sort: 1, deviceNum: Math.max(1, DEVICE_REGISTRY.size), childCount: 0, status: 1 }]
 }));
-app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async () => envelope({
-  deviceList: [{
-    deviceCode: 'CAM001', deviceName: 'Test Camera', status: 1, deviceType: 2,
-    ip: '192.168.1.100', port: 37777, protocol: 'Dahua', userName: 'admin',
-    channelNum: 1, alarmInNum: 1, alarmOutNum: 1, diskNum: 0,
-    supportP2P: true, supportRTSPS: true, supportMulticast: true
-  }]
-}));
-app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => envelope({
-  channelList: [{
-    channelId: '1000171$1$0$0', channelName: 'Ch1', status: 1, channelType: 1,
-    videoType: 0, audioType: 0, bitRate: 1024, resolution: '1920x1080', fps: 25
-  }]
-}));
+app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async () => {
+  const deviceList = [...DEVICE_REGISTRY.values()];
+  return envelope({ deviceList, list: deviceList, orgCode: '001', containVirtualDevice: '1', total: deviceList.length });
+});
+app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => {
+  const channelList = allChannels();
+  return envelope({ channelList, list: channelList, total: channelList.length });
+});
 
 // ===== MTS VIDEO =====
 app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
@@ -1433,11 +1442,12 @@ app.post('/brms/api/v1.0/alarm/dprecord', { preHandler: auth }, async () => enve
 app.post('/brms/api/v1.0/alarm/picrecord/wanted', { preHandler: auth }, async () => envelope({ alarmPicrecordWantedVo: { alarmCode: '', alarmTime: '', blacklistType: '', carColor: '', carImgUrl: '', carNum: '', carNumcolor: '', carType: '', channelId: '', channelName: '' } }));
 
 // ===== P2P STATUS & REGISTER =====
-app.get('/brms/api/v1.0/p2p/status', { preHandler: auth }, async () => envelope({
-  status: 'available',
-  easy4ip: 'www.easy4ip.com',
-  profile: 'tools'
-}));
+// E-025: Easy4IP/P2P endpoints are the real ones recovered from DPSDK.dll
+// (CP2PServerManager::GetDeviceInfoFromEasy4IP -> www.easy4ip.com SOAP
+// getDeviceByDevSequence). Our server does not register on the Dahua cloud,
+// so the payload reports the endpoints + the real reason.
+app.get('/brms/api/v1.0/p2p/status', async () => envelope(buildP2PStatusPayload()));
+app.get('/brms/api/v1.1/p2p/status', async () => envelope(buildP2PStatusPayload()));
 
 // P2P Device Register by SN
 const P2P_DEVICES = new Map();
@@ -1445,7 +1455,7 @@ const P2P_DEVICES = new Map();
 app.post('/brms/api/v1.0/device/p2p-register', { preHandler: auth }, async (req, reply) => {
   const { sn, user, password, name, channels = 1 } = req.body;
   if (!sn) return reply.code(400).send(envelope(null, 400, 'Missing SN'));
-  
+
   if (P2P_DEVICES.has(sn)) {
     const existing = P2P_DEVICES.get(sn);
     return envelope({
@@ -1455,22 +1465,67 @@ app.post('/brms/api/v1.0/device/p2p-register', { preHandler: auth }, async (req,
       message: 'Device already registered'
     });
   }
-  
+
+  // E-025: REAL Easy4IP lookup (getDeviceByDevSequence) instead of simulating
+  // success. The device only becomes reachable if the Dahua cloud answers with
+  // its ipAddress; otherwise the response carries the real error so the client
+  // shows the true reason instead of a fake "registered".
+  const easy4ip = await probeEasy4IP(String(sn));
+  const easy4ipOk = easy4ip.ok && easy4ip.ipAddress;
+
   const deviceId = 'P2P-' + genToken().slice(0, 12);
   const channelIds = [];
   for (let i = 1; i <= channels; i++) {
     channelIds.push(`${deviceId}$${i}$0$0`);
   }
-  
+
   P2P_DEVICES.set(sn, {
     sn, deviceId, name: name || `P2P Device ${sn}`, user: user || 'admin',
-    channelIds, registeredAt: Date.now(), status: 'online'
+    channelIds, registeredAt: Date.now(), status: easy4ipOk ? 'online' : 'unresolved',
+    easy4ip
   });
-  
+
+  console.log('[E025-P2P]', JSON.stringify({ sn: String(sn), easy4ipOk, ipAddress: easy4ip.ipAddress || '', httpStatus: easy4ip.httpStatus || 0, error: easy4ip.error || '' }));
+
   return envelope({
-    deviceId, channelIds, p2pStatus: 'registered',
-    message: 'Device registered successfully. P2P tunnel creation simulated.'
+    deviceId,
+    channelIds,
+    p2pStatus: easy4ipOk ? 'registered' : 'unresolved',
+    easy4ip: {
+      ok: easy4ipOk,
+      ipAddress: easy4ip.ipAddress || '',
+      httpStatus: easy4ip.httpStatus || 0,
+      error: easy4ip.error || '',
+      registered: easy4ip.registered === true,
+      answered: easy4ip.answered === true,
+      returnEmpty: easy4ip.returnEmpty === true,
+      costTimeMs: easy4ip.costTimeMs || 0
+    },
+    message: easy4ipOk
+      ? `Device registered via Easy4IP (${easy4ip.ipAddress}).`
+      : easy4ip.returnEmpty
+        ? 'Easy4IP answered 200 with an empty <return/>: this serial is not published on the Dahua P2P cloud (the camera is not registered to Easy4IP / not shared with this server account). Add it by LAN IP instead.'
+        : `Easy4IP could not resolve this serial (${easy4ip.error || 'HTTP ' + (easy4ip.httpStatus || 'no answer')}); the device is stored but stays offline.`
   });
+});
+
+// E-025: live reachability of the real P2P/Easy4IP endpoints (DPSDK.dll set).
+app.get('/brms/api/v1.0/p2p/reachability', { preHandler: auth }, async () => {
+  const results = await probeEasy4IPReachability();
+  return envelope({
+    results,
+    servers: results,
+    up: results.filter((r) => r.up).map((r) => r.host),
+    down: results.filter((r) => !r.up).map((r) => r.host),
+    note: 'Reachable endpoints can resolve a device serial through the Easy4IP SOAP interface.'
+  });
+});
+// Live serial lookup (answers what the DSS client itself would ask the cloud).
+app.get('/brms/api/v1.0/p2p/easy4ip/probe', { preHandler: auth }, async (req) => {
+  const sn = String(req.query?.sn || req.query?.devSequence || '');
+  if (!sn) return envelope({ ok: false, error: 'sn query parameter is required (device serial / devSequence)' });
+  const result = await probeEasy4IP(sn);
+  return envelope(result);
 });
 
 app.post('/brms/api/v1.0/device/p2p-unregister', { preHandler: auth }, async (req, reply) => {
@@ -1531,14 +1586,10 @@ app.post('/brms/api/v1.0/ars/unregister', async (req, reply) => {
   return envelope({ success: true, message: 'Device unregistered' });
 });
 
-app.post('/brms/api/v1.0/ars/list', { preHandler: auth }, async () => {
-  const devices = Array.from(ARS_DEVICES.values()).map(d => ({
-    deviceId: d.deviceId, originalId: d.originalId, deviceName: d.deviceName,
-    ip: d.ip, port: d.port, deviceType: d.deviceType, channelNum: d.channelNum,
-    status: d.status, registeredAt: d.registeredAt, lastSeen: d.lastSeen
-  }));
-  return envelope({ devices });
-});
+// E-025: auto-registered devices come from the registry so the list, the tree
+// and the statistics always agree (the DSS client re-reads the tree after add).
+app.post('/brms/api/v1.0/ars/list', async () => envelope(buildArsListPayload()));
+app.get('/brms/api/v1.0/ars/list', async () => envelope(buildArsListPayload()));
 
 app.post('/brms/api/v1.0/ars/device-info', { preHandler: auth }, async (req) => {
   const { deviceId } = req.body;
@@ -1596,30 +1647,35 @@ function createARSTCPServer() {
     socket.on('data', (data) => {
       session.lastActivity = Date.now();
       buffer = Buffer.concat([buffer, data]);
-      
+
       // Process complete DVRIP packets (32-byte header + payload)
       while (buffer.length >= 32) {
         const header = parseDHIPHeader(buffer);
         if (!header) break;
-        
+
         const totalLen = 32 + header.payloadLen;
         if (buffer.length < totalLen) break; // Wait for more data
-        
-        const payload = buffer.subarray(32, totalLen);
+
+        // E-025: keep the raw packet: the previous code sliced `buffer` first
+        // and then parsed the payload from the already-advanced buffer, so the
+        // register payload was always garbage and auto-registration never
+        // produced a device. Packet boundaries must be read before advancing.
+        const packet = buffer.subarray(0, totalLen);
+        const payload = packet.subarray(32, totalLen);
         buffer = buffer.subarray(totalLen);
-        
+
         // Process command
         const { command, sequence, payloadLen, sessionId } = header;
-        
+
         console.log('[ARS TCP] Command:', command.toString(16), 'Seq:', sequence, 'Payload:', payloadLen, 'from', socket.remoteAddress);
-        
+
         switch (command) {
           case DHIP_CMD.REGISTER: {
             session.sequence = header.sequence;
-            const deviceInfo = parseRegisterPayload(buffer.subarray(32, 32 + header.payloadLen));
+            const deviceInfo = parseRegisterPayload(payload);
             session.deviceId = deviceInfo.deviceId;
             session.authenticated = true;
-            
+
             // Register device in ARS_DEVICES
             const internalDeviceCode = 'ARS-' + deviceInfo.deviceId;
             ARS_DEVICES.set(deviceInfo.deviceId, {
@@ -1637,9 +1693,18 @@ function createARSTCPServer() {
               registeredAt: Date.now(),
               lastSeen: Date.now()
             });
-            
+
+            // E-025: auto-registered devices must behave like manually added
+            // ones: show up in /device/page, /tree/devices, /tree/channels and
+            // /device/statistics/count-by-device-category/list.
+            try {
+              registerArsDevice(deviceInfo);
+            } catch (err) {
+              console.log('[ARS TCP] registerArsDevice failed:', err.message);
+            }
+
             console.log('[ARS TCP] Device registered:', deviceInfo.deviceId, 'from', socket.remoteAddress);
-            
+
             // Send REGISTER_ACK
             const ack = createRegisterAck(header.sequence, deviceInfo.deviceId);
             socket.write(ack);

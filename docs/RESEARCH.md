@@ -706,3 +706,54 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Inspector middleware prefixes [DICT-REQ] / [DICT-BODY] on every dictionary/category/protocol/manufacturer request so any still-missing combo path is logged with its exact query/body.
 - Tests: unit 14/14 PASS (10 previous + 4 new E-024 contract tests) ; E2E 7/7 PASS against 10.10.20.120.
 - Confidence: CONFIRMED (contracts recovered from the real client bundles + DPSDK strings, verified live)
+
+## EV-072 - E-025: launcher page bridge - the real Qt/CEF contract (root cause of "init error 401 (token=no)")
+- Date: 2026-11-01 - recovered from CefRender.exe + PluginFactory.dll + UICommonModule.dll + real client bundles; implemented and verified live on 10.10.20.120:1443
+- The web<->native bridge is NOT window.webAPICaller alone. CefRender.exe injects a V8 extension (verbatim string found in the binary):
+  \ar ClientObject; if (!ClientObject) ClientObject = {}; (function () { ClientObject.MainCall = function (method, param, callbackName) { native function MainCall(method, param, callbackName); return MainCall(method, param, callbackName); }; })();\
+- web -> native = window.ClientObject.MainCall(method, param, callbackName), param is a JSON string (the real app serializes: \d = null!=n && ""!==n ? gf(n) ? n : JSON.stringify(n) : ""\).
+  native -> web = window.webAPICaller(callbackName|action, jsonPayloadString) (literal JS in PluginFactory.dll/UICommonModule.dll: "window.webAPICaller('%1','%2')").
+- TOKEN (the E-024 launcher never asked, so /accounts/current answered 401):
+  - js/u-getTokens-CZF6-i98.js only reads localStorage: e=()=>localStorage.getItem("token"), o=()=>localStorage.getItem("resourceToken").
+  - js/.pnpm-IcGsI3MK.js gets the token: az -> JUe = async()=>{const{blurringPromisifyClientApiCall:e}=Gz();return await e("getToken")} -> ClientObject.MainCall('getToken','',cbId).
+  - js/index (launcher) production branch: if(L_){...url params...}else{const l=nt(location.href);let c;l.token||(c=await be());ke(token,l.token||c.token);ke(resourceToken,l.token||c.resourceToken);...} i.e. in production the native ALWAYS provides the token.
+  - Qt writes only localStorage.localcfg and localStorage.menuRights (never the token) -> the page must ask the native.
+- MODULE HAND-OFF: aq -> IUe = (e)=>{const{clientApiCall:t}=Gz();t("switchMenuTab",e)} and the launcher builds {menuCode,pluginName,menuName,externData} before calling it (pushClientRouter -> ve(n)).
+  - PluginFactory.dll CWebBusinessControl::OnMainCall -> "switchMenuTab" parses exactly menuCode / pluginName / menuName / externData, then builds a router (web/client-module/#/entry/<menuCode>, strings in the same binary) and emits window.webAPICaller('changeRoute',{"router":"..."}).
+  - Other native methods in the same dispatcher: addSite, delSite, updateSiteToken, openVedio, openRecord, closeWebPage, clientCallback, getLocalConfig, getWebsocketPort, invokeClientNotify.
+- Implemented: poc/dss-v2-harness/brms-gateway/src/e025-launcher-page.js (served by GET /web/client-module/):
+  - window.ClientObject.MainCall wrapper with per-call callback ids, JSON-string params and a 4s hang guard.
+  - window.webAPICaller dispatcher: resolves the pending callback, and handles native events updateToken / updateSiteToken / menuRightsChange / devInfoChange / devStateChange / alarmMessage / notifyClientState.
+  - getToken(): localStorage first, otherwise native getToken -> localStorage.token/resourceToken, then the v1.0 tree/orgs, tree/devices (new GET routes), tree/channels and accounts/current prefetch.
+  - Tile click -> MainCall('switchMenuTab', JSON.stringify({menuCode,pluginName,menuName,externData:'{}'}), cbId).
+  - No "init error" toast: when the client has not delivered a token yet the page says so and refreshes on the storage/menuRights events instead of failing.
+- Tests: launcher contract asserted in the unit suite (ClientObject.MainCall, 'getToken', 'switchMenuTab', menuCode/pluginName/externData) and in E2E-9 (live page content). Unit 22/22 PASS; E2E 9/9 PASS.
+- Confidence: CONFIRMED (bridge recovered verbatim from the shipped client binaries/bundles)
+
+## EV-073 - E-025: ONVIF "Add Device" failure + the 23 [FALLBACK] routes -> real device contracts
+- Date: 2026-11-01 - live trace harvest (254x200, 14x401 challenges, 23 [FALLBACK]), implemented and verified live on 10.10.20.120:1443
+- Live [FALLBACK] set (all served a generic empty payload): /config/server/timezone, /config/timezone/list, /system/network/list, /device/statistics/count-by-device-category/list, /device/discover/cost-time, /device/discover/summary, POST /brms/api/v1.1/device, /device/page, /discover/device/page, /role/page, /function/available/list, /subsystem/available/list, /brms/api/v1.0/tree/{orgs,devices,channels} (GET - only POST existed).
+- 404s: /omms/api/v1.1/alert/rule/alert-type/list (no such route family) and /brms/api/v1.0/accounts/current once (before the launcher had a token).
+- Implemented (poc/dss-v2-harness/brms-gateway/src/e025-devices.js + routes in src/index.js):
+  - POST /brms/api/v1.1/device -> creates a DeviceVo {deviceCode,deviceIp,devicePort,protocolType,protocolName,deviceCategory,deviceType,channelNum,encoderChannelCount,status,online,...,channels[]} with channels as code\\\. The client's loginPass (an MD5 hash) is never stored nor echoed.
+  - POST /brms/api/v1.1/device/discover/cost-time -> real measured probe time (floor 20ms) + deviceCount/online.
+  - POST /brms/api/v1.1/device/discover/summary|detail -> real device identity + online/status/errorCode.
+  - GET /brms/api/v1.1/device/page, /device/channel/page, /discover/device/page, /device/unauthorized/page; POST /discover/device/init, /discover/device/join/batch, /device/add/batch, /device/check/exist, /device/delete/batch, /device/move/batch, /device/password/change/batch, /device/timezone/update/batch, /device/discover/async/batch.
+  - GET /brms/api/v1.1/system/network/list (real host NICs), /config/server/timezone, /config/timezone/list (24 zones), /role/page (+ role/list, role/all/list), /function/available/list, /subsystem/available/list, /subsystem/register/warning, /device/statistics/count-by-device-category/list, GET /brms/api/v1.0/tree/{orgs,devices,channels} and /brms/api/v1.1/tree/device-tree.
+  - GET|POST /omms/api/v1.1/alert/rule/alert-type/list (15 alert types) and the catch-all extended to every DPSDK service prefix (/omms, /otms, /iams, /erms, /ecos, /faceService, /accessControlServer, /alarmhost/v1, /vehicleServer, /emapService, /psib, /sira, /alarmProcess + PUT/DELETE) -> no more 404s.
+- REAL ONVIF probe (GetDeviceInformation SOAP 1.2, 2s timeout) replaced invented identity data. Verified live against the operator camera 192.168.0.238:8021:
+  - Manufacturer "AI Sentinel", Model "EBA1_LECTOR_FHD_H265", FirmwareVersion "2.1.0-H265", SerialNumber "SENTINEL_8021", HardwareId "1.0"; probe cost 3-4ms.
+- The added device is registered in the same RAM registry used by /device/page, /tree/devices, /tree/channels and the statistics, so the client tree shows it immediately.
+- Tests: 6 new unit tests (discover cost-time/summary, POST /device, device/page+tree, catalogs, launcher page, join/check/delete) ; E2E-9 covers the same flow against the live server. Unit 22/22 PASS; E2E 9/9 PASS.
+- Confidence: CONFIRMED (live verify: 0 404s, 0 fallbacks for those routes, real ONVIF identity returned)
+
+## EV-074 - E-025: auto-register bug fix (DVRIP/DHIP) + real P2P/Easy4IP reachability
+- Date: 2026-11-01 - root cause found in the ARS TCP server; P2P/Easy4IP measured from the server
+- AUTO-REGISTER BUG: createARSTCPServer sliced \uffer = buffer.subarray(totalLen)\ and THEN called parseRegisterPayload(buffer.subarray(32, 32+payloadLen)), i.e. it parsed the payload from an already-advanced buffer, so the register payload was garbage and auto-registered devices never appeared. Fixed by capturing the packet before advancing (payload = packet.subarray(32, totalLen)), and registerArsDevice() now puts the device into the same registry as manual adds (so /ars/list, /tree/devices, /tree/channels, /device/page and the statistics agree).
+- Verified with a real DVRIP frame (32-byte LE header magic "DHIP", cmd 0x0001, payload deviceId\0 name\0 u16 type u16 chans ip\0 u16 port user\0 pass\0 mac[6] fw\0): the server answers REGISTER_ACK 0x8001 with the echoed sequence and the device shows up in /ars/list + /tree/devices (E2E-8, 9/9 PASS).
+- P2P/Easy4IP measured from 10.10.20.120 (endpoints recovered from DPSDK.dll CP2PServerManager::GetDeviceInfoFromEasy4IP / UICommonMdl::CEasy4IPServer::QueryEasy4IPDevice):
+  - DNS resolves all five: www.easy4ip.com 47.253.80.249, www.easy4ipcloud.com 152.32.199.10, www.dahuap2p.com 47.98.190.1, www.dahuap2pcloud.com 47.98.234.36, p2p.myeasyip.com 35.169.170.49.
+  - TCP 80/443 OPEN for www.easy4ip.com, www.dahuap2p.com, p2p.myeasyip.com; BLOCKED for the two *cloud.com hosts from this network (outbound rule/firewall, not a code bug).
+  - SOAP getDeviceByDevSequence answers HTTP 400 for a malformed serial and HTTP 200 with an EMPTY <return></return> for a well-formed serial (the operator camera serial SENTINEL_8021) -> that serial is NOT published on the Dahua P2P cloud.
+- Implemented honestly: /brms/api/v1.0/p2p/status lists the real endpoints; /brms/api/v1.0/p2p/reachability measures DNS+TCP live; /brms/api/v1.0/p2p/easy4ip/probe?sn=... performs the real SOAP lookup; /brms/api/v1.0/device/p2p-register does the real lookup and returns p2pStatus "registered" (with ipAddress) or "unresolved" with the actual cause, never a simulated success.
+- Confidence: CONFIRMED (live measurements from the server; the camera must be registered on Easy4IP with its serial and the DSS server must share that P2P account before the cloud resolves it)

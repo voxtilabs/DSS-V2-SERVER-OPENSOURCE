@@ -593,3 +593,85 @@ curl -sk "https://10.10.20.120:1443/brms/api/v1.1/definition/channel-capability/
 curl -sk "https://10.10.20.120:1443/brms/api/v1.1/server/available/list"
 curl -sk "https://10.10.20.120:1443/brms/api/v1.1/config/snmp/protocol/manufacturer/list"
 ```
+
+## 24. E-025: QT/CEF bridge, device add/discovery and P2P (verified live 2026-11-01)
+
+### 24.1 Web <-> native bridge (recovered from CefRender.exe / PluginFactory.dll / real bundles)
+
+| Direction | API | Notes |
+|---|---|---|
+| web -> native | `window.ClientObject.MainCall(method, param, callbackName)` | injected by CefRender.exe; `param` is a JSON **string** ('' when none) |
+| native -> web | `window.webAPICaller(callbackName or action, jsonPayloadString)` | literal JS in the DLLs: `window.webAPICaller('%1','%2')` |
+| token | `MainCall('getToken','',cbId)` -> `webAPICaller(cbId,{token,resourceToken})` | the production launcher ALWAYS does this when the URL carries no token |
+| module hand-off | `MainCall('switchMenuTab', JSON.stringify({menuCode,pluginName,menuName,externData}), cbId)` | parsed by CWebBusinessControl::OnMainCall; native then emits `webAPICaller('changeRoute',{"router":...})` |
+| other native methods | `openVedio`, `openRecord`, `closeWebPage`, `addSite`, `delSite`, `updateSiteToken`, `clientCallback`, `getLocalConfig`, `getWebsocketPort`, `invokeClientNotify` | same dispatcher |
+
+### 24.2 Device add / discovery flow (client order, from useDeviceApi)
+
+```
+POST /brms/api/v1.1/device/discover/cost-time   {deviceIp,devicePort,protocolType,deviceCategory,deviceType,...}
+POST /brms/api/v1.1/device/discover/summary     {same body}
+POST /brms/api/v1.1/device                      {+ loginPass (md5), serverCode:"video#local", encoderChannelCount:1}
+GET  /brms/api/v1.1/device/page
+GET  /brms/api/v1.1/discover/device/page
+```
+
+Response shapes (`data`): `device` (DeviceVo) + `results[]` + `channels[]` with `channelId = <deviceCode>$<no>$0$0`;
+`cost-time` -> `{costTime,costTimeMs,totalTime,deviceCount,online,results[]}`; `summary` -> identity fields + `online/status/deviceStatus/errorCode/errorMsg`.
+
+### 24.3 Real ONVIF probe (GetDeviceInformation)
+
+```http
+POST http://<ip>:<port>/onvif/device_service HTTP/1.1
+Content-Type: application/soap+xml; charset=utf-8
+
+<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <env:Body><tds:GetDeviceInformation/></env:Body>
+</env:Envelope>
+```
+
+Live result for the lab camera 192.168.0.238:8021: Manufacturer `AI Sentinel`, Model `EBA1_LECTOR_FHD_H265`, FirmwareVersion `2.1.0-H265`, SerialNumber `SENTINEL_8021`, HardwareId `1.0` (3-4 ms).
+
+### 24.4 Auto register (DVRIP/DHIP) TCP 9500
+
+Frame = 32-byte LE header (magic `DHIP` = 0x44484950, cmd, seq, payloadLen, ...) + payload:
+`deviceId\0 deviceName\0 u16 deviceType u16 channelCount ip\0 u16 port user\0 pass\0 mac[6] fw\0`.
+
+Server answers `REGISTER_ACK` (0x8001) echoing the sequence; the device then appears in `/brms/api/v1.0/ars/list`, `/brms/api/v1.0/tree/devices`, `/brms/api/v1.1/device/page` and the category statistics.
+
+### 24.5 P2P / Easy4IP (endpoints from DPSDK.dll; reachability measured from 10.10.20.120)
+
+```
+POST http://www.easy4ip.com/webservice/GetDeviceInterface?wsdl
+Content-Type: text/xml; charset=UTF-8
+
+<soap:Envelope xmlns:soap='http://schemas.xmlsoap.org/soap/envelope/'><soap:Body>
+<ns2:getDeviceByDevSequence xmlns:ns2='http://webservice.ddns.dahua.com/'><devSequence>SERIAL</devSequence></ns2:getDeviceByDevSequence>
+</soap:Body></soap:Envelope>
+```
+
+| Host | DNS | TCP 80 | TCP 443 |
+|---|---|---|---|
+| www.easy4ip.com | 47.253.80.249 | OPEN | OPEN |
+| www.easy4ipcloud.com | 152.32.199.10 | blocked | blocked |
+| www.dahuap2p.com | 47.98.190.1 | OPEN | OPEN |
+| www.dahuap2pcloud.com | 47.98.234.36 | blocked | blocked |
+| p2p.myeasyip.com | 35.169.170.49 | OPEN | OPEN |
+
+Serial answers: HTTP 400 for a malformed serial; HTTP 200 with an **empty `<return></return>`** for the lab camera serial -> that serial is not published on the Dahua cloud, so P2P cannot resolve it until the camera is registered on Easy4IP and the server shares that P2P account.
+
+### 24.6 Verification commands
+
+```bash
+# launcher bridge contract
+curl -sk https://10.10.20.120:1443/web/client-module/ | grep -E "ClientObject.MainCall|getToken|switchMenuTab"
+# device add flow
+BODY='{"deviceIp":"192.168.0.238","devicePort":8021,"protocolType":99,"deviceCategory":1,"deviceType":6,"deviceName":"EBA1","serverCode":"video#local","encoderChannelCount":1}'
+curl -sk -X POST https://10.10.20.120:1443/brms/api/v1.1/device/discover/summary -H 'Content-Type: application/json' -d "$BODY"
+curl -sk -X POST https://10.10.20.120:1443/brms/api/v1.1/device -H 'Content-Type: application/json' -d "$BODY"
+# catalogs / p2p
+curl -sk https://10.10.20.120:1443/brms/api/v1.1/system/network/list
+curl -sk https://10.10.20.120:1443/brms/api/v1.1/device/statistics/count-by-device-category/list
+curl -sk -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/list
+```
+
