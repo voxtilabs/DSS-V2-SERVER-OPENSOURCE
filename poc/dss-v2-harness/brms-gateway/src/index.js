@@ -288,53 +288,49 @@ app.post('/videoService/accounts/authorize', async (req, reply) => {
   return envelope({ token, duration: 86400 });
 });
 
-// Version endpoint for DSS Client V8 - supports multiple client versions (V8.006, V8.008, V8.009)
-app.get('/videoService/version', async (req) => {
-  const ua = req.headers['user-agent'] || '';
-  // Default to V8.008 which is widely compatible
-  const versions = {
-    'V8.006': { version: 'V8.006.0000000.0', buildDate: '2025-03-25', buildNumber: 'R.20250325' },
-    'V8.008': { version: 'V8.008.0000000.0', buildDate: '2026-09-30', buildNumber: 'R.20260930' },
-    'V8.009': { version: 'V8.009.0000000.0', buildDate: '2026-10-15', buildNumber: 'R.20261015' }
-  };
-  
-  // Try to detect client version from User-Agent
-  let selectedVersion = versions['V8.008']; // Default to V8.008 (most common)
-  for (const [key, val] of Object.entries(versions)) {
-    if (ua.includes(key.replace('.', ''))) {
-      selectedVersion = val;
-      break;
-    }
+// ===== VERSION / PLATFORM INFO (pre-login contract, DSS Desktop Client WINPC_V2) =====
+// Real DSS platform format: V<major>.<minor>.0000000.0.R.<yyyymmdd>.<epoch-seconds>
+// The desktop client compares its own version against data.version; a mismatch makes it
+// abort with "Client Version does not match" BEFORE sending the authorize handshake.
+const CLIENT_VERSIONS = {
+  '8.000': 'V8.000.0000000.0.R.20210506.1742860800',
+  '8.002': 'V8.002.0000000.0.R.20221222.1742860800',
+  '8.004': 'V8.004.0000000.0.R.20240622.1742860800',
+  '8.006': 'V8.006.0000000.0.R.20250325.1742860800',
+  '8.008': 'V8.008.0000000.0.R.20260326.1774533954',
+  '8.009': 'V8.009.0000000.0.R.20261015.1774533954'
+};
+// Default pinned to the deployed desktop client (DSS Client 8.006.0000000).
+const DEFAULT_SERVER_VERSION = process.env.DSS_PROTOCOL_VERSION || CLIENT_VERSIONS['8.006'];
+
+function selectPlatformVersion(req) {
+  // 1) explicit query hint (?clientVersion=8.006 / V8.006...)
+  // 2) User-Agent scan (desktop client sends no version; other consumers may)
+  // 3) env default pinned to the deployed client fleet
+  let probe = String((req.query && (req.query.clientVersion || req.query.version)) || '');
+  if (!probe) probe = String(req.headers['user-agent'] || '');
+  for (const [k, v] of Object.entries(CLIENT_VERSIONS)) {
+    if (probe.includes('V' + k) || probe.includes(k.replace('.', ''))) return v;
   }
-  
-  return envelope({
-    version: selectedVersion.version,
-    buildDate: selectedVersion.buildDate,
-    buildNumber: selectedVersion.buildNumber,
-    productName: 'DSS Ultimate',
-    protocolVersion: '1.0'
-  });
-});
+  return DEFAULT_SERVER_VERSION;
+}
 
-// Upgrade check endpoint - supports multiple versions
-app.get('/v1.1/upgrade/check/upgradeable', async (req) => {
-  const ua = req.headers['user-agent'] || '';
-  let selectedVersion = 'V8.008.0000000.0';
-  if (ua.includes('V8006')) selectedVersion = 'V8.006.0000000.0';
-  else if (ua.includes('V8009')) selectedVersion = 'V8.009.0000000.0';
-  
-  return envelope({
-    upgradeable: false,
-    version: selectedVersion,
-    downloadUrl: '',
-    releaseNote: ''
-  });
-});
+app.get('/videoService/version', async (req) => envelope({ version: selectPlatformVersion(req) }));
 
-// Initialize status endpoint
-app.get('/brms/api/v1.1/account/initialize/status', { preHandler: auth }, async () => envelope({
+// Upgrade check endpoint - never forces an upgrade; mirrors the platform version
+app.get('/v1.1/upgrade/check/upgradeable', async (req) => envelope({
+  upgradeable: false,
+  version: selectPlatformVersion(req),
+  downloadUrl: '',
+  releaseNote: ''
+}));
+
+// Initialize status: PUBLIC pre-login endpoint in real DSS. The desktop client queries it
+// without a token before authorize; a 401 makes the client abort with
+// "failed to establish the service address link".
+app.get('/brms/api/v1.1/account/initialize/status', async () => envelope({
   initialized: true,
-  status: 'completed'
+  status: 'FINISHED'
 }));
 
 function auth(req, reply, done) {
