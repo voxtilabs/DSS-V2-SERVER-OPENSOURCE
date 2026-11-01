@@ -485,6 +485,47 @@ for (const p of INIT_PATHS) {
   });
 }
 
+// ===== ADMIN/API RPC DISPATCHER (BRM.* family, method-in-body, E-018) =====
+// Observed client call:
+//   POST /admin/API/BRM/Config/GetMqConfig
+//   {clientType, clientMac, clientPushId, project:"PSDK",
+//    method:"BRM.Config.GetMqConfig", data:{optional:""}}
+// The DPSDK parser of the response (0x180a488e0) exposes the exact keys:
+//   method, SessionId, UseMqFlag, MQConfig, MQUser, MQPwd, UserId, GroupId,
+//   SSLEnable, UnSSLPort, CertificatePath, ProtocolVersion, TopicInfos.
+// UseMqFlag=0 keeps the client on its HTTP event path instead of connecting to
+// an MQTT broker we do not run yet. `info` is the observed wrapper key; we
+// return it both at root level and inside data (dual-key strategy).
+function rpcEnvelope(method, data) {
+  return { code: 1000, desc: 'Success', method, info: data, data };
+}
+
+async function brmRpcHandler(req) {
+  const b = req.body || {};
+  const method = b.method || `BRM.${req.params.ns}.${req.params.fn}`;
+  if (method === 'BRM.Config.GetMqConfig') {
+    return rpcEnvelope(method, {
+      method,
+      SessionId: String(b.clientPushId || ''),
+      UseMqFlag: 0,
+      MQConfig: '',
+      MQUser: '',
+      MQPwd: '',
+      UserId: '1',
+      GroupId: '',
+      SSLEnable: 0,
+      UnSSLPort: 0,
+      CertificatePath: '',
+      ProtocolVersion: 0,
+      TopicInfos: []
+    });
+  }
+  return rpcEnvelope(method, {});
+}
+
+app.post('/admin/API/BRM/:ns/:fn', brmRpcHandler);
+app.post('/admin/api/BRM/:ns/:fn', brmRpcHandler);
+
 function auth(req, reply, done) {
   const token = req.headers['x-subject-token'];
   if (!token || !TOKENS.has(token)) return reply.code(401).send(envelope(null, 401, 'unauthorized'));
