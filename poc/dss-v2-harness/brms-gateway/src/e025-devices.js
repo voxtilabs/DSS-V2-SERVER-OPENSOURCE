@@ -373,8 +373,11 @@ export function buildDeviceAddPayload(body, identity = {}) {
   const channels = [];
   for (let i = 1; i <= created.channelNum; i++) channels.push(channelVo(created, i));
   // results[] is what the web SPA reads (E-024 shape discovery); device is the
-  // single object the native DPSDK parser walks.
+  // single object the native DPSDK parser walks. Include every alias the
+  // client may walk so it doesn't time out waiting for a field it expects.
   return {
+    code: 1000,
+    desc: 'Success',
     results: [created],
     list: [created],
     device: created,
@@ -386,8 +389,30 @@ export function buildDeviceAddPayload(body, identity = {}) {
     deviceIp: created.deviceIp,
     devicePort: created.devicePort,
     protocolType: created.protocolType,
+    protocolName: created.protocolName,
     deviceCategory: created.deviceCategory,
+    deviceType: created.deviceType,
+    manufacturer: created.manufacturer,
+    model: created.model,
+    firmwareVersion: created.firmwareVersion,
+    serialNumber: created.serialNumber,
+    hardwareId: created.hardwareId,
     serverCode: created.serverCode,
+    orgCode: created.orgCode,
+    channelNum: created.channelNum,
+    encoderChannelCount: created.encoderChannelCount,
+    alarmInNum: created.alarmInNum,
+    alarmOutNum: created.alarmOutNum,
+    diskNum: created.diskNum,
+    status: created.status,
+    online: created.online,
+    isOnline: created.isOnline,
+    isOnLine: created.isOnLine,
+    deviceStatus: created.deviceStatus,
+    collected: created.collected,
+    createTime: created.createTime,
+    updateTime: created.updateTime,
+    source: created.source,
     channels,
     channelList: channels,
     channelCount: channels.length,

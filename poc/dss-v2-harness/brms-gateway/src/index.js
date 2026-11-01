@@ -1033,7 +1033,32 @@ const addDeviceHandler = async (req) => {
     online: probe.online !== false, manufacturer: identity.manufacturer, model: identity.model,
     serial: identity.serialNumber, costTimeMs: probe.costTimeMs
   }));
-  return envelope(buildDeviceAddPayload(req.body || {}, identity));
+  const result = buildDeviceAddPayload(req.body || {}, identity);
+  const created = result.device || result.results?.[0];
+  // E-025: broadcast a device-added event over WS so the client doesn't time out
+  // waiting for a confirmation that never arrives over plain HTTP.
+  try {
+    const wsMsg = JSON.stringify({
+      type: 'DEVICE_ADDED',
+      deviceCode: created?.deviceCode,
+      deviceId: created?.deviceId || created?.deviceCode,
+      deviceName: created?.deviceName,
+      deviceIp: created?.deviceIp,
+      devicePort: created?.devicePort,
+      protocolType: created?.protocolType,
+      deviceCategory: created?.deviceCategory,
+      deviceType: created?.deviceType,
+      channelNum: created?.channelNum,
+      online: created?.online,
+      timestamp: Date.now()
+    });
+    for (const ws of WS_CLIENTS) {
+      if (ws.readyState === 1) { ws.send(wsMsg); }
+    }
+  } catch (err) {
+    console.log('[E025-ADD] WS broadcast failed:', err.message);
+  }
+  return envelope(result);
 };
 app.post('/brms/api/v1.1/device', addDeviceHandler);
 app.post('/brms/api/v1.0/device', addDeviceHandler);
