@@ -288,25 +288,48 @@ app.post('/videoService/accounts/authorize', async (req, reply) => {
   return envelope({ token, duration: 86400 });
 });
 
-// Version endpoint for DSS Client V8
-app.get('/videoService/version', async () => envelope({
-  version: 'V8.008.0000000.0',
-  buildDate: '2026-09-30',
-  buildNumber: 'R.20260930',
-  productName: 'DSS Ultimate',
-  protocolVersion: '1.0'
-}));
+// Version endpoint for DSS Client V8 - supports multiple client versions (V8.006, V8.008, V8.009)
+app.get('/videoService/version', async (req) => {
+  const ua = req.headers['user-agent'] || '';
+  // Default to V8.008 which is widely compatible
+  const versions = {
+    'V8.006': { version: 'V8.006.0000000.0', buildDate: '2025-03-25', buildNumber: 'R.20250325' },
+    'V8.008': { version: 'V8.008.0000000.0', buildDate: '2026-09-30', buildNumber: 'R.20260930' },
+    'V8.009': { version: 'V8.009.0000000.0', buildDate: '2026-10-15', buildNumber: 'R.20261015' }
+  };
+  
+  // Try to detect client version from User-Agent
+  let selectedVersion = versions['V8.008']; // Default to V8.008 (most common)
+  for (const [key, val] of Object.entries(versions)) {
+    if (ua.includes(key.replace('.', ''))) {
+      selectedVersion = val;
+      break;
+    }
+  }
+  
+  return envelope({
+    version: selectedVersion.version,
+    buildDate: selectedVersion.buildDate,
+    buildNumber: selectedVersion.buildNumber,
+    productName: 'DSS Ultimate',
+    protocolVersion: '1.0'
+  });
+});
 
-// Keepalive for videoService
-app.post('/videoService/accounts/keepalive', { preHandler: auth }, async () => envelope({ success: true }));
-
-// Upgrade check endpoint
-app.get('/v1.1/upgrade/check/upgradeable', async () => envelope({
-  upgradeable: false,
-  version: 'V8.008.0000000.0',
-  downloadUrl: '',
-  releaseNote: ''
-}));
+// Upgrade check endpoint - supports multiple versions
+app.get('/v1.1/upgrade/check/upgradeable', async (req) => {
+  const ua = req.headers['user-agent'] || '';
+  let selectedVersion = 'V8.008.0000000.0';
+  if (ua.includes('V8006')) selectedVersion = 'V8.006.0000000.0';
+  else if (ua.includes('V8009')) selectedVersion = 'V8.009.0000000.0';
+  
+  return envelope({
+    upgradeable: false,
+    version: selectedVersion,
+    downloadUrl: '',
+    releaseNote: ''
+  });
+});
 
 // Initialize status endpoint
 app.get('/brms/api/v1.1/account/initialize/status', { preHandler: auth }, async () => envelope({
