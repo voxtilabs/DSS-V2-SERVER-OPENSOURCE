@@ -268,6 +268,52 @@ app.post('/brms/api/v1.0/accounts/authorize', async (req, reply) => {
   return envelope({ token, duration: 86400 });
 });
 
+// DSS Client V8 compatible endpoints (videoService API)
+app.post('/videoService/accounts/authorize', async (req, reply) => {
+  const { userName, randomKey, signature, clientType, challengeKey } = req.body;
+  if (userName && !randomKey && !signature) {
+    const rk = genRandomKey();
+    const key = 'pending-' + Date.now();
+    PENDING.set(key, { realm: REALM, randomKey: rk, expires: Date.now() + 60000 });
+    return reply.code(401).send(envelope({ realm: REALM, randomKey: rk, challengeKey: key }, 401, 'Unauthorized'));
+  }
+  const pending = PENDING.get(challengeKey);
+  if (!pending || pending.randomKey !== randomKey) return reply.code(401).send(envelope(null, 401, 'invalid challenge'));
+  const temp = doubleMd5(userName, 'admin123');
+  const expected = makeSig(userName, REALM, temp, randomKey);
+  if (signature !== expected) return reply.code(401).send(envelope(null, 401, 'bad signature'));
+  const token = genToken();
+  TOKENS.set(token, { userName, expires: Date.now() + 86400000 });
+  PENDING.delete(challengeKey);
+  return envelope({ token, duration: 86400 });
+});
+
+// Version endpoint for DSS Client V8
+app.get('/videoService/version', async () => envelope({
+  version: 'V8.008.0000000.0',
+  buildDate: '2026-09-30',
+  buildNumber: 'R.20260930',
+  productName: 'DSS Ultimate',
+  protocolVersion: '1.0'
+}));
+
+// Keepalive for videoService
+app.post('/videoService/accounts/keepalive', { preHandler: auth }, async () => envelope({ success: true }));
+
+// Upgrade check endpoint
+app.get('/v1.1/upgrade/check/upgradeable', async () => envelope({
+  upgradeable: false,
+  version: 'V8.008.0000000.0',
+  downloadUrl: '',
+  releaseNote: ''
+}));
+
+// Initialize status endpoint
+app.get('/brms/api/v1.1/account/initialize/status', { preHandler: auth }, async () => envelope({
+  initialized: true,
+  status: 'completed'
+}));
+
 function auth(req, reply, done) {
   const token = req.headers['x-subject-token'];
   if (!token || !TOKENS.has(token)) return reply.code(401).send(envelope(null, 401, 'unauthorized'));
