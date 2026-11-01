@@ -55,12 +55,16 @@ app.addHook('onResponse', async (req, reply) => {
 const REALM = process.env.REALM || 'DSS-V2-LAB';
 const PORT = parseInt(process.env.PORT || '11443', 10);
 const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '1443', 10);
+const HTTPS_PORT_2 = parseInt(process.env.HTTPS_PORT_2 || '9443', 10);
 const RTSP_PORT = parseInt(process.env.RTSP_PORT || '9100', 10);
 const ARS_PORT = parseInt(process.env.ARS_PORT || '9500', 10);
+const SIP_PORT = parseInt(process.env.SIP_PORT || '5080', 10);
 const PUBLIC_HOST = process.env.PUBLIC_HOST || '127.0.0.1';
 const MEDIAMTX_URL = process.env.MEDIAMTX_URL || 'rtsp://mediamtx:8554';
 const SSL_KEY = process.env.SSL_KEY || '/certs/key.pem';
 const SSL_CERT = process.env.SSL_CERT || '/certs/cert.pem';
+const SSL_KEY_2 = process.env.SSL_KEY_2 || '/certs/key.pem';
+const SSL_CERT_2 = process.env.SSL_CERT_2 || '/certs/cert_9443.pem';
 const USE_HTTPS = process.env.HTTPS === 'true';
 
 const TOKENS = new Map();
@@ -825,10 +829,104 @@ async function start() {
       createWebSocketServer(httpsServer);
     }
 
+    // Second HTTPS Server on port 9443 (Production DSS Server port)
+    let httpsServer2 = null;
+    if (USE_HTTPS && fs.existsSync(SSL_CERT_2)) {
+      httpsServer2 = https.createServer({
+        key: fs.readFileSync(SSL_KEY_2),
+        cert: fs.readFileSync(SSL_CERT_2)
+      }, async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) { chunks.push(chunk); }
+        const body = Buffer.concat(chunks).toString('utf8');
+        try {
+          const response = await app.inject({ method: req.method, url: req.url, payload: body, headers: req.headers });
+          res.statusCode = response.statusCode;
+          Object.entries(response.headers).forEach(([k, v]) => res.setHeader(k, v));
+          res.end(response.body);
+        } catch (err) {
+          console.error('HTTPS 9443 proxy error:', err);
+          res.statusCode = 500; res.end('Internal Server Error');
+        }
+      });
+
+      await new Promise((resolve, reject) => {
+        const server = httpsServer2.listen(HTTPS_PORT_2, '0.0.0.0', () => {
+          console.log(`BRMS Gateway listening on https://0.0.0.0:${HTTPS_PORT_2} (Production port)`);
+          resolve();
+        });
+        server.on('error', reject);
+      });
+      createWebSocketServer(httpsServer2);
+    }
+
     // Start ARS TCP Server (DVRIP/DHIP on port 9500)
     console.log('[DEBUG] Starting ARS TCP Server on port', ARS_PORT);
     createARSTCPServer();
     console.log('[DEBUG] ARS TCP Server creation returned');
+
+    // SIP UDP 5080 Server (DSS Client intercom/voice registration)
+    const sipUdp = dgram.createSocket('udp4');
+    sipUdp.on('message', (msg, rinfo) => {
+      const text = msg.toString().trim();
+      console.log(`[SIP UDP 5080] ${rinfo.address}:${rinfo.port} -> ${text.substring(0, 200)}`);
+      
+      if (text.includes('REGISTER') && text.includes('SIP/2.0')) {
+        // Parse SIP REGISTER request
+        const lines = text.split('\r\n');
+        const requestLine = lines[0];
+        const headers = {};
+        let callId = '';
+        let fromTag = '';
+        let toTag = '';
+        let via = '';
+        let contact = '';
+        let cseq = '';
+        
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.startsWith('Via:')) via = line.substring(4).trim();
+          else if (line.startsWith('From:')) {
+            const match = line.match(/tag=([^;>]+)/);
+            if (match) fromTag = match[1];
+          } else if (line.startsWith('To:')) {
+            // We'll add a tag in response
+          } else if (line.startsWith('Call-ID:')) callId = line.substring(8).trim();
+          else if (line.startsWith('CSeq:')) cseq = line.substring(5).trim();
+          else if (line.startsWith('Contact:')) contact = line.substring(8).trim();
+        }
+        
+        // Generate response tag
+        const respTag = crypto.randomBytes(8).toString('hex');
+        
+        // Build SIP 200 OK response
+        const response = [
+          'SIP/2.0 200 OK',
+          `Via: ${via};received=${rinfo.address};branch=z9hG4bK${crypto.randomBytes(8).toString('hex')}`,
+          `From: <sip:8888881000@${PUBLIC_HOST}>;tag=${fromTag}`,
+          `To: <sip:8888881000@${PUBLIC_HOST}>;tag=${respTag}`,
+          `Call-ID: ${callId}`,
+          `CSeq: ${cseq}`,
+          `Contact: <sip:8888881000@${PUBLIC_HOST}:${SIP_PORT};transport=udp>`,
+          'Expires: 3600',
+          'Content-Length: 0',
+          '', ''
+        ].join('\r\n');
+        
+        sipUdp.send(response, rinfo.port, rinfo.address, (err) => {
+          if (err) console.log('[SIP] Response error:', err.message);
+          else console.log(`[SIP] 200 OK sent to ${rinfo.address}:${rinfo.port}`);
+        });
+      }
+    });
+    
+    sipUdp.on('error', (err) => {
+      console.error('[SIP UDP] Error:', err.message);
+    });
+    
+    sipUdp.bind(SIP_PORT, '0.0.0.0', () => {
+      console.log(`SIP UDP Server listening on 0.0.0.0:${SIP_PORT}`);
+    });
 
     const udp = dgram.createSocket('udp4');
     udp.on('message', (msg, rinfo) => {

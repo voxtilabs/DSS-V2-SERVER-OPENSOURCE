@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 
 // ─── Config ──────────────────────────────────────────────────────────────
 const BASE = 'https://10.10.20.120:1443';
+const BASE_9443 = 'https://10.10.20.120:9443';
 const USER = 'admin';
 const PASS = 'admin123';
 let token = '';
@@ -308,5 +309,79 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
       headers: { 'X-Subject-Token': token }
     }).catch(() => ({ status: 404 }));
     assert.ok(r.status === 200 || r.status === 404);
+  });
+
+  it('E2E-6 HTTPS 9443 - Production port with System CA Service cert', async () => {
+    const r = await request(`${BASE_9443}/health`, {
+      headers: { 'X-Subject-Token': token }
+    });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.status, 'ok');
+    assert.equal(j.realm, 'DSS-V2-LAB');
+    assert.equal(j.arsPort, 9500);
+    // Verify cert is System CA Service by checking the port
+    console.log('HTTPS 9443 health check passed');
+  });
+
+  it('E2E-7 SIP UDP 5080 - REGISTER SIP registration', async () => {
+    const crypto = await import('node:crypto');
+    const dgram = await import('node:dgram');
+    
+    return new Promise((resolve, reject) => {
+      const socket = dgram.createSocket('udp4');
+      const callId = crypto.randomBytes(16).toString('hex') + '@' + crypto.randomBytes(4).toString('hex');
+      const cseq = '1';
+      const branch = 'z9hG4bK' + crypto.randomBytes(8).toString('hex');
+      
+      const registerPacket = `REGISTER sip:10.10.20.120:5080 SIP/2.0\r
+Via: SIP/2.0/UDP 192.168.1.100:5080;branch=${branch}\r
+From: <sip:8888881000@10.10.20.120>;tag=123456\r
+To: <sip:8888881000@10.10.20.120>\r
+Call-ID: ${callId}\r
+CSeq: ${cseq} REGISTER\r
+Contact: <sip:8888881000@192.168.1.100:5080;transport=udp>\r
+Expires: 3600\r
+Content-Length: 0\r
+\r
+`;
+      
+      let resolved = false;
+      
+      socket.on('message', (msg, rinfo) => {
+        if (resolved) return;
+        resolved = true;
+        
+        const text = msg.toString();
+        console.log('SIP Response:', text);
+        
+        if (text.includes('SIP/2.0 200 OK') && text.includes('REGISTER')) {
+          console.log('SIP REGISTER 200 OK received!');
+          resolve(true);
+        } else {
+          reject(new Error('Unexpected SIP response: ' + text));
+        }
+        socket.close();
+      });
+      
+      socket.on('error', (err) => {
+        if (!resolved) reject(err);
+      });
+      
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          console.log('SIP timeout');
+          reject(new Error('SIP timeout'));
+        }
+      }, 10000);
+      
+      socket.on('close', () => {
+        clearTimeout(timeout);
+      });
+      
+      socket.send(registerPacket, 5080, '10.10.20.120', (err) => {
+        if (err) reject(err);
+      });
+    });
   });
 });

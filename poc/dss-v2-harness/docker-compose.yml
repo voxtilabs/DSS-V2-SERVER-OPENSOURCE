@@ -5,9 +5,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "1443:1443"
+      - "9443:9443"
       - "11443:11443"
       - "18800:18800/udp"
       - "19800:19800/udp"
+      - "5080:5080/udp"
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
     volumes:
       - ../certs:/certs:ro
@@ -15,12 +17,16 @@ services:
       - PORT=11443
       - HTTPS=true
       - HTTPS_PORT=1443
+      - HTTPS_PORT_2=9443
       - SSL_KEY=/certs/key.pem
       - SSL_CERT=/certs/cert.pem
+      - SSL_KEY_2=/certs/key_9443.pem
+      - SSL_CERT_2=/certs/cert_9443.pem
       - REALM=DSS-V2-LAB
       - PUBLIC_HOST=10.10.20.120
       - RTSP_PORT=9100
       - ARS_PORT=9500
+      - SIP_PORT=5080
       - MEDIAMTX_URL=rtsp://mediamtx:8554
     networks:
       - dss-network
