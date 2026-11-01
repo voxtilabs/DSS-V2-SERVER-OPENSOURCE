@@ -31,14 +31,23 @@ app.addHook('onRequest', async (req, reply) => {
       'user-agent': req.headers['user-agent'],
       host: req.headers.host
     },
-    query: req.query,
-    body: req.body
+    query: req.query
   };
-  
+
   console.log('[REQ]', JSON.stringify(logEntry));
-  
+
   // Store for response logging
   req.logEntry = logEntry;
+});
+
+// req.body is parsed after onRequest, so bodies are captured here ([REQ-BODY]).
+// This is how we discover the client's exact authorize contract
+// (encryptType / digestPassword / publicKey field names) on the next run.
+app.addHook('preValidation', async (req) => {
+  if (req.body !== undefined) {
+    req.logEntry.body = req.body;
+    console.log('[REQ-BODY]', JSON.stringify({ method: req.method, url: req.url, body: req.body }));
+  }
 });
 
 app.addHook('onResponse', async (req, reply) => {
@@ -244,49 +253,90 @@ function makeSig(user, realm, temp, randomKey) { return md5(md5(`${user}:${realm
 function genToken() { return crypto.randomBytes(32).toString('hex'); }
 function genRandomKey() { return crypto.randomBytes(16).toString('hex'); }
 
+// RSA keypair generated in memory at boot and handed to the client through the
+// 401 challenge (publicKey field). Never written to disk or the repo
+// (ADR-0003/0004). generateKeyPairSync with both encodings returns PEM strings.
+const SERVER_RSA = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' }
+});
+const SERVER_PUB_PEM = SERVER_RSA.publicKey;
+
 function envelope(data, code = 1000, desc = 'Success') {
   return { code, desc, data };
 }
 
 // ===== AUTH =====
-app.post('/brms/api/v1.0/accounts/authorize', async (req, reply) => {
-  const { userName, randomKey, signature, clientType, challengeKey } = req.body;
-  if (userName && !randomKey && !signature) {
-    const rk = genRandomKey();
-    const key = 'pending-' + Date.now();
-    PENDING.set(key, { realm: REALM, randomKey: rk, expires: Date.now() + 60000 });
-    return reply.code(401).send(envelope({ realm: REALM, randomKey: rk, challengeKey: key }, 401, 'Unauthorized'));
-  }
-  const pending = PENDING.get(challengeKey);
-  if (!pending || pending.randomKey !== randomKey) return reply.code(401).send(envelope(null, 401, 'invalid challenge'));
-  const temp = doubleMd5(userName, 'admin123');
-  const expected = makeSig(userName, REALM, temp, randomKey);
-  if (signature !== expected) return reply.code(401).send(envelope(null, 401, 'bad signature'));
+// Authorize-200 contract (DPSDK Account.User.SecondLogin parser): data.token is
+// the only required key; real DSS also mirrors the SecondLogin key cluster
+// (versionInfo{updateUrl,patchUrl,lastVersion}, serviceAbilty, loginIpChanged,
+// passwordRemainValidityPeriod, ...). Unknown keys are ignored by the client.
+function buildLoginSuccess(userName) {
   const token = genToken();
   TOKENS.set(token, { userName, expires: Date.now() + 86400000 });
-  PENDING.delete(challengeKey);
-  return envelope({ token, duration: 86400 });
-});
+  return {
+    token,
+    duration: 86400,
+    userId: '1',
+    versionInfo: { updateUrl: '', patchUrl: '', lastVersion: DEFAULT_SERVER_VERSION },
+    lastLoginIp: '',
+    loginIpChanged: '0',
+    passwordRemainValidityPeriod: '0',
+    enablePasswordValidityPeriod: '0',
+    tokenRate: '0',
+    serviceAbilty: '',
+    emapUrl: '',
+    sipNum: '',
+    sipPassword: ''
+  };
+}
 
-// DSS Client V8 compatible endpoints (videoService API)
-app.post('/videoService/accounts/authorize', async (req, reply) => {
-  const { userName, randomKey, signature, clientType, challengeKey } = req.body;
-  if (userName && !randomKey && !signature) {
-    const rk = genRandomKey();
-    const key = 'pending-' + Date.now();
-    PENDING.set(key, { realm: REALM, randomKey: rk, expires: Date.now() + 60000 });
-    return reply.code(401).send(envelope({ realm: REALM, randomKey: rk, challengeKey: key }, 401, 'Unauthorized'));
+function purgeExpiredPending() {
+  for (const [k, v] of PENDING) if (Date.now() > v.expires) PENDING.delete(k);
+}
+
+// Strict mock handshake (e2e / harness): userName-only -> 401 challenge, then a
+// signature over md5(md5(user:realm:md5(md5(pwd)))):randomKey. Real-client
+// bodies (encryptType/digestPassword shape) are accepted deliberately — the
+// exact digest formula is still being captured via [REQ-BODY] logging, and a
+// hard rejection would leave the client stuck instead of revealing the field
+// names in the next trace.
+async function authorizeHandler(req, reply) {
+  const b = req.body || {};
+  const strict = b.userName && b.challengeKey && b.randomKey && b.signature && PENDING.has(b.challengeKey);
+  if (strict) {
+    const pending = PENDING.get(b.challengeKey);
+    if (pending && pending.randomKey === String(b.randomKey)) {
+      const temp = doubleMd5(String(b.userName), 'admin123');
+      const expected = makeSig(String(b.userName), REALM, temp, String(b.randomKey));
+      if (String(b.signature) === expected) {
+        PENDING.delete(b.challengeKey);
+        return envelope(buildLoginSuccess(String(b.userName)));
+      }
+    }
+    return reply.code(401).send(envelope(null, 401, 'bad signature'));
   }
-  const pending = PENDING.get(challengeKey);
-  if (!pending || pending.randomKey !== randomKey) return reply.code(401).send(envelope(null, 401, 'invalid challenge'));
-  const temp = doubleMd5(userName, 'admin123');
-  const expected = makeSig(userName, REALM, temp, randomKey);
-  if (signature !== expected) return reply.code(401).send(envelope(null, 401, 'bad signature'));
-  const token = genToken();
-  TOKENS.set(token, { userName, expires: Date.now() + 86400000 });
-  PENDING.delete(challengeKey);
-  return envelope({ token, duration: 86400 });
-});
+  // LoginFirstTime: challenge request (no digest/signature yet). The 401 data
+  // contract per the DPSDK parser is {encryptType, randomKey, publicKey, realm}:
+  // encryptType starting with "MD5" selects the digest path; anything else
+  // selects RSA against publicKey. challengeKey is our legacy harness field
+  // (extra keys are ignored by the client parser — dual-key strategy).
+  if (b.userName && !b.signature && !b.digestPassword) {
+    purgeExpiredPending();
+    const rk = genRandomKey();
+    const key = 'pending-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+    PENDING.set(key, { realm: REALM, randomKey: rk, expires: Date.now() + 60000 });
+    return reply.code(401).send(envelope({
+      realm: REALM, randomKey: rk, encryptType: 'MD5', publicKey: SERVER_PUB_PEM, challengeKey: key
+    }, 401, 'Unauthorized'));
+  }
+  // LoginSecondTime: accept the client's digest/MAC as-is and mint a session.
+  return envelope(buildLoginSuccess(String(b.userName || 'admin')));
+}
+
+app.post('/brms/api/v1.0/accounts/authorize', authorizeHandler);
+app.post('/videoService/accounts/authorize', authorizeHandler);
 
 // ===== VERSION / PLATFORM INFO (pre-login contract, DSS Desktop Client WINPC_V2) =====
 // Real DSS platform format: V<major>.<minor>.0000000.0.R.<yyyymmdd>.<epoch-seconds>
@@ -296,7 +346,7 @@ const CLIENT_VERSIONS = {
   '8.000': 'V8.000.0000000.0.R.20210506.1742860800',
   '8.002': 'V8.002.0000000.0.R.20221222.1742860800',
   '8.004': 'V8.004.0000000.0.R.20240622.1742860800',
-  '8.006': 'V8.006.0000000.0.R.20250325.1742860800',
+  '8.006': 'V8.006.0000000.0.R.20250307.1741354948',
   '8.008': 'V8.008.0000000.0.R.20260326.1774533954',
   '8.009': 'V8.009.0000000.0.R.20261015.1774533954'
 };
@@ -315,7 +365,27 @@ function selectPlatformVersion(req) {
   return DEFAULT_SERVER_VERSION;
 }
 
-app.get('/videoService/version', async (req) => envelope({ version: selectPlatformVersion(req) }));
+app.get('/videoService/version', async (req) => {
+  const softwareVersion = selectPlatformVersion(req);
+  // DPSDK CheckServerType parser (RestLogicaVSL.cpp). data.platform decides the
+  // server type: "DSS Enterprise"=1, "DSS Express"=3, "DSS 4004S2"=4, anything
+  // else=2 (DSS Pro default). data.softwareVersion -> platformVersion (About
+  // dialog). data.protocolVersion must be "1.0.1" (code 101) or "1.1.0"
+  // (code 110); any other value degrades the client to protocol code 0.
+  // securityVersion/patchVersion/compatVersion/baseVersion/copyright are
+  // parsed-and-logged only. The legacy `version` key stays for our harness.
+  return envelope({
+    version: softwareVersion,
+    platform: 'DSS Pro',
+    softwareVersion,
+    protocolVersion: '1.1.0',
+    copyright: 'Copyright © 2020 Zhejiang Dahua Technology Co., Ltd.',
+    patchVersion: '',
+    baseVersion: '',
+    compatVersion: '',
+    securityVersion: ''
+  });
+});
 
 // Upgrade check endpoint - never forces an upgrade; mirrors the platform version
 app.get('/v1.1/upgrade/check/upgradeable', async (req) => envelope({
@@ -325,13 +395,75 @@ app.get('/v1.1/upgrade/check/upgradeable', async (req) => envelope({
   releaseNote: ''
 }));
 
-// Initialize status: PUBLIC pre-login endpoint in real DSS. The desktop client queries it
-// without a token before authorize; a 401 makes the client abort with
+// Initialize status: PUBLIC pre-login endpoint in real DSS. The desktop client
+// queries it without a token before authorize; a 401 makes the client abort with
 // "failed to establish the service address link".
+// DPSDK GetUserPWDState: pIsModifyed = (strcmp(data.status, "1") == 0) —
+// "1" means the default admin password is already modified, so the client skips
+// the first-run wizard (initialize + question/list flow) and goes to login.
 app.get('/brms/api/v1.1/account/initialize/status', async () => envelope({
   initialized: true,
-  status: 'FINISHED'
+  status: '1'
 }));
+
+// ===== SECURITY / WIZARD CHAIN (RAM-only, exercised when the wizard runs) =====
+const SECURITY_QUESTIONS = [
+  { questionId: '1', description: 'What is your mother\'s surname?' },
+  { questionId: '2', description: 'Which was your first school?' },
+  { questionId: '3', description: 'Which is your favorite city?' }
+];
+// Wizard-set passwords never leave process memory (ADR-0003/0004).
+const PASSWORD_STORE = new Map();
+
+// question/list (Dpsdk::CDpsdkManager::GetUserQuestionList): items are
+// [{questionId:"<N>" (string, atoi'd), description:"..."}]; a randomKey
+// companion field is expected alongside the list. Both `questionList` and
+// `list` wrappers are provided (dual-key strategy).
+const QUESTION_LIST_PATHS = [
+  '/brms/api/v1.1/account/security/question/list',
+  '/brms/api/v1.1/account/question/list',
+  '/brms/api/v1.0/account/security/question/list',
+  '/brms/api/v1.0/security/question/list'
+];
+for (const p of QUESTION_LIST_PATHS) {
+  app.get(p, async () => envelope({ questionList: SECURITY_QUESTIONS, list: SECURITY_QUESTIONS, randomKey: genRandomKey() }));
+}
+
+// public-key/generate (DPSDK UpdatePublicKey/VerifyFirstTime): the response must
+// carry a randomKey (string); we mirror the server public key as well.
+const PUBKEY_PATHS = [
+  '/brms/api/v1.1/account/public-key/generate',
+  '/brms/api/v1.0/account/public-key/generate',
+  '/brms/api/v1.1/public-key/generate',
+  '/brms/api/v1.0/public-key/generate'
+];
+for (const p of PUBKEY_PATHS) {
+  app.post(p, async () => envelope({ randomKey: genRandomKey(), publicKey: SERVER_PUB_PEM }));
+}
+
+// Remaining wizard-chain stubs (secret delivery / password check / answers).
+// Exact response shapes are still unknown — kept minimal with code 1000.
+const WIZARD_SUFFIXES = ['secret/deliver', 'password/check', 'question/answer'];
+const WIZARD_BASES = ['/brms/api/v1.1/account/', '/brms/api/v1.0/account/', '/brms/api/v1.1/accounts/', '/brms/api/v1.0/accounts/'];
+for (const base of WIZARD_BASES) {
+  for (const suffix of WIZARD_SUFFIXES) {
+    app.post(base + suffix, async () => envelope({ success: true }));
+  }
+  app.get(base + 'password/check', async () => envelope({ success: true }));
+}
+
+// account/initialize (wizard finish): stash the chosen password in RAM only.
+const INIT_PATHS = [
+  '/brms/api/v1.1/account/initialize', '/brms/api/v1.0/account/initialize',
+  '/brms/api/v1.1/accounts/initialize', '/brms/api/v1.0/accounts/initialize'
+];
+for (const p of INIT_PATHS) {
+  app.post(p, async (req) => {
+    const b = req.body || {};
+    if (b.userName) PASSWORD_STORE.set(String(b.userName), String(b.password ?? ''));
+    return envelope({ status: '1' });
+  });
+}
 
 function auth(req, reply, done) {
   const token = req.headers['x-subject-token'];
@@ -873,6 +1005,7 @@ async function start() {
         const chunks = [];
         for await (const chunk of req) { chunks.push(chunk); }
         const body = Buffer.concat(chunks).toString('utf8');
+        if (body) console.log('[REQ-RAW-BODY]', JSON.stringify({ url: req.url, body: body.slice(0, 4000) }));
         try {
           const response = await app.inject({ method: req.method, url: req.url, payload: body, headers: req.headers });
           res.statusCode = response.statusCode;
@@ -904,6 +1037,7 @@ async function start() {
         const chunks = [];
         for await (const chunk of req) { chunks.push(chunk); }
         const body = Buffer.concat(chunks).toString('utf8');
+        if (body) console.log('[REQ-RAW-BODY]', JSON.stringify({ url: req.url, body: body.slice(0, 4000) }));
         try {
           const response = await app.inject({ method: req.method, url: req.url, payload: body, headers: req.headers });
           res.statusCode = response.statusCode;
