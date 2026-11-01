@@ -337,6 +337,11 @@ async function authorizeHandler(req, reply) {
 
 app.post('/brms/api/v1.0/accounts/authorize', authorizeHandler);
 app.post('/videoService/accounts/authorize', authorizeHandler);
+// Real client path (observed via [REQ-BODY], E-017): the Qt stack of the DSS
+// desktop client logs in through the admin API base with
+// {userName, ipAddress, clientType} — the same DPSDK LoginFirstTime chain.
+app.post('/admin/API/accounts/authorize', authorizeHandler);
+app.post('/admin/api/accounts/authorize', authorizeHandler);
 
 // ===== VERSION / PLATFORM INFO (pre-login contract, DSS Desktop Client WINPC_V2) =====
 // Real DSS platform format: V<major>.<minor>.0000000.0.R.<yyyymmdd>.<epoch-seconds>
@@ -388,11 +393,26 @@ app.get('/videoService/version', async (req) => {
 });
 
 // Upgrade check endpoint - never forces an upgrade; mirrors the platform version
-app.get('/v1.1/upgrade/check/upgradeable', async (req) => envelope({
-  upgradeable: false,
-  version: selectPlatformVersion(req),
-  downloadUrl: '',
-  releaseNote: ''
+function upgradeableHandler(req) {
+  return envelope({
+    upgradeable: false,
+    version: selectPlatformVersion(req),
+    downloadUrl: '',
+    releaseNote: ''
+  });
+}
+// The DPSDK stack probes /v1.1/upgrade/... while the Qt stack probes the same
+// check under /brms/api/v1.1/upgrade/... (observed [REQ] E-017).
+app.get('/v1.1/upgrade/check/upgradeable', upgradeableHandler);
+app.get('/brms/api/v1.1/upgrade/check/upgradeable', upgradeableHandler);
+
+// Config-service environment probe from the Qt pre-login flow (observed with
+// body {}). Exact result shape unknown — code 1000 with pass keys; the client
+// tolerates extra fields.
+app.post('/cfgs/api/v1.1/system/environment/runtime/check', async () => envelope({
+  result: 'pass',
+  status: 'ok',
+  pass: true
 }));
 
 // Initialize status: PUBLIC pre-login endpoint in real DSS. The desktop client
@@ -473,15 +493,25 @@ function auth(req, reply, done) {
   req.user = t; done();
 }
 
-app.post('/brms/api/v1.0/accounts/keepalive', { preHandler: auth }, async () => envelope({ success: true }));
-app.get('/brms/api/v1.0/accounts/current', { preHandler: auth }, async (req) => envelope({
-  token: req.headers['x-subject-token'],
-  userId: '1',
-  username: req.user.userName,
-  userType: '1',
-  topLevel: '1'
-}));
-app.post('/brms/api/v1.0/accounts/unauthorize', { preHandler: auth }, async (req) => { TOKENS.delete(req.headers['x-subject-token']); return envelope({ success: true }); });
+async function keepaliveHandler() { return envelope({ success: true }); }
+async function currentHandler(req) {
+  return envelope({
+    token: req.headers['x-subject-token'],
+    userId: '1',
+    username: req.user.userName,
+    userType: '1',
+    topLevel: '1'
+  });
+}
+async function unauthorizeHandler(req) { TOKENS.delete(req.headers['x-subject-token']); return envelope({ success: true }); }
+
+app.post('/brms/api/v1.0/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
+app.get('/brms/api/v1.0/accounts/current', { preHandler: auth }, currentHandler);
+app.post('/brms/api/v1.0/accounts/unauthorize', { preHandler: auth }, unauthorizeHandler);
+// Mirrors on the admin API base (client Qt stack may call these after login).
+app.post('/admin/API/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
+app.get('/admin/API/accounts/current', { preHandler: auth }, currentHandler);
+app.post('/admin/API/accounts/unauthorize', { preHandler: auth }, unauthorizeHandler);
 
 // ===== BOOTSTRAP ENDPOINTS (called after login) =====
 app.get('/brms/api/v1.0/accounts/menus', { preHandler: auth }, async () => envelope({
