@@ -525,6 +525,75 @@ async function brmRpcHandler(req) {
 
 app.post('/admin/API/BRM/:ns/:fn', brmRpcHandler);
 app.post('/admin/api/BRM/:ns/:fn', brmRpcHandler);
+// Same RPC family probed under the /brms/api prefix (observed 404 E-019).
+app.post('/brms/api/BRM/:ns/:fn', brmRpcHandler);
+app.get('/brms/api/BRM/:ns/:fn', brmRpcHandler);
+
+// ===== E-019: post-login bootstrap unblocks (all observed 404 in live trace) =====
+
+// Service status probes: /admin/API/server/serviceStatus/DA_SCS, DA_POC, ...
+app.get('/admin/API/server/serviceStatus/:svc', async (req) => envelope({
+  svc: String(req.params.svc),
+  status: 'online',
+  serviceStatus: 'online',
+  state: 'online',
+  online: true
+}));
+
+// Device/org tree for the Qt stack (the "failed to get device data" blocker).
+const TREE_ORG = { orgCode: '001', orgName: 'Root Org', parentOrgCode: '0', pOrgCode: '0', orgType: '0', sort: 1, deviceNum: 1, childCount: 0, status: 1 };
+const TREE_DEVICE = {
+  deviceCode: 'CAM001', deviceName: 'Mock Camera 01', deviceType: 2, type: 2,
+  ip: '127.0.0.1', port: 37777, manufacturer: 'Dahua', model: 'MockIPC',
+  protocol: 'Dahua', status: 1, online: 1, orgCode: '001'
+};
+const TREE_CHANNELS = [{
+  channelId: '1000171$1$0$0', channelName: 'Mock Camera 01', deviceCode: 'CAM001',
+  channelType: 1, channelNo: 1, orgCode: '001', status: 1, online: 1,
+  videoEncode: 'H.265', audioEncode: '', ptz: 0, audio: 0, record: 0
+}];
+app.get('/admin/API/tree/deviceOrg', async () => envelope({
+  orgList: [TREE_ORG],
+  deviceList: [TREE_DEVICE],
+  channelList: TREE_CHANNELS
+}));
+
+// Menu availability (~"failed to get menu"): role-independent menu list.
+const ADMIN_MENUS = [
+  { menuId: '100', menuName: 'Monitoring Center', parentId: '0', sort: 1, icon: 'monitor', url: '/realtime' },
+  { menuId: '200', menuName: 'Event Center', parentId: '0', sort: 2, icon: 'event', url: '/event' },
+  { menuId: '300', menuName: 'Intelligent Analysis', parentId: '0', sort: 3, icon: 'intel', url: '/analysis' },
+  { menuId: '400', menuName: 'Access Management', parentId: '0', sort: 4, icon: 'access', url: '/access' },
+  { menuId: '500', menuName: 'Parking Lot', parentId: '0', sort: 5, icon: 'parking', url: '/parking' },
+  { menuId: '600', menuName: 'Maintenance Center', parentId: '0', sort: 6, icon: 'maintenance', url: '/maintenance' }
+];
+app.get('/brms/api/v1.1/menu/available/list', async () => envelope({ menuList: ADMIN_MENUS, list: ADMIN_MENUS }));
+
+// System / config endpoints (shape unknown -> benign empties + dual keys).
+app.get('/brms/api/v1.1/config/function', async () => envelope({ monitor: 1, playback: 1, siraEnable: 0 }));
+app.get('/brms/api/v1.1/config/sira', async () => envelope({ siraEnable: 0, enable: false, status: '0' }));
+app.get('/brms/api/v1.1/config/feature-analyse', async () => envelope({ enable: false, list: [] }));
+app.get('/brms/api/v1.1/config/device-login-model', async () => envelope({ list: [], total: 0 }));
+app.get('/brms/api/v1.1/config/interface/common/timeout', async () => envelope({ timeout: 300 }));
+app.get('/brms/api/v1.1/time-template/list', async () => envelope({ list: [], total: 0 }));
+app.get('/brms/api/v1.1/alarm/plan/alarm-type/list', async () => envelope({ list: [] }));
+app.get('/brms/api/v1.1/vtalk/sip/online/list', async () => envelope({ list: [] }));
+app.get('/admin/API/config/videoIntercom', async () => envelope({ enable: 0, openState: '0' }));
+
+// Licenses + system self-check warnings (all benign: no disk/license issues).
+app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [] }));
+app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [] }));
+app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [] }));
+app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [] }));
+app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ warning: 0, list: [] }));
+app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ warning: 0, list: [] }));
+
+// Access (OBMS) + parking (IPMS) empty modules.
+app.get('/obms/api/v1.1/acp/area/list', async () => envelope({ list: [], total: 0 }));
+app.get('/obms/api/v1.1/acs/person-group/list', async () => envelope({ list: [], total: 0 }));
+app.get('/ipms/api/v1.1/organization/list', async () => envelope({ list: [], total: 0 }));
+app.get('/ipms/api/v1.1/parking-lot/detail/list', async () => envelope({ list: [], total: 0 }));
+app.get('/IPMS/API/entrance/parking-lot/binding-vto-itc', async () => envelope({ list: [], count: 0 }));
 
 function auth(req, reply, done) {
   const token = req.headers['x-subject-token'];
