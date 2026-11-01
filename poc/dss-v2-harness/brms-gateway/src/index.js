@@ -8,6 +8,15 @@ import net from 'node:net';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+// E-024: Dahua DSS v1.1 catalog contracts (device categories, access
+// protocols, manufacturers, channel capabilities). Evidence in the module.
+import {
+  DAHUA_AVAILABLE_SERVERS,
+  DAHUA_CHANNEL_CAPABILITIES,
+  DAHUA_SNMP_MANUFACTURERS,
+  buildDeviceTypeResults,
+  buildDictionaryResults
+} from './e024-catalogs.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,7 +43,12 @@ app.addHook('onRequest', async (req, reply) => {
     query: req.query
   };
 
-  console.log('[REQ]', JSON.stringify(logEntry));
+  // E-024: Highlight dictionary/category/protocol/type requests
+  const url = req.url || '';
+  const isDictReq = /dictionary|category|protocol|manufacturer|device.type|channel.type|encode|connect.mode|alarm.type|protocol.type|device.status/i.test(url);
+  const prefix = isDictReq ? '[DICT-REQ]' : '[REQ]';
+  
+  console.log(prefix, JSON.stringify(logEntry));
 
   // Store for response logging
   req.logEntry = logEntry;
@@ -46,7 +60,10 @@ app.addHook('onRequest', async (req, reply) => {
 app.addHook('preValidation', async (req) => {
   if (req.body !== undefined) {
     req.logEntry.body = req.body;
-    console.log('[REQ-BODY]', JSON.stringify({ method: req.method, url: req.url, body: req.body }));
+    const url = req.url || '';
+    const isDictReq = /dictionary|category|protocol|manufacturer|device.type|channel.type|encode|connect.mode|alarm.type|protocol.type|device.status/i.test(url);
+    const prefix = isDictReq ? '[DICT-BODY]' : '[REQ-BODY]';
+    console.log(prefix, JSON.stringify({ method: req.method, url: req.url, body: req.body }));
   }
 });
 
@@ -262,6 +279,51 @@ const SERVER_RSA = crypto.generateKeyPairSync('rsa', {
   publicKeyEncoding: { type: 'spki', format: 'pem' }
 });
 const SERVER_PUB_PEM = SERVER_RSA.publicKey;
+
+// ===== E-023: COMPLETE master menu catalog (E-022 + MainFormPlugin/PluginFactory/real-index.js) =====
+// 158 VALID Dahua menu codes (6-12 digits, prefixes 001-004,010,011).
+// Source: 000003.ldb (151 real) + MainFormPlugin.dll strings + PluginFactory.dll exports + real-index.js catalog.
+// E-023 FIX: REAL_FORBIDDEN_MENUS = [] ALWAYS (no filtering — admin user sees all).
+// E-023 FIX: REAL_FUNCTION_CONFIG = ALL KEYS ENABLED (1/true) — nothing hidden.
+const REAL_MENU_RIGHTS = [
+  "001001","001001001","001001002","001002","001002001","001002002",
+  "001003","001003001","001003002","001003003","001003004",
+  "002001","002001001","002001002","002001003","002001003001","002001003002","002001003003","002001004",
+  "002002","002003","002003001","002003002",
+  "002004","002004001","002004002",
+  "002005","002005001","002005002","002005002001","002005002002","002005003","002005003001","002005003002",
+  "002006","002006001","002006002","002006003","002006004","002006005","002006007",
+  "002007","002007001",
+  "002008","002008001","002008001001","002008001002","002008001003","002008002","002008002001","002008002002","002008003","002008004","002008005",
+  "002009","002009001","002009001001","002009001002","002009001003","002009001004","002009002","002009002001","002009002002","002009003",
+  "002010","002010001","002010002",
+  "002011","002011001","002011001001","002011001002","002011002","002011002001","002011003",
+  "002012","002012001","002012002","002012003",
+  "002013",
+  "002015","002015001",
+  "003001","003001001","003002","003003","003004","003005",
+  "004001","004001001","004001001001","004001001002","004001002","004001003","004001005",
+  "004002","004002001","004002002","004002004","004002005","004002005001","004002005002",
+  "004003","004003001","004003002001",
+  "004004","004004001","004004002","004004002002","004004002003","004004002004","004004003","004004003001","004004003003",
+  "004005","004005001","004005001001","004005001002","004005001003","004005001004","004005001005",
+  "004005002","004005002001","004005002002","004005002003",
+  "004005003","004005003001","004005003002",
+  "004005004","004005004001","004005004002",
+  "004005005","004005006","004005007","004005008","004005009","004005010",
+  "004006","004006001","004006002",
+  "004007","004007001","004007001001","004007001002","004007002","004007003","004007004",
+  "004008",
+  "010001","010001001","010001002","010001003","010001004",
+  "010002","010002001","010002002","010002003",
+  "011001","011002"
+];
+const REAL_FORBIDDEN_MENUS = [];
+// E-023: ALL functionConfig keys ENABLED (1/true) — nothing hidden from admin
+const REAL_FUNCTION_CONFIG = {
+  "visitor-appointment":1,"parking-lot-layer-enable":1,"channel-bind-audio":1,"displayP2PModule":1,"config-message-store-visitor":1,"import-export-person":1,"search-mpt":1,"license-upgrade-from-express-to-pro":1,"storage-incident":1,"storage-raid":1,"domain-user-sync":1,"config-message-store-video-intercom":1,"system":1,"config-message-store-people-counting":1,"person-freeze-operation-enable":1,"global-inter-door-lock":1,"parking-record":1,"link-ip-speaker":1,"config-types":"271,156,333,136,158,137,159,138,117,139,118,119,120,121,143,144,166,145,3,146,168,300,4,147,345,5,324,108,10002,10006,21","config-active-directory":1,"call-mode":1,"event-alarm-config-on-the-wall":1,"gis-map":1,"module-liftcontroll":1,"config-parking-lot-ext":1,"channel-record-plan":1,"config-message-store-pos":1,"config-email-server":1,"app-register-qrcode":1,"config-network-device-protocol":1,"module-entrance":1,"license-activation-status":1,"config-cardNo-enable":1,"acupick-support":1,"access-rule":1,"jiuzhou-protocol":1,"config-message-store-heatmap":1,"hot-standby-tip":1,"global-anti-passback":1,"snmp-protocol":1,"authentication-protocol":1,"config-message-store-face-recognition":1,"config-message-store-anpr":1,"config-message-store-vehicle":1,"config-message-store-crowd":1,"config-message-store-smoking":1,"config-message-store-fire":1,"config-message-store-license-plate":1
+};
+const MODULES_DEFAULT_MENU = {"002001":"002001001"};
 
 function envelope(data, code = 1000, desc = 'Success') {
   return { code, desc, data };
@@ -517,9 +579,44 @@ function rpcEnvelope(method, data) {
 // RAM only - no persistence, no secrets.
 const USER_FILES = new Map();
 
+// ===== E-024: catalog payload builder shared by REST and BRMS RPC routes =====
+// The native Qt client can reach the same catalogs through the BRMS RPC
+// transport (DPSDK method names found in its string pool:
+// BRMS.Dictionary.GetDictionaries / BRMS.Definition.GetDeviceTypes /
+// BRMS.Definition.GetChannelCapabilities / BRMS.Config.GetSnmpManufacturers).
+function e024CatalogPayload(method, body) {
+  const rawTypes = body?.types ?? body?.data?.types ?? '';
+  if (method === 'BRMS.Dictionary.GetDictionaries' || method === 'BRM.Dictionary.GetDictionaries') {
+    const results = buildDictionaryResults(rawTypes);
+    const flat = results.flatMap((r) => r.items.map((i) => ({ type: r.type, ...i })));
+    return { results, items: results, list: flat, total: flat.length };
+  }
+  if (method === 'BRMS.Definition.GetDeviceTypes' || method === 'BRM.Definition.GetDeviceTypes') {
+    const results = buildDeviceTypeResults();
+    return { results, items: results, list: results, deviceTypes: results, total: results.length };
+  }
+  if (method === 'BRMS.Definition.GetChannelCapabilities' || method === 'BRM.Definition.GetChannelCapabilities') {
+    const results = DAHUA_CHANNEL_CAPABILITIES;
+    return { results, items: results, list: results, channelCapabilities: results, total: results.length };
+  }
+  if (method === 'BRMS.Config.GetSnmpManufacturers' || method === 'BRM.Config.GetSnmpManufacturers') {
+    const results = DAHUA_SNMP_MANUFACTURERS;
+    return { results, items: results, list: results, snmpManufacturerList: results, total: results.length };
+  }
+  if (method === 'BRMS.Server.GetAvailableServers' || method === 'BRM.Server.GetAvailableServers') {
+    const results = DAHUA_AVAILABLE_SERVERS;
+    return { results, items: results, list: results, serverList: results, total: results.length };
+  }
+  return null;
+}
+
 async function brmRpcHandler(req) {
   const b = req.body || {};
   const method = b.method || `BRM.${req.params.ns}.${req.params.fn}`;
+  // E-024: catalog methods over the RPC transport.
+  const catalog = e024CatalogPayload(method, b);
+  if (catalog) return rpcEnvelope(method, catalog);
+
   if (method === 'BRM.Config.GetMqConfig') {
     return rpcEnvelope(method, {
       method,
@@ -540,8 +637,8 @@ async function brmRpcHandler(req) {
 
   // ===== E-021: RPC shapes (parsers contracted via REA/DPSDK + live trace) =====
   // GetMenuRights registrar row: menuType / forbiddenMenus / menuRights
-  // (DPSDK string pool 0x180cd6f08).
-  if (method === 'BRM.User.GetMenuRights') return rpcEnvelope(method, { menuType: Number((b.data && b.data.menuType) || 2), menuRights: [], rights: [], menuList: [], forbiddenMenus: [], count: 0 });
+  // (DPSDK string pool 0x180cd6f08). E-022: serve REAL menuRights from leveldb.
+  if (method === 'BRM.User.GetMenuRights') return rpcEnvelope(method, { menuType: Number((b.data && b.data.menuType) || 2), menuRights: REAL_MENU_RIGHTS, rights: REAL_MENU_RIGHTS, menuList: REAL_MENU_RIGHTS, forbiddenMenus: REAL_FORBIDDEN_MENUS, count: REAL_MENU_RIGHTS.length });
   // GetChannelsCount parser reads int `count` (DPSDK 0x1800d3ed0).
   if (method === 'BRM.User.GetChannelsCount') return rpcEnvelope(method, { count: 1 });
   // GetUserFunctions parser reads `functions` (DPSDK 0x1800e2500); empty list =
@@ -555,7 +652,8 @@ async function brmRpcHandler(req) {
   if (method === 'BRM.Linked.GetLinkedChannels') return rpcEnvelope(method, { mainList: [], mainType: 0, subList: [], linkedChannels: [] });
   if (method === 'BRM.Config.GetEmapInfo') return rpcEnvelope(method, { emapInfo: {}, enable: 0, maps: [], list: [] });
   // GetFunctionConfig expects an XML out-param (pInfoXml in DPSDK).
-  if (method === 'BRM.Config.GetFunctionConfig') return rpcEnvelope(method, { infoXml: '<FunctionConfig/>', xml: '<FunctionConfig/>', siraEnable: 0 });
+  // E-022: serve REAL functionConfig from leveldb (dual-key wrapper + siraEnable).
+  if (method === 'BRM.Config.GetFunctionConfig') return rpcEnvelope(method, { infoXml: JSON.stringify(REAL_FUNCTION_CONFIG), xml: JSON.stringify(REAL_FUNCTION_CONFIG), siraEnable: 0, ...REAL_FUNCTION_CONFIG });
   // User data files: SaveUserData(data.fileName, data.fileData) stores the
   // blob; GetUserData(data.fileName) echoes it. Observed live: webfav.xml,
   // quickcmd.xml, siteInfo.xml (hex payload).
@@ -581,6 +679,21 @@ async function brmRpcHandler(req) {
 
 app.post('/admin/API/BRM/:ns/:fn', brmRpcHandler);
 app.post('/admin/api/BRM/:ns/:fn', brmRpcHandler);
+// E-024: 3-segment BRMS RPC family (BRMS.Dictionary.GetDictionaries, ...).
+app.post('/admin/API/BRM/:ns/:cls/:fn', async (req) => {
+  const b = req.body || {};
+  const method = b.method || `${req.params.ns}.${req.params.cls}.${req.params.fn}`;
+  const catalog = e024CatalogPayload(method, b);
+  if (catalog) return rpcEnvelope(method, catalog);
+  return brmRpcHandler(req);
+});
+app.post('/admin/api/BRM/:ns/:cls/:fn', async (req) => {
+  const b = req.body || {};
+  const method = b.method || `${req.params.ns}.${req.params.cls}.${req.params.fn}`;
+  const catalog = e024CatalogPayload(method, b);
+  if (catalog) return rpcEnvelope(method, catalog);
+  return brmRpcHandler(req);
+});
 // Same RPC family probed under the /brms/api prefix (observed 404 E-019).
 app.post('/brms/api/BRM/:ns/:fn', brmRpcHandler);
 app.get('/brms/api/BRM/:ns/:fn', brmRpcHandler);
@@ -652,7 +765,8 @@ const ADMIN_MENUS = [
 app.get('/brms/api/v1.1/menu/available/list', async () => envelope({ menuList: ADMIN_MENUS, list: ADMIN_MENUS }));
 
 // System / config endpoints (shape unknown -> benign empties + dual keys).
-app.get('/brms/api/v1.1/config/function', async () => envelope({ monitor: 1, playback: 1, siraEnable: 0 }));
+// E-022: serve REAL functionConfig from leveldb cache.
+app.get('/brms/api/v1.1/config/function', async () => envelope(REAL_FUNCTION_CONFIG));
 app.get('/brms/api/v1.1/config/sira', async () => envelope({ siraEnable: 0, enable: false, status: '0' }));
 app.get('/brms/api/v1.1/config/feature-analyse', async () => envelope({ enable: false, list: [] }));
 app.get('/brms/api/v1.1/config/device-login-model', async () => envelope({ list: [], total: 0 }));
@@ -692,12 +806,94 @@ app.get('/admin/API/tree/search', async () => envelope({ list: [TREE_DEVICE], to
 app.get('/emap/api/v1.1/map/vector', async () => envelope({ mapInfo: {}, vectorData: '', list: [] }));
 app.get('/emap/api/v1.1/map/raster/list', async () => envelope({ list: [], total: 0, rasterList: [] }));
 
-// Dictionary lookups (?types=22|2001|2055 ...): empty sets per requested type.
-app.get('/brms/api/v1.1/dictionary/list', async (req) => {
-  const types = String(req.query.types || '').split('|').filter(Boolean);
-  const per = {};
-  for (const t of types) per[t] = [];
-  return envelope({ ...per, list: [], dictionaryList: [] });
+// ===== E-024: REAL DAHUA DSS v1.1 CATALOG CONTRACTS =====
+// The DSS Client 8.006 does NOT hardcode the "Add Device" combo boxes: every
+// dropdown (Device Category / Access Protocol / Manufacturer / Device Type /
+// Channel Type) is built at runtime from the payloads below.
+//
+//   GET /brms/api/v1.1/dictionary/list?types=3,107
+//       -> data.results = [ {type:"3",items:[{code,name,param1,param2}]},
+//                           {type:"107",items:[{code,name}]} ]
+//   GET /brms/api/v1.1/definition/device-type/list
+//       -> data.results = [ {deviceCategory,deviceCategoryName,deviceTypeName,
+//                            deviceTypes:[{deviceType,deviceTypeName}]} ]
+//   GET /brms/api/v1.1/definition/channel-capability/list
+//       -> data.results = [ {code,name,group} ]
+//   GET /brms/api/v1.1/server/available/list
+//       -> data.results = [ {serverCode,serverName} ]
+//   GET /brms/api/v1.1/config/snmp/protocol/manufacturer/list
+//       -> data.results = [ {manufacturerCode,manufacturerName} ]
+//
+// Catalogs + evidence: ./e024-catalogs.js
+const dictionaryHandler = async (req) => {
+  const raw = req.query?.types ?? req.body?.types ?? '';
+  const results = buildDictionaryResults(raw);
+  const flat = results.flatMap((r) => r.items.map((i) => ({ type: r.type, ...i })));
+  return envelope({
+    results,
+    // flat alias: some native parsers walk data.items[] directly
+    items: flat,
+    list: flat,
+    total: flat.length
+  });
+};
+app.get('/brms/api/v1.1/dictionary/list', dictionaryHandler);
+app.post('/brms/api/v1.1/dictionary/list', dictionaryHandler);
+app.get('/brms/api/v1.0/dictionary/list', dictionaryHandler);
+app.post('/brms/api/v1.0/dictionary/list', dictionaryHandler);
+app.get('/admin/API/dictionary/list', dictionaryHandler);
+app.post('/admin/API/dictionary/list', dictionaryHandler);
+
+const deviceTypeHandler = async () => {
+  const results = buildDeviceTypeResults();
+  return envelope({ results, list: results, deviceTypes: results, total: results.length });
+};
+app.get('/brms/api/v1.1/definition/device-type/list', deviceTypeHandler);
+app.get('/brms/api/v1.0/definition/device-type/list', deviceTypeHandler);
+app.post('/brms/api/v1.1/definition/device-type/list', deviceTypeHandler);
+app.get('/admin/API/definition/device-type/list', deviceTypeHandler);
+
+const capabilityHandler = async () => {
+  const results = DAHUA_CHANNEL_CAPABILITIES;
+  return envelope({ results, list: results, channelCapabilities: results, total: results.length });
+};
+app.get('/brms/api/v1.1/definition/channel-capability/list', capabilityHandler);
+app.get('/brms/api/v1.0/definition/channel-capability/list', capabilityHandler);
+
+const availableServerHandler = async () => {
+  const results = DAHUA_AVAILABLE_SERVERS;
+  return envelope({ results, list: results, serverList: results, total: results.length });
+};
+app.get('/brms/api/v1.1/server/available/list', availableServerHandler);
+app.get('/brms/api/v1.0/server/available/list', availableServerHandler);
+
+const snmpManufacturerHandler = async () => {
+  const results = DAHUA_SNMP_MANUFACTURERS;
+  return envelope({ results, list: results, snmpManufacturerList: results, total: results.length });
+};
+app.get('/brms/api/v1.1/config/snmp/protocol/manufacturer/list', snmpManufacturerHandler);
+app.get('/brms/api/v1.0/config/snmp/protocol/manufacturer/list', snmpManufacturerHandler);
+
+// Convenience aliases (same data, list-only shape) for older native calls.
+app.get('/brms/api/v1.1/device/category', async () => {
+  const results = buildDeviceTypeResults();
+  return envelope({ results, list: results, total: results.length });
+});
+app.get('/brms/api/v1.1/access/protocol', async () => {
+  const results = buildDictionaryResults('3');
+  return envelope({ results, list: results[0].items, total: results[0].items.length });
+});
+app.get('/brms/api/v1.1/device/manufacturer', async () => {
+  const results = buildDictionaryResults('107');
+  return envelope({ results, list: results[0].items, total: results[0].items.length });
+});
+app.get('/brms/api/v1.1/definition/stream-type/list', async () => {
+  const results = [
+    { streamType: '1', streamTypeName: 'Main Stream' },
+    { streamType: '2', streamTypeName: 'Sub Stream' },
+    { streamType: '3', streamTypeName: 'Third Stream' }
+  ];
+  return envelope({ results, list: results, total: results.length });
 });
 
 // Alarm overview counters (mode=1 window) and account device overview.
@@ -738,6 +934,233 @@ app.get('/brms/api/v1.1/account/favorite/organization/share/unread/list', async 
 app.get('/brms/api/v1.1/monitor/view/share/unread/list', async () => envelope({ list: [], unreadCount: 0, pUnreadShareViewInfo: [] }));
 // latest/unhandled/record/list = GetHistoryAlarmRecords (7-day top-1000).
 app.get('/brms/api/v1.1/alarm/latest/unhandled/record/list', async () => envelope({ list: [], records: [], total: 0 }));
+
+// ===== E-022: Launcher web app (served by server, consumed by embedded CEF) =====
+// The CEF browser (CefView.dll + libcef.dll) loads QCommon::GetUrl -> "web/client-module"
+// with query: userId, locale, skin, logLevel. Qt injects localStorage.menuRights via
+// CWebViewFactory::AddMenuRightsToWeb (IUserManager vtable +0xd8 rights, +0xf8 forbidden).
+// The web app consumes: localStorage.menuRights, modulesDefaultMenu, localcfg, token.
+// Self-built page (no vendor code): reads localStorage, fetches tree orgs/devices/channels
+// + accounts/current with X-Subject-Token, renders tiles from real menu codes.
+
+// Root landing page: mirrors real server behavior - minimal HTML that calls urlInfo
+app.get('/', async (req, reply) => {
+  const host = req.headers.host || `localhost:${PORT}`;
+  reply.type('text/html; charset=utf-8');
+  return `<!DOCTYPE html>
+<html><body><div class="local" style="color:red"></div></body>
+<script>
+var Ajax = { get: function (url, fn) { var obj = new XMLHttpRequest(); obj.open('GET', url, true); obj.onreadystatechange = function () { if (obj.readyState === 4 && (obj.status === 200 || obj.status === 304)) { fn.call(this, obj.responseText); } }; obj.send(); } };
+Ajax.get('/admin/api/v1.1/domain/download/urlInfo', function(res) {
+  if (res) { try { var data = JSON.parse(res).data; if (data) window.location.href = data; else document.querySelector(".local").innerHTML = "Page not found, please contact the administrator!"; } catch(e) {} }
+});
+<\/script></html>`;
+});
+
+// urlInfo endpoint: real server returns {"code":1000,"desc":"Success","data":"https://host:1443/web/client-module/"}
+app.get('/admin/api/v1.1/domain/download/urlInfo', async (req) => {
+  const host = req.headers.host || `localhost:${PORT}`;
+  return envelope({ code: 1000, desc: 'Success', data: `https://${host}/web/client-module/` });
+});
+
+// Self-built launcher page at /web/client-module/ (CEF entry point)
+// Contract: reads localStorage.menuRights (injected by Qt), registers webAPICaller bridge,
+// fetches v1.0 tree/orgs, tree/devices, tree/channels, accounts/current with X-Subject-Token,
+// renders tiles keyed by REAL menu codes recovered from leveldb cache.
+app.get('/web/client-module/', async (req, reply) => {
+  reply.type('text/html; charset=utf-8');
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>DSS Client - Launcher</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f6fa;min-height:100vh;padding:20px}
+    .container{max-width:1200px;margin:0 auto}.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e1e4e8}
+    .title{font-size:24px;font-weight:600;color:#1a1a2e}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+    .tile{background:#fff;border:1px solid #e1e4e8;border-radius:8px;padding:20px;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;align-items:center;text-align:center;text-decoration:none;color:#1a1a2e}
+    .tile:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.1);border-color:#1890ff}.icon{width:48px;height:48px;margin-bottom:12px;display:flex;align-items:center;justify-content:center;background:#f0f5ff;border-radius:8px;color:#1890ff;font-size:24px}.name{font-size:14px;font-weight:500}.code{font-size:11px;color:#8c9196;margin-top:4px;font-family:monospace}
+    .status{margin-top:24px;padding:16px;background:#fff;border:1px solid #e1e4e8;border-radius:8px;font-size:13px;color:#595d64}
+  </style>
+</head><body>
+  <div class="container">
+    <div class="header"><div class="title">DSS Launcher</div></div>
+    <div class="grid" id="grid"></div>
+    <div class="status" id="status">Loading modules...</div>
+  </div>
+  <script>
+(function(){
+  // webAPICaller bridge (injected by Qt via UpdataToken / AddMenuRightsToWeb)
+  window.webAPICaller = function(action, payload) {
+    console.log('[webAPICaller]', action, payload);
+    if (action === 'updateToken') {
+      localStorage.setItem('token', payload.token);
+      localStorage.setItem('resourceToken', payload.resourceToken);
+      if (payload.language) localStorage.setItem('language', payload.language);
+      if (payload.userId) localStorage.setItem('userId', payload.userId);
+      if (payload.skin) localStorage.setItem('skin', payload.skin);
+      if (payload.displaytimezone) localStorage.setItem('displaytimezone', payload.displaytimezone);
+    } else if (action === 'menuRightsChange') {
+      // Qt notifies menu rights changed - reload from localStorage
+      renderTiles();
+    }
+  };
+  function parseMenuRights() {
+    try { return JSON.parse(localStorage.getItem('menuRights')) || {}; }
+    catch (e) { return {}; }
+  }
+  function getToken() { return localStorage.getItem('token') || ''; }
+  // ===== E-023: COMPLETE tile registry with Monitoring Center + all Settings =====
+  // Codes mapped from real server catalog + MainFormPlugin/PluginFactory strings.
+  // Native Qt modules (Monitoring Center, Playback, E-Map, TV Wall, etc.) are opened
+  // via webAPICaller('openNativeModule', {moduleCode, moduleName, modulePath}).
+  // Web modules (DeepXplore, Maintenance Center, etc.) use Vue router paths.
+  const TILE_REGISTRY = {
+    // 001000 - Resource Management
+    '001000': { name: 'Resource', icon: '🗂', native: true, moduleCode: '001000', moduleName: 'Resource Management' },
+    '001001': { name: 'Device', icon: '🖥', native: true, moduleCode: '001001', moduleName: 'Device Management' },
+    '001002': { name: 'User', icon: '👤', native: true, moduleCode: '001002', moduleName: 'User Management' },
+    '001003': { name: 'Storage', icon: '💾', native: true, moduleCode: '001003', moduleName: 'Storage Management' },
+    // 002000 - Event Center / Monitoring Center (NATIVE QT PLUGINS)
+    '002000': { name: 'Monitoring Center', icon: '📹', native: true, moduleCode: '002000', moduleName: 'Monitoring Center' },
+    '002001': { name: 'Live View', icon: '📺', native: true, moduleCode: '002001', moduleName: 'Live View', modulePath: '/liveView' },
+    '002001001': { name: 'Live View', icon: '📺', native: true, moduleCode: '002001001', moduleName: 'Live View', modulePath: '/liveView' },
+    '002001002': { name: 'Combined Event Rules', icon: '🔗', native: true, moduleCode: '002001002' },
+    '002001003': { name: 'Alarm Config', icon: '🔔', native: true, moduleCode: '002001003' },
+    '002001004': { name: 'Generic Event Config', icon: '⚙️', native: true, moduleCode: '002001004' },
+    '002002': { name: 'E-Map', icon: '🗺', native: true, moduleCode: '002002', moduleName: 'E-Map', modulePath: '/eMap' },
+    '002003': { name: 'Base Info', icon: '📋', native: true, moduleCode: '002003', moduleName: 'Base Info' },
+    '002004': { name: 'Control Library', icon: '📚', native: true, moduleCode: '002004', moduleName: 'Control Library' },
+    '002005': { name: 'Access Control', icon: '🚪', native: true, moduleCode: '002005', moduleName: 'Access Control', modulePath: '/accessControl/area' },
+    '002006': { name: 'Video Intercom', icon: '📞', native: true, moduleCode: '002006', moduleName: 'Video Intercom' },
+    '002007': { name: 'Attendance', icon: '📅', native: true, moduleCode: '002007', moduleName: 'Attendance' },
+    '002008': { name: 'Visitor', icon: '👥', native: true, moduleCode: '002008', moduleName: 'Visitor Management' },
+    '002009': { name: 'Parking Lot', icon: '🅿️', native: true, moduleCode: '002009', moduleName: 'Parking Lot' },
+    '002010': { name: 'Intelligence Analysis', icon: '🧠', native: true, moduleCode: '002010', moduleName: 'Intelligence Analysis' },
+    '002011': { name: 'Record Plan', icon: '📹', native: true, moduleCode: '002011', moduleName: 'Record Plan' },
+    '002012': { name: 'Maintenance Config', icon: '🔧', native: true, moduleCode: '002012', moduleName: 'Maintenance Config' },
+    '002013': { name: 'TV Wall', icon: '🖥', native: true, moduleCode: '002013', moduleName: 'TV Wall', modulePath: '/tvWall' },
+    '002015': { name: 'Visual Tracking', icon: '🎯', native: true, moduleCode: '002015', moduleName: 'Visual Tracking', modulePath: '/monitoringCenter/videoTrack' },
+    // 003000 - System / Cascade
+    '003000': { name: 'System', icon: '⚙️', native: true, moduleCode: '003000', moduleName: 'System Management' },
+    '003001': { name: 'Cascade', icon: '🔗', native: true, moduleCode: '003001', moduleName: 'Cascade' },
+    '003002': { name: 'License', icon: '📜', native: true, moduleCode: '003002', moduleName: 'License' },
+    '003003': { name: 'System Config', icon: '⚙️', native: true, moduleCode: '003003', moduleName: 'System Config' },
+    '003004': { name: 'Backup', icon: '💽', native: true, moduleCode: '003004', moduleName: 'Backup' },
+    '003005': { name: 'Third Party', icon: '🔌', native: true, moduleCode: '003005', moduleName: 'Third Party' },
+    // 004000 - Intelligent / DeepXplore / Maintenance Center / Access Center (WEB MODULES)
+    '004000': { name: 'Intelligent Center', icon: '🧠', native: false, moduleCode: '004000', moduleName: 'Intelligent Center' },
+    '004001': { name: 'Event History', icon: '📜', native: false, path: '/eventHistory' },
+    '004002': { name: 'Search Center', icon: '🔍', native: false, path: '/deepXplore/explorer' },
+    '004003': { name: 'DeepXplore', icon: '🔬', native: false, path: '/deepXplore/explorer' },
+    '004004': { name: 'Maintenance Center', icon: '🛠', native: false, path: '/maintenance/workbench' },
+    '004005': { name: 'Access Center', icon: '🏢', native: false, path: '/accessCenter' },
+    '004006': { name: 'Entrance Center', icon: '🚪', native: false, path: '/entranceCenter' },
+    '004007': { name: 'Intelligence Center', icon: '🧠', native: false, path: '/intelligenceCenter' },
+    '004008': { name: 'Face Recognition', icon: '👤', native: false, path: '/faceRecognition' },
+    // 010000 - Logs / Record Download
+    '010000': { name: 'Logs & Records', icon: '📝', native: true, moduleCode: '010000', moduleName: 'Logs & Records' },
+    '010001': { name: 'Logs', icon: '📝', native: true, moduleCode: '010001', moduleName: 'Logs', modulePath: '/logs' },
+    '010002': { name: 'Record Download', icon: '⬇️', native: true, moduleCode: '010002', moduleName: 'Record Download', modulePath: '/recordDownload' },
+    // 011000 - Web Applications
+    '011000': { name: 'Web Apps', icon: '🌐', native: false, moduleCode: '011000', moduleName: 'Web Applications' },
+    '011001': { name: 'Retail', icon: '🏪', native: false, path: '/webApp/retail' },
+    '011002': { name: 'Education', icon: '🎓', native: false, path: '/webApp/education' }
+  };
+  // Module prefixes that appear as parent tiles (6-digit prefix)
+  const MODULE_PREFIXES = ['001000','002000','003000','004000','010000','011000'];
+  // Native Qt module codes that should invoke webAPICaller
+  const NATIVE_MODULE_CODES = new Set([
+    '001000','001001','001002','001003',
+    '002000','002001','002001001','002002','002003','002004','002005','002006','002007','002008','002009','002010','002011','002012','002013','002015',
+    '003000','003001','003002','003003','003004','003005',
+    '010000','010001','010002'
+  ]);
+  async function fetchV10(path) {
+    const token = getToken();
+    const res = await fetch(path, { headers: token ? { 'X-Subject-Token': token } : {} });
+    if (!res.ok) throw new Error(path + ' ' + res.status);
+    return res.json();
+  }
+  async function init() {
+    try {
+      // Preload v1.0 tree data (launcher does this on init)
+      await Promise.all([
+        fetchV10('/brms/api/v1.0/tree/orgs'),
+        fetchV10('/brms/api/v1.0/tree/devices'),
+        fetchV10('/brms/api/v1.0/tree/channels'),
+        fetchV10('/brms/api/v1.0/accounts/current')
+      ]);
+      document.getElementById('status').textContent = 'Ready - ' + new Date().toLocaleTimeString();
+      renderTiles();
+    } catch (e) {
+      console.error('Init failed:', e);
+      document.getElementById('status').textContent = 'Init error: ' + e.message + ' (token=' + (getToken()?'yes':'no') + ')';
+    }
+  }
+  function renderTiles() {
+    const mr = parseMenuRights();
+    const rights = mr.menuRights || [];
+    const forbidden = mr.forbiddenMenus || [];
+    const allowed = rights.filter(c => !forbidden.includes(c));
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    // Show module-level prefixes that have allowed children
+    const shown = new Set();
+    for (const code of allowed) {
+      const prefix = code.slice(0, 6);
+      if (MODULE_PREFIXES.includes(prefix) && !shown.has(prefix)) {
+        const info = TILE_REGISTRY[prefix] || { name: prefix, icon: '📦', native: false };
+        addTile(info, prefix);
+        shown.add(prefix);
+      }
+    }
+    // Also show direct leaf tiles for codes that have explicit registry
+    for (const code of allowed) {
+      if (TILE_REGISTRY[code] && !MODULE_PREFIXES.includes(code.slice(0,6))) {
+        addTile(TILE_REGISTRY[code], code);
+      }
+    }
+    if (grid.children.length === 0) {
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#8c9196;padding:40px">No modules available (menuRights empty or token missing)</div>';
+    }
+  }
+  function addTile(info, code) {
+    const grid = document.getElementById('grid');
+    const div = document.createElement('div');
+    div.className = 'tile';
+    div.style.cursor = 'pointer';
+    div.innerHTML = '<div class="icon">' + info.icon + '</div><div class="name">' + info.name + '</div><div class="code">' + code + '</div>';
+    div.addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('Tile clicked:', code, info);
+      // E-023: Native Qt modules -> webAPICaller('openNativeModule', {...})
+      // Web modules -> navigate to path
+      if (info.native && window.webAPICaller) {
+        const payload = {
+          moduleCode: info.moduleCode || code,
+          moduleName: info.moduleName || info.name,
+          modulePath: info.modulePath || ''
+        };
+        console.log('[webAPICaller] openNativeModule', payload);
+        window.webAPICaller('openNativeModule', payload);
+      } else if (info.path) {
+        console.log('Navigate to web path:', info.path);
+        window.location.href = info.path;
+      } else {
+        console.log('No action for:', code);
+      }
+    });
+    grid.appendChild(div);
+  }
+  // Listen for Qt-injected updates
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'menuRights') renderTiles();
+  });
+  init();
+})();
+<\/script></body></html>`;
+});
 
 // Catch-all benign responders for the rest of the microservice families
 // (172-path client inventory: accessControl, alarm-host, alarmBusiness,

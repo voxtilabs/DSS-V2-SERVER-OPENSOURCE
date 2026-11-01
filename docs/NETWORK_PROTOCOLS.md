@@ -516,3 +516,80 @@ curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/register \
 # Test ARS TCP binary (requires raw TCP client)
 # See poc/dss-v2-harness/test-ars-tcp.mjs for reference implementation
 ```
+
+## 23. Add Device catalog contracts (E-024)
+
+The "Add Device" dialog of DSS Client 8.006 renders its combo boxes from server
+catalogs. These are the exact contracts recovered from the real client.
+
+### 23.1 Endpoints
+
+| Method | Path | Client consumer |
+| --- | --- | --- |
+| GET/POST | /brms/api/v1.1/dictionary/list?types=3,107 | web addDevice view + DPSDK GetDictionaryList |
+| GET/POST | /brms/api/v1.1/definition/device-type/list | web addDevice view + DPSDK GetDeviceTypes |
+| GET | /brms/api/v1.1/definition/channel-capability/list | web addDevice view + DPSDK GetChannelCapabilities |
+| GET | /brms/api/v1.1/server/available/list | web addDevice view + DPSDK GetAvailableServers |
+| GET | /brms/api/v1.1/config/snmp/protocol/manufacturer/list | web addDevice view + DPSDK GetSNMPManuList |
+| POST | /admin/API/BRM/BRMS/{Dictionary,Definition,Config}/... | BRMS RPC transport (same payloads) |
+
+### 23.2 Response shapes
+
+```jsonc
+// GET /brms/api/v1.1/dictionary/list?types=3,107
+{
+  "code": 1000, "desc": "Success",
+  "data": {
+    "results": [
+      { "type": "3",   "items": [ { "code": "1", "name": "Dahua", "param1": "246,1,2", "param2": "246" } ] },
+      { "type": "107", "items": [ { "code": "246", "name": "Dahua", "param1": "", "param2": "" } ] }
+    ]
+  }
+}
+```
+- type "3" = access protocols, type "107" = manufacturers.
+- param1 = manufacturer codes allowed when deviceCategory == 53 (AUDIO_DEVICE);
+  param2 = manufacturer codes allowed for every other category (CSV, split with ",").
+- The client filters the manufacturer combo with that CSV, so both sides must
+  agree on the codes (SIA_CID/SIA_DCS are hardcoded to manufacturer "246").
+
+```jsonc
+// GET /brms/api/v1.1/definition/device-type/list
+{
+  "code": 1000, "desc": "Success",
+  "data": {
+    "results": [
+      {
+        "deviceCategory": "1",
+        "deviceCategoryName": "Encoder",   // drives the Device Category combo
+        "deviceTypeName": "Encoder",       // drives the store caption
+        "deviceTypes": [ { "deviceType": "2", "deviceTypeName": "IPC" } ]
+      }
+    ]
+  }
+}
+```
+- 26 categories are published (DEVICE_CATEGORY_TYPE of the client).
+- Capability list: data.results = [{code,name,group}] (group = array or null).
+- Server list: data.results = [{serverCode:"video#local",serverName:"Current Site"}].
+- SNMP list: data.results = [{manufacturerCode,manufacturerName}].
+
+### 23.3 Enums reproduced (from js/device-JBrSmGvP.js of the real server)
+
+| Enum | Values |
+| --- | --- |
+| DEVICE_CATEGORY_TYPE | ENCODER=1, DECODER_DEVICE=2, ALARM_CONTROLLER=3, SCREEN=4, ANPR=5, MATRIX_DEVICE=6, SECURITY_DEVICE=7, ACCESS_CONTROL=8, DYN_ENV=9, VOICE=10, TRANSCODER=11, UVSS=15, DIAPLAY_DEVICE=16, HOST_TRIAL_DEVICE=20, VIDEO_INTERCOM=21, RECORD_SERVER=23, VISITOR_MACHINE=30, EMERGENCY=34, UAV_DEVICE=38, POS_DEVICE=40, RADAR=43, VIDEO_WALL_CONTROL=45, LIFT_CONTROL=50, NETWORK_BASE=51, AUDIO_DEVICE=53, GATE_DEVICE=70 |
+| ENCODER_TYPE | DVR=1, IPC=2, NVS=3, MDVR=5, NVR=6, MPT=9, EVS=10, SMART_IPC=12, SMART_NVR=14, VTT=21, THERMAL_CAMERA=26, WATCHER=34, MCS=35, IVSS=43, IVS=77, EEC=97 |
+| DEV_PROTOCOL_TYPE | DAHUA=1, HIK=2, RTSP=68, SNMP=98, ONVIF=99, SIA_CID=100, SIA_DCS=110, DDIP=120, JIUZHOU=185 |
+| DEV_ADD_TYPE | IP_ADDRESS=1, IP_SECTION=2, DOMAIN=3, AUTO_REGISTER=4, P2P=5, RTSP_ADDRESS=6 |
+| CAPABILITY_TYPE | 1..29 (INTELLIGENT_ALARM=1 ... AR=29) |
+
+### 23.4 Verification commands
+
+```bash
+curl -sk "https://10.10.20.120:1443/brms/api/v1.1/dictionary/list?types=3,107"
+curl -sk "https://10.10.20.120:1443/brms/api/v1.1/definition/device-type/list"
+curl -sk "https://10.10.20.120:1443/brms/api/v1.1/definition/channel-capability/list"
+curl -sk "https://10.10.20.120:1443/brms/api/v1.1/server/available/list"
+curl -sk "https://10.10.20.120:1443/brms/api/v1.1/config/snmp/protocol/manufacturer/list"
+```

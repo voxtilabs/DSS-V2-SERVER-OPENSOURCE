@@ -665,3 +665,44 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - REA snapshot saved: C:/Users/bruno/AppData/Local/Temp/opencode/mainform-plugin.snapshot (84 evidence records).
 - MediaMTX publishes H.265 test/cam1 muxers on rtsp 9100; no client RTSP session yet (video step pending user double-click).
 - Confidence: CONFIRMED (decompile + live trace cross-checked)
+
+## EV-069 - E-022: Self-built launcher web app + real menu rights (no vendor code copied)
+- Date: 2026-11-01 - Deployed and verified live on 10.10.20.120:1443
+- Root behaviour replicated: GET / returns a tiny HTML page whose JS calls /admin/api/v1.1/domain/download/urlInfo -> {"code":1000,"desc":"Success","data":"https://<host>:1443/web/client-module/"}.
+- CEF entry point: CWebViewFactory::GetUrl (MainFormPlugin/UICommonModule 0x18001f901) hardcodes the path "web/client-module" with query userId/locale/skin/logLevel -> the gateway must serve that page itself.
+- Qt -> web injection contract (decompiled):
+  - CWebViewFactory::AddMenuRightsToWeb (0x18001bf45) reads IUserManager vtable +0xd8 (rights) and +0xf8 (forbidden) -> localStorage.menuRights = {"menuRights":[...],"forbiddenMenus":[...]}.
+  - UpdataToken (0x1800060af) reads +0x70 token / +0x78 resourceToken -> window.webAPICaller('updateToken',{token,resourceToken}).
+  - OnMenuRightChanged -> webAPICaller('menuRightsChange'); AddLocalcfgToWeb (0x18001c2c9) writes localcfg.
+- REAL_MENU_RIGHTS = 158 valid codes harvested from the real server leveldb (151) plus MainFormPlugin.dll / PluginFactory.dll / real-index.js (002013 TV Wall, 004008, 010001002-4, 011001-2, 002009001-3, 002001003001-3, 004004002002-4, 004005002003, 004007001-4).
+- REAL_FORBIDDEN_MENUS = [] (hardcoded, verified empty on the real server).
+- REAL_FUNCTION_CONFIG = 70 keys, every key enabled (1) - taken from the real server leveldb dump.
+- Confidence: CONFIRMED (real-server data + decompiled client behaviour)
+
+## EV-070 - E-023: Launcher tile registry + native module hand-off
+- Date: 2026-11-01 - Deployed and verified live on 10.10.20.120:1443
+- Self-built page renders tiles from the REAL menu codes only (no invented codes): Monitoring Center 002000, Live View 002001, E-Map 002002, TV Wall 002013, Visual Tracking 002015, plus Settings groups 001000 / 003000 / 010000 / 011000.
+- Native tiles call window.webAPICaller('openNativeModule', {moduleCode, moduleName, modulePath}) - the hand-off contract recovered from the client (no vendor assets copied).
+- Verified live: GET /web/client-module/ returns the launcher page and the module registry resolves all 158 rights codes.
+- Confidence: CONFIRMED (live curl of the deployed page)
+
+## EV-071 - E-024: Add Device dialog catalogs - the real DSS v1.1 response shapes
+- Date: 2026-11-01 - Root cause of the empty combos; deployed and verified live on 10.10.20.120:1443
+- ROOT CAUSE: shape mismatch, not missing routes. The DSS Client 8.006 never hardcodes the Add Device combos; it reads them from REST payloads. Our payloads used {list,dictionaryList} / flat lists, but the client reads data.results.
+- Exact client calls recovered from the real server bundles (200.54.10.50:1443/web/client-module/js/):
+  - index-DsQ1Ve9V.js (addDevice view): getDictionaries({types:"3,107"}) -> data.results[{type,items}]; getDeviceType() -> data.results[{deviceCategory,deviceCategoryName,deviceTypes[]}]; getChannelCapabilities() -> data.results[{code,name,group}]; getAvailableServers() -> data.results[{serverCode,serverName}].
+  - index-DZAxKofO.js: getManufacturerTypes(protocolCode,deviceCategory) -> SNMP uses snmpManufacturerDict; SIA_CID/SIA_DCS -> manufacturer code "246" only; otherwise protocolDict.find(code).param1 (deviceCategory 53) or .param2 (CSV of allowed manufacturer codes).
+  - addDeviceStore-D3xJbSOm.js: getCategoryNameByCategory -> group.deviceTypeName; getDeviceTypesByCategory -> group.deviceTypes; getServerList -> {label:serverName,value:serverCode} with serverCode "video#local".
+  - index-CnFd4Sa0.js (native add-device form): Add Mode options are CLIENT-side constants (IP Address, IP Segment, Domain Name, Auto Registration, P2P, RTSP Address) - the server is not involved; the Device Category combo is built from deviceTypes minus AUDIO_DEVICE/VISITOR_MACHINE for the Dahua/IP combination.
+- Native Qt path uses the SAME endpoints (DPSDK.dll string pool): Dpsdk::CRestLogical::GetDictionaryList -> v1.1/dictionary/list; GetDeviceTypes -> v1.1/definition/device-type/list; GetChannelCapabilities -> v1.1/definition/channel-capability/list; GetAvailableServers -> v1.1/server/available/list; GetSNMPManuList -> v1.1/config/snmp/protocol/manufacturer/list. DTO keys from the same pool: items/param1/param2 (dictionary), deviceCategoryName/deviceTypes/deviceTypeName (device types), manufacturerCode/manufacturerName (SNMP).
+- Implemented (poc/dss-v2-harness/brms-gateway/src/e024-catalogs.js + routes in src/index.js):
+  - GET|POST /brms/api/v1.1/dictionary/list?types=3,107 (also v1.0 + /admin/API) -> data.results = [{type:"3",items:[{code,name,param1,param2}]},{type:"107",items:[{code,name}]}] (+ flat items/list aliases).
+  - GET|POST /brms/api/v1.1/definition/device-type/list -> data.results = 26 categories x deviceTypes[{deviceType,deviceTypeName}] using the client enums verbatim (ENCODER 16 types, ACCESS_CONTROL 10, VIDEO_INTERCOM 10, RADAR 5, ANPR 4, ...).
+  - GET /brms/api/v1.1/definition/channel-capability/list -> data.results = 23 CAPABILITY_TYPE entries with group.
+  - GET /brms/api/v1.1/server/available/list -> data.results = [{serverCode:"video#local",serverName:"Current Site"}].
+  - GET /brms/api/v1.1/config/snmp/protocol/manufacturer/list -> data.results = [{manufacturerCode,manufacturerName}].
+  - BRMS RPC transport mirrors the catalogs: POST /admin/API/BRM/BRMS/Dictionary/GetDictionaries, .../Definition/GetDeviceTypes, .../Definition/GetChannelCapabilities, .../Config/GetSnmpManufacturers.
+- Enums reproduced verbatim from js/device-JBrSmGvP.js: DEVICE_CATEGORY_TYPE (ENCODER=1 ... GATE_DEVICE=70), ENCODER_TYPE (DVR=1,IPC=2,NVR=6,...), ANPR_TYPE, ACCESS_CONTROL_TYPE, VIDEO_INTERCOM_TYPE, RADAR_TYPE, VIDEO_WALL_CONTROL_TYPE, DEV_PROTOCOL_TYPE (DAHUA=1,HIK=2,RTSP=68,SNMP=98,ONVIF=99,SIA_CID=100,SIA_DCS=110,DDIP=120,JIUZHOU=185), DEV_ADD_TYPE (IP_ADDRESS=1 ... RTSP_ADDRESS=6), CAPABILITY_TYPE, UNIT_TYPE, CHANNEL_TYPE, SOURCE_TYPE.
+- Inspector middleware prefixes [DICT-REQ] / [DICT-BODY] on every dictionary/category/protocol/manufacturer request so any still-missing combo path is logged with its exact query/body.
+- Tests: unit 14/14 PASS (10 previous + 4 new E-024 contract tests) ; E2E 7/7 PASS against 10.10.20.120.
+- Confidence: CONFIRMED (contracts recovered from the real client bundles + DPSDK strings, verified live)

@@ -150,6 +150,68 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(alarm.alarmCode && alarm.alarmType !== undefined && alarm.alarmGrade !== undefined && alarm.channelId);
   });
 
+  // ===== E-024: Add Device dialog catalog contracts =====
+  it('E-024 dictionary/list returns data.results grouped by type (3=protocol,107=manufacturer)', async () => {
+    const r = await fetch(`${BASE}/brms/api/v1.1/dictionary/list?types=3,107`, { headers: { 'X-Subject-Token': token } });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.code, 1000);
+    assert.ok(Array.isArray(j.data?.results), 'data.results must be an array');
+    const protocols = j.data.results.find((x) => x.type === '3');
+    const manufacturers = j.data.results.find((x) => x.type === '107');
+    assert.ok(protocols && Array.isArray(protocols.items));
+    assert.ok(manufacturers && Array.isArray(manufacturers.items));
+    // protocol items carry code/name + param1/param2 (manufacturer CSV filter)
+    const dahua = protocols.items.find((x) => x.code === '1');
+    assert.ok(dahua && dahua.name && typeof dahua.param1 === 'string' && typeof dahua.param2 === 'string');
+    // manufacturer items carry code/name
+    assert.ok(manufacturers.items.every((x) => x.code && x.name));
+    // the client filters manufacturerDict by the protocol CSV -> must intersect
+    const csv = dahua.param2.split(',');
+    assert.ok(csv.some((code) => manufacturers.items.some((m) => m.code === code)));
+  });
+
+  it('E-024 definition/device-type/list returns results grouped by deviceCategory', async () => {
+    const r = await fetch(`${BASE}/brms/api/v1.1/definition/device-type/list`, { headers: { 'X-Subject-Token': token } });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.ok(Array.isArray(j.data?.results) && j.data.results.length >= 20);
+    const encoder = j.data.results.find((x) => x.deviceCategory === '1');
+    assert.ok(encoder, 'Encoder category (1) must exist');
+    assert.ok(encoder.deviceCategoryName, 'deviceCategoryName drives the category combo');
+    assert.ok(encoder.deviceTypeName, 'deviceTypeName drives the store caption');
+    assert.ok(Array.isArray(encoder.deviceTypes) && encoder.deviceTypes.length > 0);
+    assert.ok(encoder.deviceTypes.every((x) => x.deviceType && x.deviceTypeName));
+    // ANPR + Access Control must be present (client shows them in the combo)
+    assert.ok(j.data.results.some((x) => x.deviceCategory === '5' && x.deviceCategoryName === 'ANPR Device'));
+    assert.ok(j.data.results.some((x) => x.deviceCategory === '8' && x.deviceCategoryName === 'Access Control'));
+  });
+
+  it('E-024 capability/server/snmp catalogs return results arrays', async () => {
+    const cap = await (await fetch(`${BASE}/brms/api/v1.1/definition/channel-capability/list`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(cap.data?.results) && cap.data.results.length > 0);
+    assert.ok(cap.data.results.every((x) => x.code && x.name));
+    const srv = await (await fetch(`${BASE}/brms/api/v1.1/server/available/list`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(srv.data?.results) && srv.data.results.some((x) => x.serverCode === 'video#local'));
+    const snmp = await (await fetch(`${BASE}/brms/api/v1.1/config/snmp/protocol/manufacturer/list`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(snmp.data?.results) && snmp.data.results.length > 0);
+    assert.ok(snmp.data.results.every((x) => x.manufacturerCode && x.manufacturerName));
+  });
+
+  it('E-024 BRMS RPC transport serves the same catalogs', async () => {
+    const r = await fetch(`${BASE}/admin/API/BRM/BRMS/Dictionary/GetDictionaries`, {
+      method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ types: '3,107' })
+    });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    const data = j.data || j.info || {};
+    assert.ok(Array.isArray(data.results) || Array.isArray(data.items));
+    const groups = data.results || data.items;
+    const protocols = groups.find((x) => x.type === '3');
+    assert.ok(protocols && Array.isArray(protocols.items) && protocols.items.length > 0);
+  });
+
   // UDP Alarm Ingest test (skipped due to timing issues in CI)
   it.skip('UDP 18800 receives alarm text and forwards', async () => {
     const udp = dgram.createSocket('udp4');

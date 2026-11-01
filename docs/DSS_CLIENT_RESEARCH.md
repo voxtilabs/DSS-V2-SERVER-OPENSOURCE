@@ -155,3 +155,19 @@ CI ejecuta `npm test` en cada push. Cualquier servidor DSS V2 que pase estos tes
   5. State machine FUN_180165320 maps state ints to messages: "Login failed: Server type does not match.", "The client and platform versions do not match. Please update the client." (uses Update URL %s via /v1.1/upgrade/check/upgradeable downloadUrl), "Client version does not match. Please reinstall.", "Client and server versions don't match. Please reinstall if any exception occurs.", "The client fix pack does not match the platform version. Are you sure you want to log in?".
 - Server payload that satisfies every compare shape (all derived from CLIENT_VERSIONS[client] for multiversion):
   version = client literal (no V, no epoch) | softwareVersion/baseVersion/compatVersion = V-major "V8.006.0000000.0" | patchVersion = fix-pack date | protocolVersion = "1.1.0" | platform = "DSS Pro".
+
+## E-024 extension: Add Device dialog contracts (web bundles + DPSDK.dll)
+- The combos of the Add Device dialog are NOT hardcoded by the client:
+  - Add Mode options are client constants: IP Address (1), IP Segment (2), Domain Name (3), Auto Registration (4), P2P (5, license gated), RTSP Address (6) - js/index-CnFd4Sa0.js.
+  - Access Protocol combo = protocolDict filtered by Add Mode + license flags (js/index-CnFd4Sa0.js).
+  - Device Category combo = deviceTypes entries, label from deviceCategoryName (js/index-CnFd4Sa0.js).
+  - Device Type combo = deviceTypes[].deviceTypeName of the selected category (js/addDeviceStore-D3xJbSOm.js).
+  - Manufacturer combo = manufacturerDict filtered by protocol param1/param2 CSV (js/index-DZAxKofO.js).
+- Native Qt path (DPSDK.dll) reaches the same server catalogs:
+  CRestLogical::GetDictionaryList -> v1.1/dictionary/list
+  CRestLogical::GetDeviceTypes -> v1.1/definition/device-type/list
+  CRestLogical::GetChannelCapabilities -> v1.1/definition/channel-capability/list
+  CRestLogical::GetAvailableServers -> v1.1/server/available/list
+  CRestLogical::GetSNMPManuList -> v1.1/config/snmp/protocol/manufacturer/list
+- DPSDK DTO key pool: items/param1/param2 (dictionary entries), deviceCategoryName/deviceTypes/deviceTypeName (device type groups), manufacturerCode/manufacturerName (SNMP manufacturers).
+- Real server reference (200.54.10.50:1443) exposes those paths but requires authentication, so the shapes were recovered from the bundles it serves (/web/client-module/js/*.js) instead of from live probes.

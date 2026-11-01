@@ -4,6 +4,10 @@ experiments/**/captures/
 experiments/**/*.pcap
 experiments/**/*.pcapng
 experiments/**/*.log
+*.pcapng
+
+# --- Scripts temporales de análisis de laboratorio (nunca versionados) ---
+poc/dss-v2-harness/tmp-*
 
 # --- Binarios SDK propietarios (Dahua) ---
 third_party/

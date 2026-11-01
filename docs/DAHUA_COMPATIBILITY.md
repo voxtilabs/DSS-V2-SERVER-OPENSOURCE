@@ -340,3 +340,16 @@ curl -k https://10.10.20.120:1443/health
 | BRM.Device.GetCurrentMediaVK/GetMediaVKs | GetMediaKey family (vkId/vkValue) | RestLogicalDevice.cpp 0x180c94af0 |
 | BRM.Config.GetMqConfig | full MQConfig contract (E-018) | 0x180a488e0 |
 - Bootstrap containment rule: nothing in the post-login bootstrap may 404; catch-all responders log [FALLBACK] so exact contracts get filled each cycle.
+
+# E-024: Add Device dialog catalog compatibility
+| Capability | Client expectation | Gateway implementation | Status |
+| --- | --- | --- | --- |
+| Device Category combo | data.results[].deviceCategory + deviceCategoryName | /brms/api/v1.1/definition/device-type/list (26 categories) | IMPLEMENTED |
+| Device Type combo | data.results[].deviceTypes[].deviceType/deviceTypeName | same endpoint (client enums verbatim) | IMPLEMENTED |
+| Access Protocol combo | dictionary type "3" items[].code/name | /brms/api/v1.1/dictionary/list?types=3,107 | IMPLEMENTED |
+| Manufacturer combo | dictionary type "107" items[].code/name filtered by protocol param1/param2 CSV | /brms/api/v1.1/dictionary/list?types=3,107 | IMPLEMENTED |
+| SNMP manufacturer combo | items[].manufacturerCode/manufacturerName | /brms/api/v1.1/config/snmp/protocol/manufacturer/list | IMPLEMENTED |
+| Channel capability multi-select | data.results[].code/name/group | /brms/api/v1.1/definition/channel-capability/list | IMPLEMENTED |
+| Server (site) combo | data.results[].serverCode/serverName ("video#local") | /brms/api/v1.1/server/available/list | IMPLEMENTED |
+| Add Mode combo | client-side constants (no server call) | not applicable - native | N/A (client-side) |
+- Rule learned: every DSS "list" payload consumed by the client is keyed by `data.results`; serving {list:[...]} leaves the UI empty and triggers the "The data returned by the service is abnormal" toast.
