@@ -327,3 +327,16 @@ curl -k https://10.10.20.120:1443/health
 # Test ARS TCP binary (raw DVRIP on port 9500)
 # See poc/dss-v2-harness/test-ars-tcp.mjs for reference implementation
 ```
+# E-021: BRM.* response parser keys harvested from DPSDK.dll (REA)
+| RPC | Parser keys | Source |
+| --- | --- | --- |
+| BRM.User.GetMenuRights | menuType (req), forbiddenMenus, menuRights | registrar row 0x180cd6f08 |
+| BRM.User.GetChannelsCount | count (int) | 0x180d3ed0 zone |
+| BRM.User.GetUserFunctions | functions | 0x1800e2500 |
+| BRM.TvWall.GetTvWalls/GetTvWall | tvWallId, wallMode, screens, splitCaps, maxFreeWindows, editFlag | registrar pool 0x180caf958 |
+| BRM.TvWall.GetUserTvWallTasks | taskList / lists | GetTVWallTaskList |
+| BRM.Linked.GetLinkedChannels | mainList, mainType, subList | registrar 0x180ccd9e8 |
+| BRM.User.GetUserData/SaveUserData | fileName + fileData (hex blob) | registrar pool 0x180caf958 |
+| BRM.Device.GetCurrentMediaVK/GetMediaVKs | GetMediaKey family (vkId/vkValue) | RestLogicalDevice.cpp 0x180c94af0 |
+| BRM.Config.GetMqConfig | full MQConfig contract (E-018) | 0x180a488e0 |
+- Bootstrap containment rule: nothing in the post-login bootstrap may 404; catch-all responders log [FALLBACK] so exact contracts get filled each cycle.

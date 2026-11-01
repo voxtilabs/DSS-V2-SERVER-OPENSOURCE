@@ -146,3 +146,12 @@ Validaciones:
 - Docker Compose + `deploy/ubuntu-lab-setup.sh` para lab
 
 CI ejecuta `npm test` en cada push. Cualquier servidor DSS V2 que pase estos tests es compatible con el DSS Client WINPC_V2 original.
+## E-021 extension: login UI version decision chain (decompiled, no source in repo)
+- CLoginUI::Init (MainFormPlugin.dll 0x18015bbe0, LoginUI.cpp line 0x469/0x472):
+  1. Global 7-tuple from process args, split on "," (FUN_1801ccf50) -> slots DAT_1808476e8/6f0/6f8/700/708/710/718.
+  2. strVersion log prints slot[4] = client self version (DSS Client.exe embeds "8.006.0000000.0.R.20250307").
+  3. QRegExp "\d*\.\d*\.\d*\\d*\\." *(see pattern literal) captures first version segment of slot[4]; QString("V%1").arg(cap[0]) -> "V8.006.0000000.0" -> IUserManager setter (vtable+0x160).
+  4. Slots [1]/[2] go to IUserManager vtable+0x150/+0x158 as the other two version strings.
+  5. State machine FUN_180165320 maps state ints to messages: "Login failed: Server type does not match.", "The client and platform versions do not match. Please update the client." (uses Update URL %s via /v1.1/upgrade/check/upgradeable downloadUrl), "Client version does not match. Please reinstall.", "Client and server versions don't match. Please reinstall if any exception occurs.", "The client fix pack does not match the platform version. Are you sure you want to log in?".
+- Server payload that satisfies every compare shape (all derived from CLIENT_VERSIONS[client] for multiversion):
+  version = client literal (no V, no epoch) | softwareVersion/baseVersion/compatVersion = V-major "V8.006.0000000.0" | patchVersion = fix-pack date | protocolVersion = "1.1.0" | platform = "DSS Pro".

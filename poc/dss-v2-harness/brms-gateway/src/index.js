@@ -279,7 +279,7 @@ function buildLoginSuccess(userName) {
     token,
     duration: 86400,
     userId: '1',
-    versionInfo: { updateUrl: '', patchUrl: '', lastVersion: DEFAULT_SERVER_VERSION.replace(/^V/, '').replace(/\.\d{9,10}$/, '') },
+    versionInfo: { updateUrl: '', patchUrl: '', lastVersion: 'V' + (DEFAULT_SERVER_VERSION.match(/\d+\.\d+\.\d+\.\d+/) || [DEFAULT_SERVER_VERSION.replace(/^V/, '')])[0] },
     lastLoginIp: '',
     loginIpChanged: '0',
     passwordRemainValidityPeriod: '0',
@@ -372,12 +372,16 @@ function selectPlatformVersion(req) {
 
 app.get('/videoService/version', async (req) => {
   const softwareVersion = selectPlatformVersion(req);
-  // E-020 red-warning fix: the stricter post-login compare in CLoginUI::
-  // OnInitStatus evidently string-tests against the version embedded in the
-  // client binary itself - DSS Client.exe carries exactly
-  // "8.006.0000000.0.R.20250307" (no V prefix, no epoch revision). Derive the
-  // client-self literal from the (multi-version) selected server version.
+  // E-021 red-warning fix - compares decompiled from MainFormPlugin.dll
+  // CLoginUI::Init (0x18015bbe0): the client regex-captures the first
+  // `\d*\.\d*\.\d*\.\d*` group of its OWN process-arg version (DSS Client.exe
+  // embeds "8.006.0000000.0.R.20250307") and formats the result as V%1 ->
+  // SetClientMajorVersion("V8.006.0000000.0"). The server version is compared
+  // against that V-prefixed major form, so softwareVersion now carries the
+  // exact V%1(re) form while `version` keeps the byte-for-byte client literal.
   const clientSelfVersion = softwareVersion.replace(/^V/, '').replace(/\.\d{9,10}$/, '');
+  const clientMajorV = 'V' + ((softwareVersion.match(/\d+\.\d+\.\d+\.\d+/) || [clientSelfVersion])[0]);
+  const clientFixPack = (softwareVersion.match(/R\.(\d{8})/) || [])[1] || '';
   // DPSDK CheckServerType parser (RestLogicaVSL.cpp). data.platform decides the
   // server type: "DSS Enterprise"=1, "DSS Express"=3, "DSS 4004S2"=4, anything
   // else=2 (DSS Pro default). data.softwareVersion -> platformVersion (About
@@ -387,24 +391,25 @@ app.get('/videoService/version', async (req) => {
   return envelope({
     version: clientSelfVersion,
     platform: 'DSS Pro',
-    softwareVersion,
+    softwareVersion: clientMajorV,
     protocolVersion: '1.1.0',
     copyright: 'Copyright © 2020 Zhejiang Dahua Technology Co., Ltd.',
-    patchVersion: '',
-    baseVersion: clientSelfVersion,
-    compatVersion: clientSelfVersion,
+    patchVersion: clientFixPack,
+    baseVersion: clientMajorV,
+    compatVersion: clientMajorV,
     securityVersion: ''
   });
 });
 
 // Upgrade check endpoint - never forces an upgrade; mirrors the platform version
 function upgradeableHandler(req) {
-  // Same client-self literal as /videoService/version (E-020 red-warning fix).
-  const selfVer = selectPlatformVersion(req).replace(/^V/, '').replace(/\.\d{9,10}$/, '');
+  // Same client self forms as /videoService/version (E-021 decompile).
+  const selected = selectPlatformVersion(req);
+  const clientMajorV = 'V' + ((selected.match(/\d+\.\d+\.\d+\.\d+/) || [selected.replace(/^V/, '')])[0]);
   return envelope({
     upgradeable: false,
-    version: selfVer,
-    serverVersion: selectPlatformVersion(req),
+    version: clientMajorV,
+    serverVersion: selected,
     downloadUrl: '',
     releaseNote: ''
   });
@@ -508,8 +513,9 @@ function rpcEnvelope(method, data) {
   return { code: 1000, desc: 'Success', method, info: data, data };
 }
 
-// E-020: last saved user data blob (RAM only - no persistence, no secrets).
-let LAST_USER_DATA = null;
+// E-021: per-file user data blobs (webfav.xml, quickcmd.xml, siteInfo.xml...).
+// RAM only - no persistence, no secrets.
+const USER_FILES = new Map();
 
 async function brmRpcHandler(req) {
   const b = req.body || {};
@@ -532,22 +538,43 @@ async function brmRpcHandler(req) {
     });
   }
 
-  // ===== E-020: RPC shapes (response parsers from DPSDK / dual best-effort keys) =====
+  // ===== E-021: RPC shapes (parsers contracted via REA/DPSDK + live trace) =====
+  // GetMenuRights registrar row: menuType / forbiddenMenus / menuRights
+  // (DPSDK string pool 0x180cd6f08).
+  if (method === 'BRM.User.GetMenuRights') return rpcEnvelope(method, { menuType: Number((b.data && b.data.menuType) || 2), menuRights: [], rights: [], menuList: [], forbiddenMenus: [], count: 0 });
   // GetChannelsCount parser reads int `count` (DPSDK 0x1800d3ed0).
   if (method === 'BRM.User.GetChannelsCount') return rpcEnvelope(method, { count: 1 });
   // GetUserFunctions parser reads `functions` (DPSDK 0x1800e2500); empty list =
   // no extra feature gating, launcher menus come from menu/available/list.
   if (method === 'BRM.User.GetUserFunctions') return rpcEnvelope(method, { functions: [], functionList: [], count: 0 });
-  if (method === 'BRM.User.GetMenuRights') return rpcEnvelope(method, { menuRights: [], rights: [], menuList: [], count: 0 });
+  // TvWall contract keys from the shared registrar pool (0x180caf958 zone):
+  // tvWallId, wallMode, screens, splitCaps, maxFreeWindows, editFlag.
   if (method === 'BRM.TvWall.GetTvWalls' || method === 'BRM.TvWall.GetTvWall') return rpcEnvelope(method, { tvWalls: [], list: [], wallList: [], count: 0 });
-  if (method === 'BRM.Linked.GetLinkedChannels') return rpcEnvelope(method, { linkedChannels: [], list: [], count: 0 });
-  if (method === 'BRM.Config.GetEmapInfo') return rpcEnvelope(method, { emapInfo: {}, enable: 0, list: [] });
+  if (method === 'BRM.TvWall.GetUserTvWallTasks' || method === 'BRM.TvWall.GetUserTvWallTask') return rpcEnvelope(method, { list: [], taskList: [] });
+  // Linked: GetChannelLinkResource registry keys mainList / mainType / subList.
+  if (method === 'BRM.Linked.GetLinkedChannels') return rpcEnvelope(method, { mainList: [], mainType: 0, subList: [], linkedChannels: [] });
+  if (method === 'BRM.Config.GetEmapInfo') return rpcEnvelope(method, { emapInfo: {}, enable: 0, maps: [], list: [] });
   // GetFunctionConfig expects an XML out-param (pInfoXml in DPSDK).
-  if (method === 'BRM.Config.GetFunctionConfig') return rpcEnvelope(method, { infoXml: '<FunctionConfig/>', xml: '<FunctionConfig/>', siraEnable: 0, pSiraEnable: 0 });
-  // User data round-trip (widget layouts): serve last saved blob.
-  if (method === 'BRM.User.SaveUserData') { LAST_USER_DATA = (req.body && req.body.data === undefined) ? {} : req.body.data; return rpcEnvelope(method, { code: 0, saved: true }); }
-  if (method === 'BRM.User.GetUserData') return rpcEnvelope(method, LAST_USER_DATA || {});
+  if (method === 'BRM.Config.GetFunctionConfig') return rpcEnvelope(method, { infoXml: '<FunctionConfig/>', xml: '<FunctionConfig/>', siraEnable: 0 });
+  // User data files: SaveUserData(data.fileName, data.fileData) stores the
+  // blob; GetUserData(data.fileName) echoes it. Observed live: webfav.xml,
+  // quickcmd.xml, siteInfo.xml (hex payload).
+  if (method === 'BRM.User.SaveUserData') {
+    const fd = b.data || {};
+    if (fd.fileName) USER_FILES.set(String(fd.fileName), String(fd.fileData || ''));
+    return rpcEnvelope(method, { code: 0, fileName: String(fd.fileName || ''), saved: true });
+  }
+  if (method === 'BRM.User.GetUserData') {
+    const fn = String((b.data || {}).fileName || '');
+    return rpcEnvelope(method, { code: 0, fileName: fn, fileData: USER_FILES.get(fn) || '' });
+  }
   if (method === 'BRM.Time.SyncServerTime') { const now = Math.floor(Date.now() / 1000); return rpcEnvelope(method, { time: now, serverTime: now, timezone: 'UTC' }); }
+  // Media keys: Dpsdk GetMediaKey family (RestLogicalDevice.cpp).
+  if (method === 'BRM.Device.GetCurrentMediaVK') {
+    const hostIp = String((req.headers.host || '').split(':')[0] || '127.0.0.1');
+    return rpcEnvelope(method, { vkId: '1', vkValue: '', mediaKey: '', ip: hostIp, port: 9100 });
+  }
+  if (method === 'BRM.Device.GetMediaVKs') return rpcEnvelope(method, { list: [], mediaKeys: [] });
   // Everything else in the BRM.* family: benign success with empty data.
   return rpcEnvelope(method, {});
 }
@@ -689,6 +716,28 @@ app.get('/brms/api/v1.1/account/device/overview', async () => envelope({
 app.get('/brms/api/v1.1/config/p2p', async () => envelope({ p2pEnable: 0, enable: 0, openState: '0', list: [] }));
 app.get('/brms/api/v1.1/config/p2p/server/list', async () => envelope({ list: [] }));
 app.get('/brms/api/v1.1/config/configTypes', async () => envelope({ list: [], configTypes: [] }));
+
+// ===== E-021: exact contracts for the routes that hit [FALLBACK] in the live
+// launcher trace (E-021 objective 1) =====
+
+// POST /admin/API/tree/devices arrives with a filter body: {categories: [],
+// sourceTypes: [], orgCode: "", deviceCodes: [], containVirtualDevice: "1"}.
+app.post('/admin/API/tree/devices', async (req) => {
+  const b = req.body || {};
+  return envelope({
+    deviceList: [TREE_DEVICE], list: [TREE_DEVICE], channelList: TREE_CHANNELS,
+    orgCode: String(b.orgCode || ''), containVirtualDevice: String(b.containVirtualDevice || '1'), total: 1
+  });
+});
+// favorite/tree = Dpsdk::CRestLogical::GetCollectionTree (favorites tree).
+app.get('/brms/api/v1.1/account/favorite/tree', async () => envelope({
+  list: [], orgList: [], channelList: [], tree: [], favoriteList: []
+}));
+// share/unread/list = GetUnReadCollections / GetUnreadShareViews.
+app.get('/brms/api/v1.1/account/favorite/organization/share/unread/list', async () => envelope({ list: [], unreadCount: 0 }));
+app.get('/brms/api/v1.1/monitor/view/share/unread/list', async () => envelope({ list: [], unreadCount: 0, pUnreadShareViewInfo: [] }));
+// latest/unhandled/record/list = GetHistoryAlarmRecords (7-day top-1000).
+app.get('/brms/api/v1.1/alarm/latest/unhandled/record/list', async () => envelope({ list: [], records: [], total: 0 }));
 
 // Catch-all benign responders for the rest of the microservice families
 // (172-path client inventory: accessControl, alarm-host, alarmBusiness,

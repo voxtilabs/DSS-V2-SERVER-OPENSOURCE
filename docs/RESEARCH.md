@@ -656,3 +656,12 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - RTSP H.265 real: DESCRIBE 200 OK + SDP con `H265` + VPS/SPS/PPS válidos
 - p2p-probe: Contenedor detenido limpiamente (perfil `tools`, `restart: "no"`)
 - Confianza: **CONFIRMADO** (validación E2E completa contra laboratorio real)
+## EV-066 - E-021: Post-login trace harvest, abnormal-data elimination, version compare decompile
+- Date: 2026-11-01 - Live trace after E-020 deploy on 10.10.20.120
+- Bootstrap now 0 x HTTP 404: only 2 x 401 authorize (normal MD5 challenge step).
+- [FALLBACK] hits (5): monitor/view/share/unread/list, alarm/latest/unhandled/record/list?days=7&top=1000, account/favorite/tree?orgCode=, account/favorite/organization/share/unread/list, POST /admin/API/tree/devices (client sends filter body categories/sourceTypes/orgCode/deviceCodes/containVirtualDevice) - all replaced with exact contracts in E-021.
+- RPC observed: GetUserData x4 with data.fileName (webfav.xml, quickcmd.xml, siteInfo.xml), SaveUserData with fileData hex payload, GetMenuRights with menuType:"2", GetMqConfig, GetChannelsCount, GetUserFunctions, GetTvWalls, GetLinkedChannels, GetEmapInfo.
+- Decompiled MainFormPlugin.dll (sha256 191de8e2...): CLoginUI::Init (0x18015bbe0) - client self-version source is the process args 7-tuple ("a,b,c,d,version,e,f", FUN_1801ccf50 split-on-comma); client regex-captures first \d*\.\d*\.\d*\.\d* of arg[4] and formats V%1 -> SetClientMajorVersion("V8.006.0000000.0"). Version payload keys served: version = client literal "8.006.0000000.0.R.20250307", softwareVersion/baseVersion/compatVersion = "V8.006.0000000.0" (V%1 form), patchVersion = fix-pack "20250307". Multi-version retained via CLIENT_VERSIONS map derivation.
+- REA snapshot saved: C:/Users/bruno/AppData/Local/Temp/opencode/mainform-plugin.snapshot (84 evidence records).
+- MediaMTX publishes H.265 test/cam1 muxers on rtsp 9100; no client RTSP session yet (video step pending user double-click).
+- Confidence: CONFIRMED (decompile + live trace cross-checked)
