@@ -279,7 +279,7 @@ function buildLoginSuccess(userName) {
     token,
     duration: 86400,
     userId: '1',
-    versionInfo: { updateUrl: '', patchUrl: '', lastVersion: DEFAULT_SERVER_VERSION },
+    versionInfo: { updateUrl: '', patchUrl: '', lastVersion: DEFAULT_SERVER_VERSION.replace(/^V/, '').replace(/\.\d{9,10}$/, '') },
     lastLoginIp: '',
     loginIpChanged: '0',
     passwordRemainValidityPeriod: '0',
@@ -372,31 +372,39 @@ function selectPlatformVersion(req) {
 
 app.get('/videoService/version', async (req) => {
   const softwareVersion = selectPlatformVersion(req);
+  // E-020 red-warning fix: the stricter post-login compare in CLoginUI::
+  // OnInitStatus evidently string-tests against the version embedded in the
+  // client binary itself - DSS Client.exe carries exactly
+  // "8.006.0000000.0.R.20250307" (no V prefix, no epoch revision). Derive the
+  // client-self literal from the (multi-version) selected server version.
+  const clientSelfVersion = softwareVersion.replace(/^V/, '').replace(/\.\d{9,10}$/, '');
   // DPSDK CheckServerType parser (RestLogicaVSL.cpp). data.platform decides the
   // server type: "DSS Enterprise"=1, "DSS Express"=3, "DSS 4004S2"=4, anything
   // else=2 (DSS Pro default). data.softwareVersion -> platformVersion (About
   // dialog). data.protocolVersion must be "1.0.1" (code 101) or "1.1.0"
   // (code 110); any other value degrades the client to protocol code 0.
-  // securityVersion/patchVersion/compatVersion/baseVersion/copyright are
-  // parsed-and-logged only. The legacy `version` key stays for our harness.
+  // data.version is the key the client compares its own build against.
   return envelope({
-    version: softwareVersion,
+    version: clientSelfVersion,
     platform: 'DSS Pro',
     softwareVersion,
     protocolVersion: '1.1.0',
     copyright: 'Copyright © 2020 Zhejiang Dahua Technology Co., Ltd.',
     patchVersion: '',
-    baseVersion: '',
-    compatVersion: '',
+    baseVersion: clientSelfVersion,
+    compatVersion: clientSelfVersion,
     securityVersion: ''
   });
 });
 
 // Upgrade check endpoint - never forces an upgrade; mirrors the platform version
 function upgradeableHandler(req) {
+  // Same client-self literal as /videoService/version (E-020 red-warning fix).
+  const selfVer = selectPlatformVersion(req).replace(/^V/, '').replace(/\.\d{9,10}$/, '');
   return envelope({
     upgradeable: false,
-    version: selectPlatformVersion(req),
+    version: selfVer,
+    serverVersion: selectPlatformVersion(req),
     downloadUrl: '',
     releaseNote: ''
   });
@@ -500,6 +508,9 @@ function rpcEnvelope(method, data) {
   return { code: 1000, desc: 'Success', method, info: data, data };
 }
 
+// E-020: last saved user data blob (RAM only - no persistence, no secrets).
+let LAST_USER_DATA = null;
+
 async function brmRpcHandler(req) {
   const b = req.body || {};
   const method = b.method || `BRM.${req.params.ns}.${req.params.fn}`;
@@ -520,6 +531,24 @@ async function brmRpcHandler(req) {
       TopicInfos: []
     });
   }
+
+  // ===== E-020: RPC shapes (response parsers from DPSDK / dual best-effort keys) =====
+  // GetChannelsCount parser reads int `count` (DPSDK 0x1800d3ed0).
+  if (method === 'BRM.User.GetChannelsCount') return rpcEnvelope(method, { count: 1 });
+  // GetUserFunctions parser reads `functions` (DPSDK 0x1800e2500); empty list =
+  // no extra feature gating, launcher menus come from menu/available/list.
+  if (method === 'BRM.User.GetUserFunctions') return rpcEnvelope(method, { functions: [], functionList: [], count: 0 });
+  if (method === 'BRM.User.GetMenuRights') return rpcEnvelope(method, { menuRights: [], rights: [], menuList: [], count: 0 });
+  if (method === 'BRM.TvWall.GetTvWalls' || method === 'BRM.TvWall.GetTvWall') return rpcEnvelope(method, { tvWalls: [], list: [], wallList: [], count: 0 });
+  if (method === 'BRM.Linked.GetLinkedChannels') return rpcEnvelope(method, { linkedChannels: [], list: [], count: 0 });
+  if (method === 'BRM.Config.GetEmapInfo') return rpcEnvelope(method, { emapInfo: {}, enable: 0, list: [] });
+  // GetFunctionConfig expects an XML out-param (pInfoXml in DPSDK).
+  if (method === 'BRM.Config.GetFunctionConfig') return rpcEnvelope(method, { infoXml: '<FunctionConfig/>', xml: '<FunctionConfig/>', siraEnable: 0, pSiraEnable: 0 });
+  // User data round-trip (widget layouts): serve last saved blob.
+  if (method === 'BRM.User.SaveUserData') { LAST_USER_DATA = (req.body && req.body.data === undefined) ? {} : req.body.data; return rpcEnvelope(method, { code: 0, saved: true }); }
+  if (method === 'BRM.User.GetUserData') return rpcEnvelope(method, LAST_USER_DATA || {});
+  if (method === 'BRM.Time.SyncServerTime') { const now = Math.floor(Date.now() / 1000); return rpcEnvelope(method, { time: now, serverTime: now, timezone: 'UTC' }); }
+  // Everything else in the BRM.* family: benign success with empty data.
   return rpcEnvelope(method, {});
 }
 
@@ -558,14 +587,40 @@ app.get('/admin/API/tree/deviceOrg', async () => envelope({
   channelList: TREE_CHANNELS
 }));
 
-// Menu availability (~"failed to get menu"): role-independent menu list.
+// Menu availability (~"failed to get menu"): launcher menu tree with subsections
+// (user report: "faltaban todas las opciones" - the launcher renders children).
 const ADMIN_MENUS = [
-  { menuId: '100', menuName: 'Monitoring Center', parentId: '0', sort: 1, icon: 'monitor', url: '/realtime' },
-  { menuId: '200', menuName: 'Event Center', parentId: '0', sort: 2, icon: 'event', url: '/event' },
-  { menuId: '300', menuName: 'Intelligent Analysis', parentId: '0', sort: 3, icon: 'intel', url: '/analysis' },
-  { menuId: '400', menuName: 'Access Management', parentId: '0', sort: 4, icon: 'access', url: '/access' },
-  { menuId: '500', menuName: 'Parking Lot', parentId: '0', sort: 5, icon: 'parking', url: '/parking' },
-  { menuId: '600', menuName: 'Maintenance Center', parentId: '0', sort: 6, icon: 'maintenance', url: '/maintenance' }
+  { menuId: '100', id: '100', menuName: 'Monitoring Center', name: 'Monitoring Center', parentId: '0', parent: '0', sort: 1, icon: 'monitor', url: '/realtime', children: [
+    { menuId: '101', id: '101', menuName: 'Real-Time Video', name: 'Real-Time Video', parentId: '100', sort: 1, url: '/realtime/live' },
+    { menuId: '102', id: '102', menuName: 'Playback', name: 'Playback', parentId: '100', sort: 2, url: '/realtime/playback' },
+    { menuId: '103', id: '103', menuName: 'E-map', name: 'E-map', parentId: '100', sort: 3, url: '/realtime/emap' }
+  ] },
+  { menuId: '200', id: '200', menuName: 'Event Center', name: 'Event Center', parentId: '0', parent: '0', sort: 2, icon: 'event', url: '/event', children: [
+    { menuId: '201', id: '201', menuName: 'Real-Time Event', name: 'Real-Time Event', parentId: '200', sort: 1, url: '/event/live' },
+    { menuId: '202', id: '202', menuName: 'Event Search', name: 'Event Search', parentId: '200', sort: 2, url: '/event/search' },
+    { menuId: '203', id: '203', menuName: 'Event Rules', name: 'Event Rules', parentId: '200', sort: 3, url: '/event/rules' }
+  ] },
+  { menuId: '300', id: '300', menuName: 'DeepXplore', name: 'DeepXplore', parentId: '0', parent: '0', sort: 3, icon: 'deepxplore', url: '/deepxplore', children: [
+    { menuId: '301', id: '301', menuName: 'Intelligent Retrieval', name: 'Intelligent Retrieval', parentId: '300', sort: 1, url: '/deepxplore/retrieval' }
+  ] },
+  { menuId: '400', id: '400', menuName: 'Intelligent Analysis', name: 'Intelligent Analysis', parentId: '0', parent: '0', sort: 4, icon: 'intel', url: '/analysis', children: [
+    { menuId: '401', id: '401', menuName: 'Face Recognition', name: 'Face Recognition', parentId: '400', sort: 1, url: '/analysis/face' },
+    { menuId: '402', id: '402', menuName: 'Vehicle Management', name: 'Vehicle Management', parentId: '400', sort: 2, url: '/analysis/vehicle' },
+    { menuId: '403', id: '403', menuName: 'Heat Map', name: 'Heat Map', parentId: '400', sort: 3, url: '/analysis/heatmap' }
+  ] },
+  { menuId: '500', id: '500', menuName: 'Access Management', name: 'Access Management', parentId: '0', parent: '0', sort: 5, icon: 'access', url: '/access', children: [
+    { menuId: '501', id: '501', menuName: 'Door Management', name: 'Door Management', parentId: '500', sort: 1, url: '/access/door' },
+    { menuId: '502', id: '502', menuName: 'Person Management', name: 'Person Management', parentId: '500', sort: 2, url: '/access/person' }
+  ] },
+  { menuId: '600', id: '600', menuName: 'Parking Lot', name: 'Parking Lot', parentId: '0', parent: '0', sort: 6, icon: 'parking', url: '/parking', children: [
+    { menuId: '601', id: '601', menuName: 'Parking Overview', name: 'Parking Overview', parentId: '600', sort: 1, url: '/parking/overview' },
+    { menuId: '602', id: '602', menuName: 'Parking Records', name: 'Parking Records', parentId: '600', sort: 2, url: '/parking/records' }
+  ] },
+  { menuId: '700', id: '700', menuName: 'Maintenance Center', name: 'Maintenance Center', parentId: '0', parent: '0', sort: 7, icon: 'maintenance', url: '/maintenance', children: [
+    { menuId: '701', id: '701', menuName: 'System Status', name: 'System Status', parentId: '700', sort: 1, url: '/maintenance/status' },
+    { menuId: '702', id: '702', menuName: 'Device Maintenance', name: 'Device Maintenance', parentId: '700', sort: 2, url: '/maintenance/device' },
+    { menuId: '703', id: '703', menuName: 'Log Search', name: 'Log Search', parentId: '700', sort: 3, url: '/maintenance/logs' }
+  ] }
 ];
 app.get('/brms/api/v1.1/menu/available/list', async () => envelope({ menuList: ADMIN_MENUS, list: ADMIN_MENUS }));
 
@@ -594,6 +649,59 @@ app.get('/obms/api/v1.1/acs/person-group/list', async () => envelope({ list: [],
 app.get('/ipms/api/v1.1/organization/list', async () => envelope({ list: [], total: 0 }));
 app.get('/ipms/api/v1.1/parking-lot/detail/list', async () => envelope({ list: [], total: 0 }));
 app.get('/IPMS/API/entrance/parking-lot/binding-vto-itc', async () => envelope({ list: [], count: 0 }));
+
+// ===== E-020: remaining bootstrap 404s + launcher devices + fallbacks =====
+
+// Qt-side device lists (observed 404: /admin/API/tree/devices).
+app.get('/admin/API/tree/devices', async () => envelope({
+  deviceList: [TREE_DEVICE], list: [TREE_DEVICE], channelList: TREE_CHANNELS
+}));
+app.get('/admin/API/tree/equipment-tree', async () => envelope({
+  orgList: [TREE_ORG], deviceList: [TREE_DEVICE], channelList: TREE_CHANNELS
+}));
+app.get('/admin/API/tree/search', async () => envelope({ list: [TREE_DEVICE], total: 1 }));
+
+// E-map module (observed 404s): vector map data + raster list, benign empty.
+app.get('/emap/api/v1.1/map/vector', async () => envelope({ mapInfo: {}, vectorData: '', list: [] }));
+app.get('/emap/api/v1.1/map/raster/list', async () => envelope({ list: [], total: 0, rasterList: [] }));
+
+// Dictionary lookups (?types=22|2001|2055 ...): empty sets per requested type.
+app.get('/brms/api/v1.1/dictionary/list', async (req) => {
+  const types = String(req.query.types || '').split('|').filter(Boolean);
+  const per = {};
+  for (const t of types) per[t] = [];
+  return envelope({ ...per, list: [], dictionaryList: [] });
+});
+
+// Alarm overview counters (mode=1 window) and account device overview.
+app.get('/brms/api/v1.1/alarm/overview/summary', async () => envelope({
+  total: 0, unhandled: 0, handled: 0, handling: 0,
+  summary: { total: 0, unhandled: 0, handled: 0, handling: 0 },
+  list: []
+}));
+app.get('/brms/api/v1.1/account/device/overview', async () => envelope({
+  deviceCount: 1, onlineDeviceCount: 1, offlineDeviceCount: 0,
+  channelCount: 1, onlineChannelCount: 1, offlineChannelCount: 0,
+  overview: { deviceCount: 1, onlineDeviceCount: 1, offlineDeviceCount: 0 }
+}));
+
+// P2P config family ("network abnormal" toasts likely reference this).
+app.get('/brms/api/v1.1/config/p2p', async () => envelope({ p2pEnable: 0, enable: 0, openState: '0', list: [] }));
+app.get('/brms/api/v1.1/config/p2p/server/list', async () => envelope({ list: [] }));
+app.get('/brms/api/v1.1/config/configTypes', async () => envelope({ list: [], configTypes: [] }));
+
+// Catch-all benign responders for the rest of the microservice families
+// (172-path client inventory: accessControl, alarm-host, alarmBusiness,
+// vtalk, devicesManager, system/timezone, menus/client ...). Nothing in the
+// bootstrap may 404 or a module aborts with "data abnormal". [FALLBACK]
+// marks the exact hit so shapes get refined next cycle.
+function fallbackLog(req) {
+  console.log('[FALLBACK]', JSON.stringify({ timestamp: new Date().toISOString(), method: req.method, url: req.url, code: 1000 }));
+}
+for (const PREFIX of ['/admin/API', '/admin/api', '/brms/api', '/cfgs/api', '/obms/api', '/ipms/api', '/emap/api', '/IPMS/API', '/OBMS/API', '/EMAP/API', '/CFGS/API']) {
+  app.get(PREFIX + '/*', async (req) => { fallbackLog(req); return envelope({ list: [], total: 0 }); });
+  app.post(PREFIX + '/*', async (req) => { fallbackLog(req); return envelope({}); });
+}
 
 function auth(req, reply, done) {
   const token = req.headers['x-subject-token'];
