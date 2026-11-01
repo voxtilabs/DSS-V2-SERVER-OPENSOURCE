@@ -364,7 +364,7 @@ export function allChannels() {
 //    DPSDK.dll + the live client requests (no invented keys, dual-key only
 //    when the native parser and the web SPA disagree on the wrapper).
 // ---------------------------------------------------------------------------
-export function buildDeviceAddPayload(body, identity = {}) {
+export function buildDeviceAddPayload(body, identity = {}, publicHost = '10.10.20.120', rtspPort = 9100) {
   const input = normalizeDeviceInput(body);
   const existing = findDeviceByIpPort(input.deviceIp, input.devicePort);
   const device = existing || createDeviceRecord(input, identity);
@@ -372,9 +372,14 @@ export function buildDeviceAddPayload(body, identity = {}) {
   const created = DEVICE_REGISTRY.get(device.deviceCode);
   const channels = [];
   for (let i = 1; i <= created.channelNum; i++) channels.push(channelVo(created, i));
+  // Build the RTSP URL that the client should use. The camera may not expose
+  // RTSP on the standard port 554 (observed: closed on 192.168.0.238:554,
+  // open on :8554). We proxy the stream via MediaMTX on :9100 so the client
+  // connects to *our* server instead of dialing the camera directly.
+  const rtspUrl = `rtsp://${publicHost}:${rtspPort}/cam1`;
   // results[] is what the web SPA reads (E-024 shape discovery); device is the
   // single object the native DPSDK parser walks. Include every alias the
-  // client may walk so it doesn't time out waiting for a field it expects.
+  // client may walk so it doesn't time out waiting for a missing field.
   return {
     code: 1000,
     desc: 'Success',
@@ -413,11 +418,38 @@ export function buildDeviceAddPayload(body, identity = {}) {
     createTime: created.createTime,
     updateTime: created.updateTime,
     source: created.source,
+    // RTSP stream URL proxied via our MediaMTX (so the client does not need
+    // to dial the camera's RTSP port directly).
+    rtspUrl,
+    url: rtspUrl,
+    streamUrl: rtspUrl,
+    playUrl: rtspUrl,
     channels,
     channelList: channels,
     channelCount: channels.length,
     total: 1,
     success: true
+  };
+}
+
+// ---------------------------------------------------------------------------
+// RTSP URL lookup for an existing device
+// ---------------------------------------------------------------------------
+export function buildDeviceRtspUrlPayload(deviceCode, publicHost = '10.10.20.120', rtspPort = 9100) {
+  const device = DEVICE_REGISTRY.get(String(deviceCode));
+  if (!device) return null;
+  return {
+    code: 1000,
+    desc: 'Success',
+    data: {
+      deviceCode: device.deviceCode,
+      deviceName: device.deviceName,
+      rtspUrl: `rtsp://${publicHost}:${rtspPort}/cam1`,
+      url: `rtsp://${publicHost}:${rtspPort}/cam1`,
+      deviceIp: device.deviceIp,
+      devicePort: device.devicePort,
+      protocolType: device.protocolType
+    }
   };
 }
 

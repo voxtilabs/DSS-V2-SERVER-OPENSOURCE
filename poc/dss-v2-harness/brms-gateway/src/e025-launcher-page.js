@@ -47,32 +47,34 @@
 // Menu codes below are the REAL 158-code set harvested from the client's
 // leveldb cache (000003.ldb) and the client menu catalog (E-022/E-023).
 const TILE_REGISTRY = {
-  // 001000 - Resource Management
-  '001001': { name: 'Device', icon: '\uD83D\uDDA5', moduleName: 'Device Management', moduleCode: '001001', pluginName: 'DevManager' },
-  '001002': { name: 'User', icon: '\uD83D\uDC64', moduleName: 'User Management', moduleCode: '001002', pluginName: 'UserManager' },
-  '001003': { name: 'Storage', icon: '\uD83D\uDCBE', moduleName: 'Storage Management', moduleCode: '001003', pluginName: 'StorageManager' },
+  // 001000 - Resource Management (NATIVE QT PLUGINS - pluginName left empty
+  // so the client native dispatcher resolves by menuCode only; invented
+  // pluginNames made the client open the wrong module, e.g. IA instead of Device).
+  '001001': { name: 'Device', icon: '\uD83D\uDDA5', moduleName: 'Device Management', moduleCode: '001001', pluginName: '' },
+  '001002': { name: 'User', icon: '\uD83D\uDC64', moduleName: 'User Management', moduleCode: '001002', pluginName: '' },
+  '001003': { name: 'Storage', icon: '\uD83D\uDCBE', moduleName: 'Storage Management', moduleCode: '001003', pluginName: '' },
   // 002000 - Monitoring Center
-  '002001': { name: 'Monitoring Center', icon: '\uD83D\uDCF9', moduleName: 'Monitoring Center', moduleCode: '002001', pluginName: 'MainWindow' },
-  '002002': { name: 'E-Map', icon: '\uD83D\uDDFA', moduleName: 'E-Map', moduleCode: '002002', pluginName: 'EMapPlugin' },
-  '002003': { name: 'Base Info', icon: '\uD83D\uDCCB', moduleName: 'Base Info', moduleCode: '002003', pluginName: 'MainWindow' },
-  '002004': { name: 'Control Library', icon: '\uD83D\uDCDA', moduleName: 'Control Library', moduleCode: '002004', pluginName: 'MainWindow' },
-  '002005': { name: 'Access Control', icon: '\uD83D\uDEAA', moduleName: 'Access Control', moduleCode: '002005', pluginName: 'AccessControlPlugin' },
-  '002006': { name: 'Video Intercom', icon: '\uD83D\uDCDE', moduleName: 'Video Intercom', moduleCode: '002006', pluginName: 'VTOPlugin' },
-  '002007': { name: 'Attendance', icon: '\uD83D\uDCC5', moduleName: 'Attendance', moduleCode: '002007', pluginName: 'AttendancePlugin' },
-  '002008': { name: 'Visitor', icon: '\uD83D\uDC65', moduleName: 'Visitor Management', moduleCode: '002008', pluginName: 'VisitorPlugin' },
-  '002009': { name: 'Parking Lot', icon: '\uD83D\uDEB6', moduleName: 'Parking Lot', moduleCode: '002009', pluginName: 'ParkPlugin' },
-  '002010': { name: 'Intelligence Analysis', icon: '\uD83E\uDDE0', moduleName: 'Intelligence Analysis', moduleCode: '002010', pluginName: 'IVSPlugin' },
-  '002011': { name: 'Record Plan', icon: '\uD83D\uDCF9', moduleName: 'Record Plan', moduleCode: '002011', pluginName: 'RecordPlanPlugin' },
-  '002012': { name: 'Maintenance Config', icon: '\uD83D\uDD27', moduleName: 'Maintenance Config', moduleCode: '002012', pluginName: 'MaintenancePlugin' },
-  '002013': { name: 'TV Wall', icon: '\uD83D\uDDA5', moduleName: 'TV Wall', moduleCode: '002013', pluginName: 'TVWallPlugin' },
-  '002015': { name: 'Visual Tracking', icon: '\uD83C\uDDAF', moduleName: 'Visual Tracking', moduleCode: '002015', pluginName: 'TrackPlugin' },
+  '002001': { name: 'Monitoring Center', icon: '\uD83D\uDCF9', moduleName: 'Monitoring Center', moduleCode: '002001', pluginName: '' },
+  '002002': { name: 'E-Map', icon: '\uD83D\uDDFA', moduleName: 'E-Map', moduleCode: '002002', pluginName: '' },
+  '002003': { name: 'Base Info', icon: '\uD83D\uDCCB', moduleName: 'Base Info', moduleCode: '002003', pluginName: '' },
+  '002004': { name: 'Control Library', icon: '\uD83D\uDCDA', moduleName: 'Control Library', moduleCode: '002004', pluginName: '' },
+  '002005': { name: 'Access Control', icon: '\uD83D\uDEAA', moduleName: 'Access Control', moduleCode: '002005', pluginName: '' },
+  '002006': { name: 'Video Intercom', icon: '\uD83D\uDCDE', moduleName: 'Video Intercom', moduleCode: '002006', pluginName: '' },
+  '002007': { name: 'Attendance', icon: '\uD83D\uDCC5', moduleName: 'Attendance', moduleCode: '002007', pluginName: '' },
+  '002008': { name: 'Visitor', icon: '\uD83D\uDC65', moduleName: 'Visitor Management', moduleCode: '002008', pluginName: '' },
+  '002009': { name: 'Parking Lot', icon: '\uD83D\uDEB6', moduleName: 'Parking Lot', moduleCode: '002009', pluginName: '' },
+  '002010': { name: 'Intelligence Analysis', icon: '\uD83E\uDDE0', moduleName: 'Intelligence Analysis', moduleCode: '002010', pluginName: '' },
+  '002011': { name: 'Record Plan', icon: '\uD83D\uDCF9', moduleName: 'Record Plan', moduleCode: '002011', pluginName: '' },
+  '002012': { name: 'Maintenance Config', icon: '\uD83D\uDD27', moduleName: 'Maintenance Config', moduleCode: '002012', pluginName: '' },
+  '002013': { name: 'TV Wall', icon: '\uD83D\uDDA5', moduleName: 'TV Wall', moduleCode: '002013', pluginName: '' },
+  '002015': { name: 'Visual Tracking', icon: '\uD83C\uDDAF', moduleName: 'Visual Tracking', moduleCode: '002015', pluginName: '' },
   // 003000 - System / Cascade
-  '003001': { name: 'Cascade', icon: '\uD83D\uDD17', moduleName: 'Cascade', moduleCode: '003001', pluginName: 'CascadePlugin' },
-  '003002': { name: 'License', icon: '\uD83D\uDCDC', moduleName: 'License', moduleCode: '003002', pluginName: 'LicensePlugin' },
-  '003003': { name: 'System Config', icon: '\u2699', moduleName: 'System Config', moduleCode: '003003', pluginName: 'SysConfigPlugin' },
-  '003004': { name: 'Backup', icon: '\uD83D\uDCBD', moduleName: 'Backup', moduleCode: '003004', pluginName: 'BackupPlugin' },
-  '003005': { name: 'Third Party', icon: '\uD83D\uDD0C', moduleName: 'Third Party', moduleCode: '003005', pluginName: 'ThirdPartyPlugin' },
-  // 004000 - Web modules
+  '003001': { name: 'Cascade', icon: '\uD83D\uDD17', moduleName: 'Cascade', moduleCode: '003001', pluginName: '' },
+  '003002': { name: 'License', icon: '\uD83D\uDCDC', moduleName: 'License', moduleCode: '003002', pluginName: '' },
+  '003003': { name: 'System Config', icon: '\u2699', moduleName: 'System Config', moduleCode: '003003', pluginName: '' },
+  '003004': { name: 'Backup', icon: '\uD83D\uDCBD', moduleName: 'Backup', moduleCode: '003004', pluginName: '' },
+  '003005': { name: 'Third Party', icon: '\uD83D\uDD0C', moduleName: 'Third Party', moduleCode: '003005', pluginName: '' },
+  // 004000 - Web modules (rendered inside the CEF page, no native hand-off)
   '004002': { name: 'Search Center', icon: '\uD83D\uDD0D', moduleName: 'Search Center', moduleCode: '004002', pluginName: '', path: '/deepXplore' },
   '004003': { name: 'DeepXplore', icon: '\uD83D\uDD2C', moduleName: 'DeepXplore', moduleCode: '004003', pluginName: '', path: '/deepXplore/explorer' },
   '004004': { name: 'Maintenance Center', icon: '\uD83D\uDEE0', moduleName: 'Maintenance Center', moduleCode: '004004', pluginName: '', path: '/maintenance' },
@@ -81,8 +83,8 @@ const TILE_REGISTRY = {
   '004007': { name: 'Intelligence Center', icon: '\uD83E\uDDE0', moduleName: 'Intelligence Center', moduleCode: '004007', pluginName: '', path: '/intelligenceCenter' },
   '004008': { name: 'Face Recognition', icon: '\uD83D\uDC64', moduleName: 'Face Recognition', moduleCode: '004008', pluginName: '', path: '/faceRecognition' },
   // 010000 - Logs & Records
-  '010001': { name: 'Logs', icon: '\uD83D\uDCDD', moduleName: 'Logs', moduleCode: '010001', pluginName: 'LogPlugin' },
-  '010002': { name: 'Record Download', icon: '\u2B07', moduleName: 'Record Download', moduleCode: '010002', pluginName: 'DownloadCenter' },
+  '010001': { name: 'Logs', icon: '\uD83D\uDCDD', moduleName: 'Logs', moduleCode: '010001', pluginName: '' },
+  '010002': { name: 'Record Download', icon: '\u2B07', moduleName: 'Record Download', moduleCode: '010002', pluginName: '' },
   // 011000 - Web Applications
   '011001': { name: 'Web Apps', icon: '\uD83C\uDF10', moduleName: 'Web Applications', moduleCode: '011001', pluginName: '', path: '/webApps' }
 };
@@ -305,9 +307,12 @@ const PAGE = `<!DOCTYPE html>
       div.addEventListener('click', function (e) {
         e.preventDefault();
         console.log('Tile clicked:', code, info);
-        if (info.pluginName) {
-          switchMenuTab(info, code);
-        } else if (info.path) {
+        // Web modules (have a path) -> navigate inside the CEF page.
+        // Native QT modules (no path) -> hand off to the client via
+        // switchMenuTab with menuCode + menuName (pluginName left empty so
+        // the native dispatcher resolves by menuCode; invented pluginNames
+        // were opening the wrong module, e.g. IA instead of Device Config).
+        if (info.path) {
           window.location.hash = '#/entry/' + code;
         } else {
           switchMenuTab(info, code);

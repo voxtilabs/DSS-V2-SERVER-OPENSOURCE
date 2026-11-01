@@ -36,6 +36,7 @@ import {
   buildDevicePasswordChangeBatchPayload,
   buildDeviceTimezoneUpdateBatchPayload,
   buildDeviceUnauthorizedPagePayload,
+  buildDeviceRtspUrlPayload,
   buildDiscoverDeviceInitPayload,
   buildDiscoverDevicePagePayload,
   buildDiscoverDetailPayload,
@@ -1033,7 +1034,7 @@ const addDeviceHandler = async (req) => {
     online: probe.online !== false, manufacturer: identity.manufacturer, model: identity.model,
     serial: identity.serialNumber, costTimeMs: probe.costTimeMs
   }));
-  const result = buildDeviceAddPayload(req.body || {}, identity);
+  const result = buildDeviceAddPayload(req.body || {}, identity, PUBLIC_HOST, RTSP_PORT);
   const created = result.device || result.results?.[0];
   // E-025: broadcast a device-added event over WS so the client doesn't time out
   // waiting for a confirmation that never arrives over plain HTTP.
@@ -1078,6 +1079,13 @@ app.get('/brms/api/v1.1/discover/device/page', async () => envelope(buildDiscove
 app.get('/brms/api/v1.1/device/channel/page', async () => {
   const list = allChannels();
   return envelope({ list, results: list, channelList: list, items: list, total: list.length, pageNo: 1, pageSize: list.length || 20 });
+});
+// E-025b: RTSP URL lookup so the client can stream via our MediaMTX proxy
+// instead of dialing the camera's RTSP port directly (which may be closed).
+app.get('/brms/api/v1.1/device/rtsp-url', async (req, reply) => {
+  const payload = buildDeviceRtspUrlPayload(req.query?.deviceCode || req.query?.deviceId, PUBLIC_HOST, RTSP_PORT);
+  if (!payload) return reply.code(404).send(envelope(null, 404, 'Device not found'));
+  return envelope(payload);
 });
 app.get('/brms/api/v1.1/device/unauthorized/page', async () => envelope(buildDeviceUnauthorizedPagePayload()));
 app.post('/brms/api/v1.1/device/unauthorized/add/batch', async () => envelope({ success: true, results: [], list: [] }));

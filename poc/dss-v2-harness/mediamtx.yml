@@ -37,6 +37,6 @@ paths:
     runOnInitRestart: true
 
   cam1:
-    source: publisher
-    runOnInit: ffmpeg -re -f lavfi -i "testsrc2=size=1920x1080:rate=25" -c:v libx265 -preset ultrafast -tune zerolatency -x265-params "keyint=25:min-keyint=25:no-scenecut=1" -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/cam1
-    runOnInitRestart: true
+    # Real ONVIF camera stream pulled from 192.168.0.238:8554/EBA1_LECTOR
+    # The camera does NOT expose RTSP on port 554, so we proxy it via MediaMTX.
+    source: rtsp://192.168.0.238:8554/EBA1_LECTOR
