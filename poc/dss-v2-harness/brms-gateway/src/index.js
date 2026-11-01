@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs';
 import https from 'node:https';
+import net from 'node:net';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -55,6 +56,7 @@ const REALM = process.env.REALM || 'DSS-V2-LAB';
 const PORT = parseInt(process.env.PORT || '11443', 10);
 const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '1443', 10);
 const RTSP_PORT = parseInt(process.env.RTSP_PORT || '9100', 10);
+const ARS_PORT = parseInt(process.env.ARS_PORT || '9500', 10);
 const PUBLIC_HOST = process.env.PUBLIC_HOST || '127.0.0.1';
 const MEDIAMTX_URL = process.env.MEDIAMTX_URL || 'rtsp://mediamtx:8554';
 const SSL_KEY = process.env.SSL_KEY || '/certs/key.pem';
@@ -67,6 +69,170 @@ const PENDING = new Map();
 // RTSP session management
 const RTSP_SESSIONS = new Map();
 const WS_CLIENTS = new Set();
+
+// ===== ARS TCP Binary Protocol (DVRIP/DHIP) =====
+// Dahua Auto Register Service - TCP 9500 (VMS_ARCMS.exe)
+// DVRIP/DHIP Protocol: 32-byte header + payload
+const DHIP_MAGIC = 0x44484950; // "DHIP" = 0x44484950
+const DHIP_CMD = {
+  REGISTER: 0x0001,
+  HEARTBEAT: 0x0002,
+  COMMAND: 0x0003,
+  VIDEO_REQUEST: 0x0004,
+  LOGOUT: 0x0005,
+  CONFIG: 0x0006,
+  ALARM: 0x0007,
+  PTZ: 0x0008,
+  REGISTER_ACK: 0x8001,
+  HEARTBEAT_ACK: 0x8002,
+  COMMAND_ACK: 0x8003,
+  VIDEO_ACK: 0x8004,
+  LOGOUT_ACK: 0x8005,
+};
+
+// ARS TCP Sessions - persistent connections from NVRs
+const ARS_TCP_SESSIONS = new Map();
+
+// Parse DVRIP 32-byte header
+function parseDHIPHeader(buffer) {
+  if (buffer.length < 32) return null;
+  const magic = buffer.readUInt32LE(0);
+  const command = buffer.readUInt32LE(4);
+  const sequence = buffer.readUInt32LE(8);
+  const payloadLen = buffer.readUInt32LE(12);
+  const sessionId = buffer.readUInt32LE(16);
+  const deviceType = buffer.readUInt32LE(20);
+  const flags = buffer.readUInt32LE(24);
+  const reserved = buffer.readUInt32LE(28);
+  return { magic, command, sequence, payloadLen, sessionId, deviceType, flags, reserved };
+}
+
+// Build DVRIP 32-byte header
+function buildDHIPHeader(command, sequence, payloadLen, sessionId = 0, deviceType = 0, flags = 0) {
+  const header = Buffer.alloc(32);
+  header.writeUInt32LE(DHIP_MAGIC, 0);
+  header.writeUInt32LE(command, 4);
+  header.writeUInt32LE(sequence, 8);
+  header.writeUInt32LE(payloadLen, 12);
+  header.writeUInt32LE(0, 16);
+  header.writeUInt32LE(0, 20);
+  header.writeUInt32LE(0, 24);
+  header.writeUInt32LE(0, 28);
+  return header;
+}
+
+// Parse register payload (after 32-byte header)
+function parseRegisterPayload(buffer) {
+  let pos = 0;
+  const readNullTerminated = (buf, start, maxLen = 128) => {
+    let end = start;
+    while (end < start + maxLen && end < buf.length && buf[end] !== 0) end++;
+    const str = buf.slice(start, end).toString('utf8');
+    return { str, nextOffset: end + 1 };
+  };
+
+  try {
+    const deviceId = readNullTerminated(buffer, pos, 64);
+    pos = deviceId.nextOffset;
+    const deviceName = readNullTerminated(buffer, pos, 64);
+    pos = deviceName.nextOffset;
+    const deviceType = buffer.readUInt16LE(pos); pos += 2;
+    const channelCount = buffer.readUInt16LE(pos); pos += 2;
+    const ip = readNullTerminated(buffer, pos, 64);
+    pos = ip.nextOffset;
+    const port = buffer.readUInt16LE(pos); pos += 2;
+    const username = readNullTerminated(buffer, pos, 64);
+    pos = username.nextOffset;
+    const password = readNullTerminated(buffer, pos, 64);
+    pos = password.nextOffset;
+    const mac = buffer.slice(pos, pos + 6).toString('hex').match(/.{2}/g)?.join(':') || '';
+    pos += 6;
+    const firmware = readNullTerminated(buffer, pos, 64);
+
+    return {
+      deviceId: deviceId.str || `NVR-${Date.now()}`,
+      deviceName: deviceName.str || `NVR-${Date.now()}`,
+      deviceType: deviceType || 2,
+      channelCount: channelCount || 1,
+      ip: ip.str || 'unknown',
+      port: port || 37777,
+      username: username.str || 'admin',
+      password: password.str || 'admin123',
+      mac: '',
+      firmware: firmware.str || 'unknown'
+    };
+  } catch (e) {
+    console.log('[ARS] Parse payload error:', e.message);
+    return {
+      deviceId: `NVR-${Date.now()}`,
+      deviceName: `NVR-${Date.now()}`,
+      deviceType: 2,
+      channelCount: 1,
+      ip: 'unknown',
+      port: 37777,
+      username: 'admin',
+      password: 'admin123',
+      mac: '',
+      firmware: 'unknown'
+    };
+  }
+}
+
+// Build DHIP response header
+function buildDHIPResponse(command, sequence, payloadLen = 0, sessionId = 0) {
+  const header = Buffer.alloc(32);
+  header.writeUInt32LE(DHIP_MAGIC, 0);
+  header.writeUInt32LE(command, 4);
+  header.writeUInt32LE(sequence, 8);
+  header.writeUInt32LE(payloadLen, 12);
+  header.writeUInt32LE(0, 16);
+  header.writeUInt32LE(0, 20);
+  header.writeUInt32LE(0, 24);
+  header.writeUInt32LE(0, 28);
+  return header;
+}
+
+// Create register ACK response
+function createRegisterAck(sequence, deviceId) {
+  const header = Buffer.alloc(32);
+  header.writeUInt32LE(DHIP_MAGIC, 0);
+  header.writeUInt32LE(DHIP_CMD.REGISTER_ACK, 4);
+  header.writeUInt32LE(sequence, 8);
+  header.writeUInt32LE(0, 12);
+  header.writeUInt32LE(0, 16);
+  header.writeUInt32LE(0, 20);
+  header.writeUInt32LE(0, 24);
+  header.writeUInt32LE(0, 28);
+  return Buffer.concat([header, Buffer.from(deviceId + '\0', 'utf8')]);
+}
+
+// Create heartbeat ACK
+function createHeartbeatAck(sequence) {
+  const header = Buffer.alloc(32);
+  header.writeUInt32LE(DHIP_MAGIC, 0);
+  header.writeUInt32LE(DHIP_CMD.HEARTBEAT_ACK, 4);
+  header.writeUInt32LE(sequence, 8);
+  header.writeUInt32LE(0, 12);
+  header.writeUInt32LE(0, 16);
+  header.writeUInt32LE(0, 20);
+  header.writeUInt32LE(0, 24);
+  header.writeUInt32LE(0, 28);
+  return header;
+}
+
+// Create logout ACK
+function createLogoutAck(sequence) {
+  const header = Buffer.alloc(32);
+  header.writeUInt32LE(DHIP_MAGIC, 0);
+  header.writeUInt32LE(DHIP_CMD.LOGOUT_ACK, 4);
+  header.writeUInt32LE(sequence, 8);
+  header.writeUInt32LE(0, 12);
+  header.writeUInt32LE(0, 16);
+  header.writeUInt32LE(0, 20);
+  header.writeUInt32LE(0, 24);
+  header.writeUInt32LE(0, 28);
+  return header;
+}
 
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
 function doubleMd5(user, pass) { return md5(md5(user + md5(pass))); }
@@ -227,13 +393,9 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  // Use MediaMTX for real H.265 streaming
-  // MediaMTX path names must be alphanumeric/underscore/dot/minus/slash
-  // Use a simple path "test" for all channels (MediaMTX limitation)
   const mediamtxPath = 'test';
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${mediamtxPath}?token=${token}`;
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
-  // Store session for token validation
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now() });
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
@@ -243,7 +405,6 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   });
 });
 app.post('/brms/api/v1.0/MTS/Video/StopVideo', { preHandler: auth }, async (req) => {
-  // Clean up RTSP session if token provided
   const { token } = req.body;
   if (token) RTSP_SESSIONS.delete(token);
   return envelope({ success: true });
@@ -272,15 +433,8 @@ app.post('/brms/api/v1.0/SS/Record/DeleteRecord', { preHandler: auth }, async ()
 app.post('/brms/api/v1.0/event/subscription', { preHandler: auth }, async () => envelope({ subscriptionId: 'sub-' + genToken().slice(0, 8) }));
 app.post('/brms/api/v1.0/event/query', { preHandler: auth }, async () => envelope({ events: [] }));
 app.post('/brms/api/v1.0/event/push', async (req) => {
-  // Internal endpoint for UDP -> event bridge
   const { raw, from } = req.body;
-  const event = {
-    type: 'ALARM',
-    source: from,
-    raw,
-    timestamp: new Date().toISOString()
-  };
-  // Broadcast to all WebSocket clients
+  const event = { type: 'ALARM', source: from, raw, timestamp: new Date().toISOString() };
   const msg = JSON.stringify(event);
   for (const ws of WS_CLIENTS) {
     if (ws.readyState === 1) ws.send(msg);
@@ -365,16 +519,12 @@ app.get('/brms/api/v1.0/p2p/status', { preHandler: auth }, async () => envelope(
 }));
 
 // P2P Device Register by SN
-// Called by DSS Client to register a device by Serial Number
-// Body: { sn, user, password, name, channels }
-// Returns: { deviceId, channelIds, p2pStatus }
 const P2P_DEVICES = new Map();
 
 app.post('/brms/api/v1.0/device/p2p-register', { preHandler: auth }, async (req, reply) => {
   const { sn, user, password, name, channels = 1 } = req.body;
   if (!sn) return reply.code(400).send(envelope(null, 400, 'Missing SN'));
   
-  // Check if already registered
   if (P2P_DEVICES.has(sn)) {
     const existing = P2P_DEVICES.get(sn);
     return envelope({
@@ -385,222 +535,259 @@ app.post('/brms/api/v1.0/device/p2p-register', { preHandler: auth }, async (req,
     });
   }
   
-  // Generate device ID and channel IDs
   const deviceId = 'P2P-' + genToken().slice(0, 12);
   const channelIds = [];
   for (let i = 1; i <= channels; i++) {
     channelIds.push(`${deviceId}$${i}$0$0`);
   }
   
-  // Store P2P device info
   P2P_DEVICES.set(sn, {
-    sn,
-    deviceId,
-    name: name || `P2P Device ${sn}`,
-    user: user || 'admin',
-    channelIds,
-    registeredAt: Date.now(),
-    status: 'online'
+    sn, deviceId, name: name || `P2P Device ${sn}`, user: user || 'admin',
+    channelIds, registeredAt: Date.now(), status: 'online'
   });
   
-  // Also add to device tree (simulated)
-  // In real implementation, this would trigger SOAP lookup to Easy4IP and PTCP tunnel creation
-  
   return envelope({
-    deviceId,
-    channelIds,
-    p2pStatus: 'registered',
+    deviceId, channelIds, p2pStatus: 'registered',
     message: 'Device registered successfully. P2P tunnel creation simulated.'
   });
 });
 
-// P2P Device Unregister
-app.post('/brms/api/v1.0/device/p2p-unregister', { preHandler: auth }, async (req) => {
+app.post('/brms/api/v1.0/device/p2p-unregister', { preHandler: auth }, async (req, reply) => {
   const { sn } = req.body;
   if (!sn) return reply.code(400).send(envelope(null, 400, 'Missing SN'));
-  
   P2P_DEVICES.delete(sn);
   return envelope({ success: true, message: 'Device unregistered' });
 });
 
-// P2P Device List
 app.post('/brms/api/v1.0/device/p2p-list', { preHandler: auth }, async () => {
   const devices = Array.from(P2P_DEVICES.values()).map(d => ({
-    sn: d.sn,
-    deviceId: d.deviceId,
-    name: d.name,
-    status: d.status,
-    channelIds: d.channelIds,
-    registeredAt: d.registeredAt
+    sn: d.sn, deviceId: d.deviceId, name: d.name, status: d.status,
+    channelIds: d.channelIds, registeredAt: d.registeredAt
   }));
   return envelope({ devices });
 });
 
 // ===== ARS (Auto Register Service) - Device Auto-Registration =====
-// Traditional Dahua device auto-registration (device -> server)
-// Device sends registration with its info, server adds to device tree
-// Works WITHOUT P2P (as Don Omar confirmed)
-
 const ARS_DEVICES = new Map();
 
-// Device registers itself (called by device, not client)
-// Body: { deviceId, deviceName, ip, port, username, password, deviceType, channelNum, ... }
 app.post('/brms/api/v1.0/ars/register', async (req, reply) => {
   const { deviceId, deviceName, ip, port, username, password, deviceType, channelNum, protocol, ...rest } = req.body;
+  if (!deviceId || !ip) return reply.code(400).send(envelope(null, 400, 'Missing deviceId or ip'));
   
-  if (!deviceId || !ip) {
-    return reply.code(400).send(envelope(null, 400, 'Missing deviceId or ip'));
-  }
-
-  // Check if already registered
   if (ARS_DEVICES.has(deviceId)) {
     const existing = ARS_DEVICES.get(deviceId);
     existing.lastSeen = Date.now();
-    existing.ip = ip; // Update IP in case it changed
-    return envelope({
-      success: true,
-      deviceId: existing.deviceId,
-      message: 'Device already registered, updated',
-      registered: true
-    });
+    existing.ip = ip;
+    return envelope({ success: true, deviceId: existing.deviceId, message: 'Device already registered, updated', registered: true });
   }
-
-  // Generate internal device code if not provided
+  
   const internalDeviceCode = deviceId.startsWith('ARS-') ? deviceId : 'ARS-' + deviceId;
-
-  // Store ARS device info
   const deviceInfo = {
-    deviceId: internalDeviceCode,
-    originalId: deviceId,
-    deviceName: deviceName || `AutoReg Device ${deviceId}`,
-    ip,
-    port: port || 37777,
-    username: username || 'admin',
-    password: password || 'admin123',
-    deviceType: deviceType || 2, // 2 = IPC
-    channelNum: channelNum || 1,
-    protocol: protocol || 'Dahua',
-    status: 1, // online
-    registeredAt: Date.now(),
-    lastSeen: Date.now(),
-    ...rest
+    deviceId: internalDeviceCode, originalId: deviceId, deviceName: deviceName || `AutoReg Device ${deviceId}`,
+    ip, port: port || 37777, username: username || 'admin', password: password || 'admin123',
+    deviceType: deviceType || 2, channelNum: channelNum || 1, protocol: protocol || 'Dahua',
+    status: 1, registeredAt: Date.now(), lastSeen: Date.now(), ...rest
   };
-
+  
   ARS_DEVICES.set(deviceId, deviceInfo);
-
   console.log('[ARS] Device registered:', deviceId, 'from', ip);
-
-  return envelope({
-    success: true,
-    deviceId: internalDeviceCode,
-    message: 'Device registered successfully via ARS'
-  });
+  return envelope({ success: true, deviceId: internalDeviceCode, message: 'Device registered successfully via ARS' });
 });
 
-// Device heartbeat/keepalive
 app.post('/brms/api/v1.0/ars/keepalive', async (req, reply) => {
   const { deviceId } = req.body;
   if (!deviceId) return reply.code(400).send(envelope(null, 400, 'Missing deviceId'));
-
   const device = ARS_DEVICES.get(deviceId);
-  if (!device) {
-    return reply.code(404).send(envelope(null, 404, 'Device not registered'));
-  }
-
-  device.lastSeen = Date.now();
-  device.status = 1; // online
-
+  if (!device) return reply.code(404).send(envelope(null, 404, 'Device not registered'));
+  device.lastSeen = Date.now(); device.status = 1;
   return envelope({ success: true, deviceId });
 });
 
-// Device unregister
 app.post('/brms/api/v1.0/ars/unregister', async (req, reply) => {
   const { deviceId } = req.body;
   if (!deviceId) return reply.code(400).send(envelope(null, 400, 'Missing deviceId'));
-
   ARS_DEVICES.delete(deviceId);
   return envelope({ success: true, message: 'Device unregistered' });
 });
 
-// List ARS registered devices
 app.post('/brms/api/v1.0/ars/list', { preHandler: auth }, async () => {
   const devices = Array.from(ARS_DEVICES.values()).map(d => ({
-    deviceId: d.deviceId,
-    originalId: d.originalId,
-    deviceName: d.deviceName,
-    ip: d.ip,
-    port: d.port,
-    deviceType: d.deviceType,
-    channelNum: d.channelNum,
-    status: d.status,
-    registeredAt: d.registeredAt,
-    lastSeen: d.lastSeen
+    deviceId: d.deviceId, originalId: d.originalId, deviceName: d.deviceName,
+    ip: d.ip, port: d.port, deviceType: d.deviceType, channelNum: d.channelNum,
+    status: d.status, registeredAt: d.registeredAt, lastSeen: d.lastSeen
   }));
   return envelope({ devices });
 });
 
-// Get ARS device info for tree integration
 app.post('/brms/api/v1.0/ars/device-info', { preHandler: auth }, async (req) => {
   const { deviceId } = req.body;
   const device = ARS_DEVICES.get(deviceId);
-  if (!device) {
-    return envelope(null, 404, 'Device not found');
-  }
+  if (!device) return envelope(null, 404, 'Device not found');
   return envelope({
-    deviceCode: device.deviceId,
-    deviceName: device.deviceName,
-    status: device.status,
-    deviceType: device.deviceType,
-    ip: device.ip,
-    port: device.port,
-    protocol: device.protocol,
-    username: device.username,
-    channelNum: device.channelNum,
-    alarmInNum: 1,
-    alarmOutNum: 1,
-    diskNum: 0,
-    supportP2P: false,
-    supportRTSPS: false,
-    supportMulticast: false
+    deviceCode: device.deviceId, deviceName: device.deviceName, status: device.status,
+    deviceType: device.deviceType, ip: device.ip, port: device.port,
+    protocol: device.protocol, username: device.username, channelNum: device.channelNum,
+    alarmInNum: 1, alarmOutNum: 1, diskNum: 0,
+    supportP2P: false, supportRTSPS: false, supportMulticast: false
   });
 });
 
 // ===== HEALTH =====
-app.get('/health', async () => ({ status: 'ok', version: '0.3.0', realm: REALM, rtspPort: RTSP_PORT, publicHost: PUBLIC_HOST, mediamtxUrl: MEDIAMTX_URL }));
+app.get('/health', async () => ({ status: 'ok', version: '0.4.0', realm: REALM, rtspPort: RTSP_PORT, publicHost: PUBLIC_HOST, mediamtxUrl: MEDIAMTX_URL, arsPort: ARS_PORT }));
 
 // ===== WEBSOCKET SERVER =====
 function createWebSocketServer(httpsServer) {
   const wss = new WebSocketServer({ server: httpsServer, path: '/brms/api/v1.0/event/ws' });
-
   wss.on('connection', (ws, req) => {
-    // Verify token from query string or headers
     const url = new URL(req.url, `https://${req.headers.host}`);
     const token = url.searchParams.get('token') || req.headers['x-subject-token'];
-
-    if (!token || !TOKENS.has(token)) {
-      ws.close(4001, 'Unauthorized');
-      return;
-    }
-
+    if (!token || !TOKENS.has(token)) { ws.close(4001, 'Unauthorized'); return; }
     console.log('[WS] Client connected:', req.socket.remoteAddress);
     WS_CLIENTS.add(ws);
-
-    ws.on('close', () => {
-      WS_CLIENTS.delete(ws);
-      console.log('[WS] Client disconnected');
-    });
-
-    ws.on('error', (err) => {
-      console.log('[WS] Error:', err.message);
-      WS_CLIENTS.delete(ws);
-    });
-
-    // Send welcome message
+    ws.on('close', () => { WS_CLIENTS.delete(ws); console.log('[WS] Client disconnected'); });
+    ws.on('error', (err) => { console.log('[WS] Error:', err.message); WS_CLIENTS.delete(ws); });
     ws.send(JSON.stringify({ type: 'WELCOME', message: 'Event WebSocket connected' }));
   });
-
   console.log('WebSocket Server listening on wss://0.0.0.0:' + HTTPS_PORT + '/brms/api/v1.0/event/ws');
   return wss;
+}
+
+// ===== ARS TCP Binary Server (DVRIP/DHIP) =====
+function createARSTCPServer() {
+  console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
+  const server = net.createServer((socket) => {
+    const clientKey = `${socket.remoteAddress}:${socket.remotePort}`;
+    console.log('[ARS TCP] Client connected:', clientKey);
+    
+    let buffer = Buffer.alloc(0);
+    let sequence = 0;
+    
+    const session = {
+      socket,
+      deviceId: null,
+      sequence: 0,
+      lastActivity: Date.now(),
+      authenticated: false
+    };
+    
+    ARS_TCP_SESSIONS.set(clientKey, session);
+    
+    socket.on('data', (data) => {
+      session.lastActivity = Date.now();
+      buffer = Buffer.concat([buffer, data]);
+      
+      // Process complete DVRIP packets (32-byte header + payload)
+      while (buffer.length >= 32) {
+        const header = parseDHIPHeader(buffer);
+        if (!header) break;
+        
+        const totalLen = 32 + header.payloadLen;
+        if (buffer.length < totalLen) break; // Wait for more data
+        
+        const payload = buffer.subarray(32, totalLen);
+        buffer = buffer.subarray(totalLen);
+        
+        // Process command
+        const { command, sequence, payloadLen, sessionId } = header;
+        
+        console.log('[ARS TCP] Command:', command.toString(16), 'Seq:', sequence, 'Payload:', payloadLen, 'from', socket.remoteAddress);
+        
+        switch (command) {
+          case DHIP_CMD.REGISTER: {
+            session.sequence = header.sequence;
+            const deviceInfo = parseRegisterPayload(buffer.subarray(32, 32 + header.payloadLen));
+            session.deviceId = deviceInfo.deviceId;
+            session.authenticated = true;
+            
+            // Register device in ARS_DEVICES
+            const internalDeviceCode = 'ARS-' + deviceInfo.deviceId;
+            ARS_DEVICES.set(deviceInfo.deviceId, {
+              deviceId: 'ARS-' + deviceInfo.deviceId,
+              originalId: deviceInfo.deviceId,
+              deviceName: deviceInfo.deviceName,
+              ip: deviceInfo.ip,
+              port: deviceInfo.port,
+              username: deviceInfo.username,
+              password: deviceInfo.password,
+              deviceType: deviceInfo.deviceType,
+              channelNum: deviceInfo.channelCount,
+              protocol: 'Dahua',
+              status: 1,
+              registeredAt: Date.now(),
+              lastSeen: Date.now()
+            });
+            
+            console.log('[ARS TCP] Device registered:', deviceInfo.deviceId, 'from', socket.remoteAddress);
+            
+            // Send REGISTER_ACK
+            const ack = createRegisterAck(header.sequence, deviceInfo.deviceId);
+            socket.write(ack);
+            break;
+          }
+          
+          case DHIP_CMD.HEARTBEAT: {
+            const ack = createHeartbeatAck(header.sequence);
+            socket.write(ack);
+            if (session.deviceId) {
+              const device = ARS_DEVICES.get(session.deviceId);
+              if (device) { device.lastSeen = Date.now(); device.status = 1; }
+            }
+            break;
+          }
+          
+          case DHIP_CMD.LOGOUT: {
+            const ack = createLogoutAck(header.sequence);
+            socket.write(ack);
+            if (session.deviceId) {
+              ARS_DEVICES.delete(session.deviceId);
+            }
+            socket.end();
+            break;
+          }
+          
+          default: {
+            console.log('[ARS TCP] Unknown command:', command.toString(16));
+            // Send generic ACK for unknown commands
+            const ackHeader = buildDHIPResponse(command | 0x8000, header.sequence);
+            socket.write(ackHeader);
+          }
+        }
+      }
+    });
+    
+    socket.on('error', (err) => {
+      console.log('[ARS TCP] Client error:', err.message);
+    });
+    
+    socket.on('close', () => {
+      console.log('[ARS TCP] Client disconnected:', clientKey);
+      if (session.deviceId) {
+        const device = ARS_DEVICES.get(session.deviceId);
+        if (device) { device.status = 0; device.lastSeen = Date.now(); }
+      }
+      ARS_TCP_SESSIONS.delete(clientKey);
+    });
+    
+    // Heartbeat timeout check
+    const heartbeatInterval = setInterval(() => {
+      if (Date.now() - session.lastActivity > 120000) {
+        console.log('[ARS TCP] Client timeout:', clientKey);
+        socket.destroy();
+        clearInterval(heartbeatInterval);
+      }
+    }, 30000);
+    
+    socket.on('close', () => clearInterval(heartbeatInterval));
+  });
+  
+  server.on('error', (err) => {
+    console.error('[ARS TCP] Server error:', err);
+  });
+  
+  server.listen(ARS_PORT, '0.0.0.0', () => {
+    console.log(`ARS TCP Server (DVRIP) listening on 0.0.0.0:${ARS_PORT}`);
+  });
+  return server;
 }
 
 async function start() {
@@ -615,25 +802,16 @@ async function start() {
         cert: fs.readFileSync(SSL_CERT)
       }, async (req, res) => {
         const chunks = [];
-        for await (const chunk of req) {
-          chunks.push(chunk);
-        }
+        for await (const chunk of req) { chunks.push(chunk); }
         const body = Buffer.concat(chunks).toString('utf8');
-
         try {
-          const response = await app.inject({
-            method: req.method,
-            url: req.url,
-            payload: body,
-            headers: req.headers
-          });
+          const response = await app.inject({ method: req.method, url: req.url, payload: body, headers: req.headers });
           res.statusCode = response.statusCode;
           Object.entries(response.headers).forEach(([k, v]) => res.setHeader(k, v));
           res.end(response.body);
         } catch (err) {
           console.error('HTTPS proxy error:', err);
-          res.statusCode = 500;
-          res.end('Internal Server Error');
+          res.statusCode = 500; res.end('Internal Server Error');
         }
       });
 
@@ -644,10 +822,13 @@ async function start() {
         });
         server.on('error', reject);
       });
-
-      // Start WebSocket server on same HTTPS server
       createWebSocketServer(httpsServer);
     }
+
+    // Start ARS TCP Server (DVRIP/DHIP on port 9500)
+    console.log('[DEBUG] Starting ARS TCP Server on port', ARS_PORT);
+    createARSTCPServer();
+    console.log('[DEBUG] ARS TCP Server creation returned');
 
     const udp = dgram.createSocket('udp4');
     udp.on('message', (msg, rinfo) => {

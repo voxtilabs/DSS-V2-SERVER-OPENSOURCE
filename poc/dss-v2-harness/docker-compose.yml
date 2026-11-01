@@ -8,6 +8,7 @@ services:
       - "11443:11443"
       - "18800:18800/udp"
       - "19800:19800/udp"
+      - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
     volumes:
       - ../certs:/certs:ro
     environment:
@@ -19,6 +20,7 @@ services:
       - REALM=DSS-V2-LAB
       - PUBLIC_HOST=10.10.20.120
       - RTSP_PORT=9100
+      - ARS_PORT=9500
       - MEDIAMTX_URL=rtsp://mediamtx:8554
     networks:
       - dss-network
@@ -27,7 +29,9 @@ services:
       - mediamtx
 
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    build:
+      context: .
+      dockerfile: MediaMTX.Dockerfile
     ports:
       - "9100:8554"  # RTSP port (mapped to 9100 for DSS Client)
       - "1935:1935"  # RTMP

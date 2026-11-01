@@ -1,12 +1,42 @@
-{
-  "rtspAddress": ":8554",
-  "logLevel": "info",
-  "paths": {
-    "test": {
-      "source": "publisher"
-    },
-    "cam1": {
-      "source": "publisher"
-    }
-  }
-}
+# MediaMTX configuration for DSS V2 H.265 real streaming
+# Minimal config for v1.11.3
+
+# RTSP settings
+rtspAddress: :8554
+
+# RTMP settings
+rtmpAddress: :1935
+
+# HLS settings
+hlsAddress: :8888
+hlsAlwaysRemux: true
+hlsSegmentCount: 5
+hlsSegmentDuration: 2s
+hlsPartDuration: 500ms
+hlsEncryption: false
+
+# WebRTC settings
+webrtcAddress: :8889
+webrtcICEServers: []
+
+# API settings
+apiAddress: :9997
+
+# Metrics settings
+metricsAddress: :9998
+metrics: true
+
+# Log settings
+logLevel: info
+
+# Path configurations
+paths:
+  test:
+    source: publisher
+    runOnInit: ffmpeg -re -f lavfi -i "testsrc2=size=1920x1080:rate=25" -c:v libx265 -preset ultrafast -tune zerolatency -x265-params "keyint=25:min-keyint=25:no-scenecut=1" -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/test
+    runOnInitRestart: true
+
+  cam1:
+    source: publisher
+    runOnInit: ffmpeg -re -f lavfi -i "testsrc2=size=1920x1080:rate=25" -c:v libx265 -preset ultrafast -tune zerolatency -x265-params "keyint=25:min-keyint=25:no-scenecut=1" -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/cam1
+    runOnInitRestart: true

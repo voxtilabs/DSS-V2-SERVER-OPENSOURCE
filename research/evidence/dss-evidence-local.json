@@ -1081,6 +1081,84 @@
         "EV-059"
       ],
       "confidence": "CONFIRMADO (tests automatizados pasan contra laboratorio real)"
+    },
+    "e013": {
+      "title": "E-013 ARS TCP Real + H.265 Real Publisher + Contenedores Sanos (2026-11-01)",
+      "components": {
+        "brms_gateway": {
+          "version": "0.5.0",
+          "updates": [
+            "ARS TCP Binary Server (DVRIP/DHIP) en puerto 9500",
+            "MediaMTX custom con FFmpeg embebido para H.265 real",
+            "ARS TCP Binary Protocol: REGISTER/HEARTBEAT/LOGOUT + ACKs",
+            "Payload parsing DVRIP binario (32-byte header + payload)",
+            "ARS TCP Sessions persistentes con timeout 120s",
+            "MediaMTX custom Docker multi-stage con FFmpeg 6.1 + libx265"
+          ],
+          "tests": "npm test PASS (10/10 unit tests + bootstrap + P2P + ARS endpoints)"
+        },
+        "docker_compose": {
+          "services": [
+            "brms-gateway (11443/1443/18800/19800/9500)",
+            "mediamtx (9100:8554 RTSP, 1935 RTMP, 8888 HLS, 8889 WebRTC)",
+            "p2p-probe (opt, profile: tools)"
+          ],
+          "mediamtx": {
+            "image": "custom multi-stage (alpine + FFmpeg 6.1 + libx265 + MediaMTX v1.11.3)",
+            "paths": {
+              "test": "source: publisher + runOnInit FFmpeg libx265",
+              "cam1": "source: publisher + runOnInit FFmpeg libx265"
+            },
+            "status": "RTSP real H.265 operativo (OPTIONS 200 OK, DESCRIBE 200 OK con SDP H.265 + VPS/SPS/PPS)"
+          }
+        },
+        "e2e_tests": {
+          "runner": "poc/dss-v2-harness/e2e-lan-test.mjs",
+          "results": {
+            "E2E-1": { "name": "Auth handshake + keepalive/current", "status": "PASS" },
+            "E2E-2": { "name": "Tree/orgs + devices + channels", "status": "PASS" },
+            "E2E-3": { "name": "RTSP OPTIONS 200 OK + DESCRIBE 200 OK + SDP H.265 real", "status": "PASS", "note": "SDP con rtpmap:96 H265/90000 + VPS/SPS/PPS válidos" },
+            "E2E-4": { "name": "UDP 18800 -> WebSocket push", "status": "PASS" },
+            "E2E-5": { "name": "P2P probe manual + ARS REST + ARS TCP", "status": "PASS" }
+          },
+          "unit_tests": "10/10 PASS in brms-gateway (incluye bootstrap + P2P + ARS endpoints)"
+        },
+        "ars_tcp_binary": {
+          "protocol": "DVRIP/DHIP (cabecera 32 bytes: magic DHIP, command, sequence, payload_len, session_id, device_type, flags, reserved)",
+          "magic": "0x44484950 (DHIP little-endian)",
+          "commands": {
+            "REGISTER": "0x0001",
+            "HEARTBEAT": "0x0002",
+            "LOGOUT": "0x0005",
+            "REGISTER_ACK": "0x8001",
+            "HEARTBEAT_ACK": "0x8002",
+            "LOGOUT_ACK": "0x8005"
+          },
+          "register_payload": "Device ID, Name, Type, Channels, IP, Port, Username, Password, MAC, Firmware (strings null-terminated)",
+          "session_management": "ARS_TCP_SESSIONS Map con timeout 120s, heartbeat cada 30s",
+          "validation": "REGISTER→REGISTER_ACK, HEARTBEAT→HEARTBEAT_ACK, LOGOUT→LOGOUT_ACK validados por sonda TCP real"
+        },
+        "media_mtx_h265": {
+          "dockerfile": "Multi-stage: alpine builder (FFmpeg 6.1 + curl) → alpine runtime (FFmpeg + libgcc/libstdc++ + mediamtx binary)",
+          "ffmpeg_publisher": "runOnInit: ffmpeg -re -f lavfi -i testsrc2=size=1920x1080:rate=25 -c:v libx265 -preset ultrafast -tune zerolatency -x265-params keyint=25:min-keyint=25:no-scenecut=1 -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/test",
+          "paths": { "test": "source: publisher", "cam1": "source: publisher" },
+          "sdp_h265": "rtpmap:96 H265/90000 + sprop-vps/sps/pps válidos (base64)",
+          "validation": "OPTIONS 200 OK, DESCRIBE 200 OK con SDP H.265, SETUP/PLAY/TEARDOWN"
+        },
+        "verification": {
+          "unit_tests": "cd poc/dss-v2-harness/brms-gateway && npm test (10/10 PASS)",
+          "e2e_tests": "node --test poc/dss-v2-harness/e2e-lan-test.mjs (5/5 PASS)",
+          "health_check": "curl -k https://10.10.20.120:1443/health",
+          "ars_tcp_test": "Raw TCP client a 10.10.20.120:9500 con paquete DVRIP binario",
+          "rtsp_probe": "OPTIONS/DESCRIBE TCP a 10.10.20.120:9100 con token válido"
+        },
+        "ev_ids": [
+          "EV-061",
+          "EV-062",
+          "EV-063"
+        ],
+        "confidence": "CONFIRMADO (tests automatizados pasan contra laboratorio real)"
+      }
     }
   }
 }

@@ -429,4 +429,90 @@ curl -k https://10.10.20.120:1443/health
 curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/device/p2p-register \
   -H "X-Subject-Token: <token>" -H "Content-Type: application/json" \
   -d '{"sn":"SN123456","user":"admin","password":"admin123","channels":4}'
+
+# Test ARS TCP register (device auto-registration, no auth)
+curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/register \
+  -H "Content-Type: application/json" \
+  -d '{"deviceId":"CAM-001","deviceName":"Test Cam","ip":"192.168.1.100","port":37777}'
+```
+
+## 22. E-013: ARS TCP Real + H.265 Real + Contenedores Sanos (EV-061..063)
+
+### 22.1 ARS TCP Binary Protocol (DVRIP/DHIP) - Puerto 9500
+Implementación real del protocolo binario DVRIP/DHIP usado por `VMS_ARCMS.exe` (servicio ARS del servidor Dahua).
+
+| Aspecto | Detalle |
+|---------|---------|
+| Puerto | TCP 9500 (configurable `ARS_PORT`) |
+| Protocolo | DVRIP/DHIP binario - cabecera 32 bytes |
+| Magic | `0x44484950` ("DHIP" little-endian) |
+| Cabecera | 32 bytes: magic, command, sequence, payload_len, session_id, device_type, flags, reserved |
+| Comandos | REGISTER (0x0001), HEARTBEAT (0x0002), LOGOUT (0x0005) |
+| Respuestas | REGISTER_ACK (0x8001), HEARTBEAT_ACK (0x8002), LOGOUT_ACK (0x8005) |
+
+**Payload REGISTER** (tras cabecera 32 bytes):
+- Device ID (SN, null-terminated, max 64 bytes)
+- Device Name (null-terminated, max 64 bytes)
+- Device Type (uint16), Channel Count (uint16)
+- IP (string null-terminated), Port (uint16)
+- Username/Password (null-terminated)
+- MAC (6 bytes), Firmware (null-terminated)
+
+**Flujo NVR**: TCP connect → REGISTER (0x0001) → REGISTER_ACK (0x8001) → HEARTBEAT periódico (0x0002) → LOGOUT (0x0005)
+
+### 22.2 MediaMTX H.265 Real Publisher (FFmpeg + libx265)
+- **Imagen custom**: Multi-stage Docker (alpine + FFmpeg 6.1 + libx265) + MediaMTX v1.11.3
+- **Puertos**: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+- **Paths**: `test`, `cam1` con `source: publisher` + `runOnInit` FFmpeg
+- **FFmpeg command**: `ffmpeg -re -f lavfi -i "testsrc2=size=1920x1080:rate=25" -c:v libx265 -preset ultrafast -tune zerolatency -x265-params "keyint=25:min-keyint=25:no-scenecut=1" -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/test`
+
+**SDP Real H.265 en DESCRIBE**:
+```
+v=0
+o=- 0 0 IN IP4 127.0.0.1
+s=No Name
+c=IN IP4 0.0.0.0
+t=0 0
+m=video 0 RTP/AVP 96
+a=control:trackID=0
+a=rtpmap:96 H265/90000
+a=fmtp:96 sprop-pps=RAHAcYMS; sprop-sps=QgEBAWAAAAMAkAAAAwAAAwB4oAPAgBEHy5bpKTC8BaAgAAADACAAAAMDIQ==; sprop-vps=QAEMAf//AWAAAAMAkAAAAwAAAwB4ugJA
+```
+
+### 22.3 E2E Test Suite Results (All PASS)
+| Test | Validation |
+|------|------------|
+| E2E-1 | Auth handshake + keepalive/current |
+| E2E-2 | Tree/DTOs exactos |
+| E2E-3 | RTSP OPTIONS 200 OK + DESCRIBE 200 OK + SDP H.265 real (VPS/SPS/PPS) |
+| E2E-4 | UDP 18800 → WebSocket push `type:ALARM` |
+| E2E-5 | P2P probe manual + ARS REST + ARS TCP |
+
+### 22.4 ARS TCP Binary Test (DVRIP)
+```bash
+# Conectar a 10.10.20.120:9500
+# Enviar paquete DVRIP REGISTER (cabecera 32B + payload)
+# Recibir REGISTER_ACK (0x8001)
+# Enviar HEARTBEAT (0x0002) → HEARTBEAT_ACK (0x8002)
+# Enviar LOGOUT (0x0005) → LOGOUT_ACK (0x8005)
+```
+
+### 22.5 Verification Commands
+```bash
+# Unit tests
+cd poc/dss-v2-harness/brms-gateway && npm test
+
+# E2E tests (from Windows)
+node --test poc/dss-v2-harness/e2e-lan-test.mjs
+
+# Health check
+curl -k https://10.10.20.120:1443/health
+
+# Test ARS REST register
+curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/register \
+  -H "Content-Type: application/json" \
+  -d '{"deviceId":"CAM-001","deviceName":"Test Cam","ip":"192.168.1.100","port":37777}'
+
+# Test ARS TCP binary (requires raw TCP client)
+# See poc/dss-v2-harness/test-ars-tcp.mjs for reference implementation
 ```

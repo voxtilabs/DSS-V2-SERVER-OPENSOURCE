@@ -282,3 +282,48 @@ curl -k -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/register \
 | `POST /ars/device-info` | Sí | `{ deviceId }` | `DeviceTreeVo` |
 
 **Diferencia clave**: ARS = device-to-server (sin P2P), P2P Register = client-to-server (con P2P).
+
+## 11. E-013: ARS TCP Real + H.265 Real + Contenedores Sanos (EV-061..063)
+
+### 11.1 ARS TCP Binary Protocol (DVRIP/DHIP) - Puerto 9500
+Protocolo binario nativo Dahua para autoregistro de dispositivos (VMS_ARCMS.exe).
+
+| Aspecto | Detalle |
+|---------|---------|
+| Puerto | TCP 9500 |
+| Protocolo | DVRIP/DHIP binario (cabecera 32 bytes + payload) |
+| Magic | `0x44484950` ("DHIP") |
+| Comandos | REGISTER (0x0001), HEARTBEAT (0x0002), LOGOUT (0x0005) |
+| Respuestas | REGISTER_ACK (0x8001), HEARTBEAT_ACK (0x8002), LOGOUT_ACK (0x8005) |
+
+**Payload REGISTER**: Device ID, Name, Type, Channels, IP, Port, Credentials, MAC, Firmware (strings null-terminated)
+
+### 11.2 MediaMTX H.265 Real Publisher
+- **Custom Docker**: Multi-stage (alpine + FFmpeg 6.1 + libx265) + MediaMTX v1.11.3
+- **Puertos**: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+- **FFmpeg publisher**: `runOnInit` con `libx265` + `testsrv2` + `keyint=25`
+- **SDP H.265 real**: `rtpmap:96 H265/90000` + `sprop-vps/sps/pps` válidos
+
+### 11.3 E2E Test Results (All PASS)
+| Test | Validación |
+|------|------------|
+| E2E-1 | Auth handshake + keepalive/current |
+| E2E-2 | Tree/DTOs exactos |
+| E2E-3 | RTSP OPTIONS 200 OK + DESCRIBE 200 OK + SDP H.265 real (VPS/SPS/PPS) |
+| E2E-4 | UDP 18800 → WebSocket push |
+| E2E-5 | P2P probe + ARS REST + ARS TCP |
+
+### 11.4 Verification Commands
+```bash
+# Unit tests
+cd poc/dss-v2-harness/brms-gateway && npm test
+
+# E2E tests (from Windows)
+node --test poc/dss-v2-harness/e2e-lan-test.mjs
+
+# Health check
+curl -k https://10.10.20.120:1443/health
+
+# Test ARS TCP binary (raw DVRIP on port 9500)
+# See poc/dss-v2-harness/test-ars-tcp.mjs for reference implementation
+```

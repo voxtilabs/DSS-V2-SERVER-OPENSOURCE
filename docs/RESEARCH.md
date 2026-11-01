@@ -624,3 +624,35 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
 - Diferencia clave con P2P Register: ARS = device-to-server (sin P2P), P2P Register = client-to-server (requiere P2P)
 - Tests: Register, Keepalive, List, DeviceInfo, Unregister → todos PASS
 - Confianza: **CONFIRMADO** (validado en laboratorio, confirmado por operador)
+
+### EV-061 — ARS TCP Binary Protocol (DVRIP/DHIP) en Puerto 9500
+- Fecha: 2026-11-01 · Implementación real del protocolo binario DVRIP/DHIP usado por `VMS_ARCMS.exe` (servicio ARS del servidor Dahua)
+- Puerto: TCP 9500 (configurable via `ARS_PORT`)
+- Protocolo: Cabecera binaria de 32 bytes (magic `0x44484950` "DHIP", comando, secuencia, payload_len, session_id, device_type, flags, reserved) + payload variable
+- Comandos implementados: REGISTER (0x0001) → REGISTER_ACK (0x8001), HEARTBEAT (0x0002) → HEARTBEAT_ACK (0x8002), LOGOUT (0x0005) → LOGOUT_ACK (0x8005)
+- Payload REGISTER: Device ID (SN), Device Name, Device Type, Channel Count, IP, Port, Username, Password, MAC, Firmware (strings null-terminated)
+- Flujo NVR: TCP connect → REGISTER packet → REGISTER_ACK → HEARTBEAT periódico → LOGOUT al desconectar
+- Mantiene socket TCP persistente para comandos DVRIP inversos (video, PTZ, config)
+- Tests: REGISTER → REGISTER_ACK, HEARTBEAT → HEARTBEAT_ACK, LOGOUT → LOGOUT_ACK → PASS
+- Confianza: **CONFIRMADO** (probado contra servidor real en 10.10.20.120:9500)
+
+### EV-062 — MediaMTX con Publisher FFmpeg Real H.265
+- Fecha: 2026-11-01 · Servicio `mediamtx` custom con FFmpeg embebido
+- Imagen: Custom Docker multi-stage (alpine + FFmpeg 6.1 + libx265) + MediaMTX v1.11.3
+- Puertos: 9100:8554 (RTSP), 1935 (RTMP), 8888 (HLS), 8889 (WebRTC)
+- Paths `test` y `cam1` con `source: publisher` + `runOnInit` FFmpeg (`testsrv2` + `libx265` + `x265-params keyint=25`)
+- SDP real H.265: `rtpmap:96 H265/90000` + `sprop-vps/sps/pps` válidos en DESCRIBE
+- RTSP validado: OPTIONS 200 OK, DESCRIBE 200 OK con SDP H.265 real, SETUP/PLAY/TEARDOWN
+- RTSP probe E2E: OPTIONS 200 OK + DESCRIBE 200 OK + SDP con `H265` + VPS/SPS/PPS válidos
+- Confianza: **CONFIRMADO** (stream H.265 real entregado en puerto 9100)
+
+### EV-063 — E-013: ARS TCP Real + H.265 Real + Contenedores Sanos
+- Fecha: 2026-11-01 · Validación completa en laboratorio 10.10.20.120
+- Servicios operativos: HTTPS 1443, HTTP 11443, RTSP 9100 (H.265 real), ARS TCP 9500 (DVRIP), UDP 18800/19800, WebSocket 1443
+- Contenedores: `brms-gateway` (Node.js), `mediamtx` (FFmpeg + MediaMTX), todos `Up` sin reinicios
+- E2E Tests: 5/5 PASS (Auth, Tree/DTOs, RTSP H.265 real probe, UDP→WS, P2P)
+- Unit Tests: 10/10 PASS (DTOs, Bootstrap, P2P, ARS REST)
+- ARS TCP: REGISTER→ACK, HEARTBEAT→ACK, LOGOUT→ACK validados por sonda TCP real
+- RTSP H.265 real: DESCRIBE 200 OK + SDP con `H265` + VPS/SPS/PPS válidos
+- p2p-probe: Contenedor detenido limpiamente (perfil `tools`, `restart: "no"`)
+- Confianza: **CONFIRMADO** (validación E2E completa contra laboratorio real)
