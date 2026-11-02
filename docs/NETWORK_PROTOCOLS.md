@@ -675,3 +675,30 @@ curl -sk https://10.10.20.120:1443/brms/api/v1.1/device/statistics/count-by-devi
 curl -sk -X POST https://10.10.20.120:1443/brms/api/v1.0/ars/list
 ```
 
+
+## E-026: ONVIF -> MediaMTX video bridge (verified live 2026-11-02)
+
+Camera: AI Sentinel EBA1_LECTOR_FHD_H265, S/N SENTINEL_8021
+- ONVIF device service: http://192.168.0.238:8021/onvif/device_service
+- RTSP stream: rtsp://192.168.0.238:8554/EBA1_LECTOR (port 554 CLOSED)
+- MediaMTX: pulls :8554/EBA1_LECTOR, serves :9100/cam1 (H265 25fps)
+
+MTS/Video/StartVideo returns:
+  url: rtsp://<PUBLIC_HOST>:9100/cam1?token=<token>
+  protocol: RTSP, port: 9100
+Plus all 18 RealTimeVideoVo fields (vkId, vkValue, connectType, session, ...).
+
+POST /device returns rtspUrl/url/streamUrl/playUrl = rtsp://<PUBLIC_HOST>:9100/cam1.
+
+Config (env, no hardcodes):
+  MEDIAMTX_API_URL=http://mediamtx:9997
+  MEDIAMTX_CAMERA_PATH=cam1
+  RTSP_PORT=9100
+  PUBLIC_HOST=10.10.20.120
+
+See .env.example for full template.
+
+Verification:
+  curl -sk -X POST https://10.10.20.120:1443/brms/api/v1.0/MTS/Video/StartVideo \
+    -H 'X-Subject-Token: <token>' -d '{"channelId":"1000171","streamType":1}'
+  timeout 8 bash -c 'exec 3<>/dev/tcp/localhost/9100; printf "OPTIONS rtsp://localhost:9100/cam1 RTSP/1.0\r\nCSeq: 1\r\n\r\n" >&3; read -t 5 line <&3; echo ""'

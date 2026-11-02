@@ -757,3 +757,23 @@ Formato de ficha: ver `experiments/TEMPLATE.md` y `research/evidence/TEMPLATE.md
   - SOAP getDeviceByDevSequence answers HTTP 400 for a malformed serial and HTTP 200 with an EMPTY <return></return> for a well-formed serial (the operator camera serial SENTINEL_8021) -> that serial is NOT published on the Dahua P2P cloud.
 - Implemented honestly: /brms/api/v1.0/p2p/status lists the real endpoints; /brms/api/v1.0/p2p/reachability measures DNS+TCP live; /brms/api/v1.0/p2p/easy4ip/probe?sn=... performs the real SOAP lookup; /brms/api/v1.0/device/p2p-register does the real lookup and returns p2pStatus "registered" (with ipAddress) or "unresolved" with the actual cause, never a simulated success.
 - Confidence: CONFIRMED (live measurements from the server; the camera must be registered on Easy4IP with its serial and the DSS server must share that P2P account before the cloud resolves it)
+
+## EV-075 - E-026: ONVIF->MediaMTX video bridge + missing FALLBACK routes (verified live 2026-11-02)
+
+Operator trace (1h window): 184x200, 4x401 (challenges, normal), 8x[FALLBACK] on:
+/user/list, /monitor/view/view-tree, /config/ai/privacy, /admin/API/user/fish-eye-data,
+/face/application/control/repository/page, /face/application/control/repository/process/list.
+All now return 200 with benign envelopes.
+
+Camera facts (verified live): ONVIF device service on :8021/onvif/device_service,
+RTSP stream on rtsp://192.168.0.238:8554/EBA1_LECTOR (port 554 CLOSED/FILTERED).
+MediaMTX path "cam1" pulls rtsp://192.168.0.238:8554/EBA1_LECTOR -> H265 25fps on
+rtsp://10.10.20.120:9100/cam1.
+
+MTS/Video/StartVideo now returns url=rtsp://<PUBLIC_HOST>:9100/cam1?token=<tok>
+with all 18 RealTimeVideoVo fields. POST /device also returns rtspUrl/url/streamUrl.
+
+Config: MEDIAMTX_API_URL, MEDIAMTX_CAMERA_PATH via docker-compose env + .env.example
+(.env gitignored). No hardcoded test/cam1 paths remain.
+
+Tests: unit 22/22 PASS, e2e 9/9 PASS against 10.10.20.120.
