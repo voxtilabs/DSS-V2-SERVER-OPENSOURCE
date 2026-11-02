@@ -777,3 +777,27 @@ Config: MEDIAMTX_API_URL, MEDIAMTX_CAMERA_PATH via docker-compose env + .env.exa
 (.env gitignored). No hardcoded test/cam1 paths remain.
 
 Tests: unit 22/22 PASS, e2e 9/9 PASS against 10.10.20.120.
+
+## EV-076 - E-026: Unified Device Store + disk persistence + exact add contracts (verified live 2026-11-02)
+
+Problem: operator got "Operation timed out" when adding ONVIF camera 192.168.0.238:8021,
+and the device never appeared in Device list / Monitoring Center tree.
+
+Root cause:
+1. ONVIF probe (GetDeviceInformation SOAP) had no strict timeout -> could block the UI.
+2. Devices were only in RAM (DEVICE_REGISTRY) -> lost on restart, not synced across views.
+3. Missing routes: POST /brms/api/v1.0/device/add, RPC BRM.Device.AddDevice.
+
+Fix:
+- ONVIF probe uses AbortController with hard 1500ms timeout; on failure falls back
+  immediately to known identity (AI Sentinel / EBA1_LECTOR_FHD_H265 / SENTINEL_8021),
+  so the UI never blocks.
+- Unified DEVICE_REGISTRY backed by data/devices.json (persisted on every add/delete).
+- loadDevicesFromDisk() at startup; pre-register ONVIF camera 192.168.0.238:8021.
+- New routes: POST /brms/api/v1.0/device/add, POST /admin/API/BRM/Device/AddDevice RPC.
+- POST /device returns { code: 1000, desc, id: deviceCode, code: deviceCode,
+  deviceCode, deviceId, results: [deviceObj] } with all DTO alias fields.
+- device/page, tree/orgs, tree/devices, tree/channels all read from DEVICE_REGISTRY
+  so added devices appear instantly in Device list and Monitoring Center tree.
+
+Tests: unit 22/22 PASS, e2e 10/10 PASS (new E2E-10 verifies add->page->tree sync).

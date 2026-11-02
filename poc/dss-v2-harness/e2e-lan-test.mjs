@@ -444,6 +444,53 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.ok(html.includes("'switchMenuTab'"), 'bridge: module hand-off');
   });
 
+  // ===== E2E-10 (E-026): device add + persist in disk + tree sync =====
+  it('E2E-10 Device add + persist in disk + appear in device/page + tree/devices + tree/channels', async () => {
+    const start = Date.now();
+    const body = JSON.stringify({
+      deviceIp: '192.168.0.238', devicePort: 8021, protocolType: '99',
+      deviceCategory: '1', deviceType: '62', deviceName: 'EBA1_ONVIF',
+      serverCode: 'video#local', encoderChannelCount: 1,
+      loginPass: '0123456789abcdef0123456789abcdef'
+    });
+    const add = await request(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body
+    });
+    const elapsed = Date.now() - start;
+    assert.equal(add.status, 200);
+    assert.ok(elapsed < 2000, `Add device took ${elapsed}ms, must be < 2000ms`);
+    const addJson = await add.json();
+    assert.ok(addJson.data?.deviceCode, 'add must return a deviceCode');
+    assert.ok(addJson.data.results?.[0]?.deviceCode, 'results[0] must have deviceCode');
+    assert.ok(addJson.data.id === addJson.data.deviceCode || addJson.data.code === addJson.data.deviceCode, 'id/code/deviceCode must match');
+    assert.ok(!JSON.stringify(addJson.data).includes('0123456789abcdef'), 'loginPass must not be echoed');
+
+    const page = await request(`${BASE}/brms/api/v1.1/device/page`, {
+      headers: { 'X-Subject-Token': token }
+    });
+    const pageJson = await page.json();
+    assert.ok(pageJson.data.results?.some((d) => d.deviceName === 'EBA1_ONVIF') || pageJson.data.list?.some((d) => d.deviceName === 'EBA1_ONVIF'), 'device must appear in device/page');
+
+    const tree = await request(`${BASE}/brms/api/v1.0/tree/devices`, {
+      method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}'
+    });
+    const treeJson = await tree.json();
+    assert.ok(treeJson.data?.deviceList?.some((d) => d.deviceName === 'EBA1_ONVIF') || treeJson.data?.list?.some((d) => d.deviceName === 'EBA1_ONVIF'), 'device must appear in tree/devices');
+
+    const chans = await request(`${BASE}/brms/api/v1.0/tree/channels`, {
+      method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}'
+    });
+    const chansJson = await chans.json();
+    assert.ok(Array.isArray(chansJson.data?.channelList) || Array.isArray(chansJson.data?.list), 'tree/channels must return channel list');
+
+    const page2 = await request(`${BASE}/brms/api/v1.1/device/page`, {
+      headers: { 'X-Subject-Token': token }
+    });
+    const page2Json = await page2.json();
+    const allResults = page2Json.data?.results || page2Json.data?.list || [];
+    assert.ok(allResults.some((d) => d.deviceIp === '192.168.0.238'), 'pre-registered ONVIF camera 192.168.0.238 must be in device/page');
+  });
+
   it('E2E-7 SIP UDP 5080 - REGISTER SIP registration', async () => {
     const crypto = await import('node:crypto');
     const dgram = await import('node:dgram');

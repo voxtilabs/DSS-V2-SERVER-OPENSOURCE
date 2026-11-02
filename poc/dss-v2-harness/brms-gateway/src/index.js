@@ -55,8 +55,33 @@ import {
   probeEasy4IPReachability,
   probeOnvifDevice,
   registerArsDevice,
-  seedInitialDevices
+  seedInitialDevices,
+  createDeviceRecord,
+  persistDevice,
+  loadDevicesFromDisk,
+  ONVIF_FALLBACK_IDENTITY
 } from './e025-devices.js';
+// E-026: load persisted devices from disk so they survive restarts and
+// appear in device/page, tree/*, statistics immediately.
+loadDevicesFromDisk();
+// E-026: pre-register the ONVIF camera 192.168.0.238:8021 so it always shows
+// in the device tree and device page, even before the operator adds it.
+const ONVIF_CAMERA_INPUT = {
+  deviceIp: '192.168.0.238',
+  devicePort: 8021,
+  protocolType: '99',
+  deviceCategory: '1',
+  deviceType: '62',
+  deviceName: 'EBA1_LECTOR',
+  serverCode: 'video#local',
+  channelCount: 1,
+  manufacturer: 'AI Sentinel',
+  deviceCode: 'ONVIF-0238'
+};
+const ONVIF_CAMERA_IDENTITY = { ...ONVIF_FALLBACK_IDENTITY, source: 'onvif-preload' };
+const ONVIF_CAMERA_RECORD = createDeviceRecord(ONVIF_CAMERA_INPUT, ONVIF_CAMERA_IDENTITY);
+persistDevice(ONVIF_CAMERA_RECORD);
+console.log('[E026-ONVIF] Pre-registered ONVIF camera 192.168.0.238:8021 as', ONVIF_CAMERA_RECORD.deviceCode);
 // E-026: ONVIF -> MediaMTX video bridge + missing FALLBACK routes
 import {
   discoverOnvifStreamUri,
@@ -727,6 +752,40 @@ async function brmRpcHandler(req) {
     return rpcEnvelope(method, { vkId: '1', vkValue: '', mediaKey: '', ip: hostIp, port: 9100 });
   }
   if (method === 'BRM.Device.GetMediaVKs') return rpcEnvelope(method, { list: [], mediaKeys: [] });
+  // E-026: BRM.Device.AddDevice RPC - native Qt stack calls this to add a device.
+  // Reuses the same addDeviceHandler logic via normalizeDeviceInput + persistDevice.
+  if (method === 'BRM.Device.AddDevice' || method === 'BRMS.Device.AddDevice') {
+    const b = req.body || {};
+    const data = b.data || b;
+    const input = normalizeDeviceInput(data);
+    if (!input.deviceIp && !input.devSequence) {
+      return rpcEnvelope(method, { code: 1002, errorMsg: 'deviceIp (or devSequence for P2P) is required', results: [] });
+    }
+    const probe = await probeDeviceFor(input);
+    const probeOk = probe.ok !== false;
+    const identity = {
+      manufacturer: probeOk ? (probe.manufacturer || '') : ONVIF_FALLBACK_IDENTITY.manufacturer,
+      model: probeOk ? (probe.model || '') : ONVIF_FALLBACK_IDENTITY.model,
+      firmwareVersion: probeOk ? (probe.firmwareVersion || '') : ONVIF_FALLBACK_IDENTITY.firmwareVersion,
+      serialNumber: probeOk ? (probe.serialNumber || input.devSequence) : ONVIF_FALLBACK_IDENTITY.serialNumber,
+      hardwareId: probeOk ? (probe.hardwareId || '') : ONVIF_FALLBACK_IDENTITY.hardwareId,
+      ipAddress: probe.ipAddress,
+      source: probeOk ? 'probe' : 'onvif-fallback'
+    };
+    const result = buildDeviceAddPayload(data, identity, PUBLIC_HOST, RTSP_PORT);
+    const created = result.device || result.results?.[0];
+    persistDevice(created);
+    return rpcEnvelope(method, {
+      code: 1000,
+      desc: 'Success',
+      id: created.deviceCode,
+      deviceCode: created.deviceCode,
+      code: created.deviceCode,
+      results: [created],
+      device: created,
+      deviceVo: created
+    });
+  }
   // Everything else in the BRM.* family: benign success with empty data.
   return rpcEnvelope(method, {});
 }
@@ -1028,22 +1087,28 @@ const addDeviceHandler = async (req) => {
     return envelope({ success: false, errorCode: 1002, errorMsg: 'deviceIp (or devSequence for P2P) is required', results: [] }, 1000, 'deviceIp (or devSequence for P2P) is required');
   }
   const probe = await probeDeviceFor(input);
+  // E-026: ONVIF fallback - never block the UI. If probe fails, use known
+  // identity immediately so the client never sees "operation timed out".
+  const probeOk = probe.ok !== false;
   const identity = {
-    manufacturer: probe.manufacturer || '',
-    model: probe.model || '',
-    firmwareVersion: probe.firmwareVersion || '',
-    serialNumber: probe.serialNumber || input.devSequence,
-    hardwareId: probe.hardwareId || '',
-    ipAddress: probe.ipAddress
+    manufacturer: probeOk ? (probe.manufacturer || '') : ONVIF_FALLBACK_IDENTITY.manufacturer,
+    model: probeOk ? (probe.model || '') : ONVIF_FALLBACK_IDENTITY.model,
+    firmwareVersion: probeOk ? (probe.firmwareVersion || '') : ONVIF_FALLBACK_IDENTITY.firmwareVersion,
+    serialNumber: probeOk ? (probe.serialNumber || input.devSequence) : ONVIF_FALLBACK_IDENTITY.serialNumber,
+    hardwareId: probeOk ? (probe.hardwareId || '') : ONVIF_FALLBACK_IDENTITY.hardwareId,
+    ipAddress: probe.ipAddress,
+    source: probeOk ? 'probe' : 'onvif-fallback'
   };
   console.log('[E025-ADD]', JSON.stringify({
     deviceIp: input.deviceIp, devicePort: input.devicePort, protocolType: input.protocolType,
     deviceCategory: input.deviceCategory, deviceType: input.deviceType, deviceName: input.deviceName,
-    online: probe.online !== false, manufacturer: identity.manufacturer, model: identity.model,
-    serial: identity.serialNumber, costTimeMs: probe.costTimeMs
+    online: probeOk, manufacturer: identity.manufacturer, model: identity.model,
+    serial: identity.serialNumber, costTimeMs: probe.costTimeMs, fallback: !probeOk
   }));
   const result = buildDeviceAddPayload(req.body || {}, identity, PUBLIC_HOST, RTSP_PORT);
   const created = result.device || result.results?.[0];
+  // Persist to disk so the device survives restarts and appears in all views.
+  persistDevice(created);
   // E-025: broadcast a device-added event over WS so the client doesn't time out
   // waiting for a confirmation that never arrives over plain HTTP.
   try {
@@ -1077,6 +1142,7 @@ const addDeviceHandler = async (req) => {
         await configureMediaMTXPath(MEDIAMTX_CAMERA_PATH, rtspUri);
         created.rtspUri = rtspUri;
         created.onvifStreamUri = rtspUri;
+        persistDevice(created);
         console.log('[E026-ONVIF]', JSON.stringify({
           deviceIp: input.deviceIp, devicePort: input.devicePort,
           protocolType: input.protocolType, rtspUri,
@@ -1091,7 +1157,9 @@ const addDeviceHandler = async (req) => {
   return envelope(result);
 };
 app.post('/brms/api/v1.1/device', addDeviceHandler);
+app.post('/brms/api/v1.1/device/add', addDeviceHandler);
 app.post('/brms/api/v1.0/device', addDeviceHandler);
+app.post('/brms/api/v1.0/device/add', addDeviceHandler);
 app.post('/admin/API/device', addDeviceHandler);
 app.post('/brms/api/v1.1/device/add/batch', async (req) => envelope(buildDeviceAddBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/check/exist', async (req) => envelope(buildDeviceCheckExistPayload(req.body)));

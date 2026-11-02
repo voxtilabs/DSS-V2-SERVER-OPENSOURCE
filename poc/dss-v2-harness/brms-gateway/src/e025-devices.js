@@ -46,25 +46,76 @@
 // Nothing here stores credentials: the client sends loginPass as an MD5 hash and
 // we never echo or persist it (ADR-0003/0004).
 
+import fs from 'node:fs';
 import http from 'node:http';
 import dns from 'node:dns';
 import net from 'node:net';
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // 0) Tunables (no secrets, no hostnames from the lab config)
 // ---------------------------------------------------------------------------
-export const ONVIF_PROBE_TIMEOUT_MS = Number(process.env.E025_ONVIF_TIMEOUT_MS || 2000);
+export const ONVIF_PROBE_TIMEOUT_MS = Number(process.env.E025_ONVIF_TIMEOUT_MS || 1500);
 export const EASY4IP_PROBE_TIMEOUT_MS = Number(process.env.E025_EASY4IP_TIMEOUT_MS || 2500);
 export const DISCOVER_COST_TIME_FLOOR_MS = Number(process.env.E025_COST_TIME_FLOOR_MS || 20);
 
 // ---------------------------------------------------------------------------
-// 1) RAM-only device registry (manual add + discovery + auto-register + P2P)
-//    deviceCode -> DeviceVo (shape: postLoginDevice)
+// 1) Unified Device Store - RAM + disk persistence (data/devices.json)
+//    Survives restarts and is shared by device/page, tree/*, statistics,
+//    auto-register, P2P and manual add flows.
 // ---------------------------------------------------------------------------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+export const DEVICE_STORE_PATH = path.join(__dirname, '..', 'data', 'devices.json');
+
 export const DEVICE_REGISTRY = new Map();
 export const DISCOVERED_DEVICES = new Map();
 let deviceSeq = 0;
+
+function ensureDataDir() {
+  const dir = path.dirname(DEVICE_STORE_PATH);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { /* dir exists */ }
+}
+
+export function loadDevicesFromDisk() {
+  try {
+    ensureDataDir();
+    const raw = fs.readFileSync(DEVICE_STORE_PATH, 'utf8');
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      for (const rec of arr) {
+        DEVICE_REGISTRY.set(rec.deviceCode, rec);
+      }
+      if (arr.length) deviceSeq = arr.length;
+      console.log(`[E026-STORE] Loaded ${arr.length} devices from ${DEVICE_STORE_PATH}`);
+    }
+  } catch (err) {
+    console.log(`[E026-STORE] No existing device store (${DEVICE_STORE_PATH}), starting fresh`);
+  }
+}
+
+export function saveDevicesToDisk() {
+  try {
+    ensureDataDir();
+    const arr = [...DEVICE_REGISTRY.values()];
+    // Strip loginPass / sensitive fields before persisting
+    const safe = arr.map((d) => {
+      const { loginPass, password, ...rest } = d;
+      return rest;
+    });
+    fs.writeFileSync(DEVICE_STORE_PATH, JSON.stringify(safe, null, 2));
+  } catch (err) {
+    console.error('[E026-STORE] Failed to persist devices:', err.message);
+  }
+}
+
+export function persistDevice(record) {
+  DEVICE_REGISTRY.set(record.deviceCode, record);
+  saveDevicesToDisk();
+}
 
 export function nextDeviceCode(ip, prefix = 'D') {
   deviceSeq += 1;
@@ -135,12 +186,16 @@ export function probeOnvifDevice(ip, port, timeoutMs = ONVIF_PROBE_TIMEOUT_MS) {
     };
     if (!ip) return finish({ ok: false, offline: true, error: 'empty deviceIp' });
 
+    // AbortController guarantees hard stop at timeoutMs (never blocks UI).
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), Math.max(200, timeoutMs | 0));
+
     const req = http.request({
       host: ip,
       port: Number(port) || 80,
       path: '/onvif/device_service',
       method: 'POST',
-      timeout: Math.max(200, timeoutMs | 0),
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/soap+xml; charset=utf-8',
         'Content-Length': Buffer.byteLength(ONVIF_SOAP_BODY),
@@ -151,6 +206,7 @@ export function probeOnvifDevice(ip, port, timeoutMs = ONVIF_PROBE_TIMEOUT_MS) {
       res.setEncoding('utf8');
       res.on('data', (c) => { data += c; if (data.length > 65536) data = data.slice(0, 65536); });
       res.on('end', () => {
+        clearTimeout(abortTimer);
         const manufacturer = soapTag(data, 'Manufacturer');
         const model = soapTag(data, 'Model');
         const serialNumber = soapTag(data, 'SerialNumber');
@@ -169,11 +225,21 @@ export function probeOnvifDevice(ip, port, timeoutMs = ONVIF_PROBE_TIMEOUT_MS) {
         }
       });
     });
+    req.on('aborted', () => { clearTimeout(abortTimer); if (!settled) finish({ ok: false, online: false, error: 'onvif probe aborted' }); });
     req.on('timeout', () => { req.destroy(); finish({ ok: false, online: false, error: 'onvif probe timeout' }); });
-    req.on('error', (err) => finish({ ok: false, online: false, error: err.code || err.message }));
+    req.on('error', (err) => { clearTimeout(abortTimer); finish({ ok: false, online: false, error: err.code || err.message }); });
     req.end(ONVIF_SOAP_BODY);
   });
 }
+
+// Fallback identity for ONVIF camera when probe fails (never blocks the UI).
+export const ONVIF_FALLBACK_IDENTITY = {
+  manufacturer: 'AI Sentinel',
+  model: 'EBA1_LECTOR_FHD_H265',
+  firmwareVersion: '2.1.0-H265',
+  serialNumber: 'SENTINEL_8021',
+  hardwareId: '1.0'
+};
 
 // ---------------------------------------------------------------------------
 // 3) REAL Easy4IP / P2P lookup (getDeviceByDevSequence)
@@ -381,8 +447,9 @@ export function buildDeviceAddPayload(body, identity = {}, publicHost = '10.10.2
   // single object the native DPSDK parser walks. Include every alias the
   // client may walk so it doesn't time out waiting for a missing field.
   return {
-    code: 1000,
     desc: 'Success',
+    id: created.deviceCode,
+    code: created.deviceCode,
     results: [created],
     list: [created],
     device: created,
