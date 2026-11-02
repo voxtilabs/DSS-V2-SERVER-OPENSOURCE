@@ -57,6 +57,14 @@ import {
   registerArsDevice,
   seedInitialDevices
 } from './e025-devices.js';
+// E-026: ONVIF -> MediaMTX video bridge + missing FALLBACK routes
+import {
+  discoverOnvifStreamUri,
+  configureMediaMTXPath,
+  MEDIAMTX_CAMERA_PATH,
+  MEDIAMTX_API_URL,
+  FALLBACK_ROUTES
+} from './e026-video.js';
 // E-025: the mock camera is part of the device registry so /device/page,
 // /tree/* and the statistics all report the same set of devices.
 seedInitialDevices();
@@ -1059,6 +1067,27 @@ const addDeviceHandler = async (req) => {
   } catch (err) {
     console.log('[E025-ADD] WS broadcast failed:', err.message);
   }
+
+  // E-026: ONVIF dynamic RTSP discovery - discover the camera's real RTSP URI
+  // via SOAP GetProfiles/GetStreamUri and register it in MediaMTX on demand.
+  if (input.protocolType === '99' && input.deviceIp && created) {
+    try {
+      const rtspUri = await discoverOnvifStreamUri(input.deviceIp, input.devicePort);
+      if (rtspUri) {
+        await configureMediaMTXPath(MEDIAMTX_CAMERA_PATH, rtspUri);
+        created.rtspUri = rtspUri;
+        created.onvifStreamUri = rtspUri;
+        console.log('[E026-ONVIF]', JSON.stringify({
+          deviceIp: input.deviceIp, devicePort: input.devicePort,
+          protocolType: input.protocolType, rtspUri,
+          mediamtxPath: MEDIAMTX_CAMERA_PATH
+        }));
+      }
+    } catch (err) {
+      console.log('[E026-ONVIF] discovery failed:', err.message);
+    }
+  }
+
   return envelope(result);
 };
 app.post('/brms/api/v1.1/device', addDeviceHandler);
@@ -1095,6 +1124,18 @@ app.post('/brms/api/v1.1/device/unauthorized/delete/batch', async () => envelope
 app.post('/brms/api/v1.1/discover/device/init', async (req) => envelope(buildDiscoverDeviceInitPayload(req.body)));
 app.post('/brms/api/v1.1/discover/device/join/batch', async (req) => envelope(buildDiscoverJoinBatchPayload(req.body)));
 app.post('/brms/api/v1.1/discover/device/network/update', async () => envelope({ success: true }));
+
+// ===== E-026: MISSING FALLBACK ROUTES =====
+// Observed during operator testing: these return generic empty envelopes so
+// the client never shows "data provided by the service its abnormal" toasts.
+for (const [route, payload] of Object.entries(FALLBACK_ROUTES)) {
+  const [method, path] = route.split(' ', 2);
+  if (method === 'GET') {
+    app.get(path, async () => envelope(payload));
+  } else if (method === 'POST') {
+    app.post(path, async () => envelope(payload));
+  }
+}
 
 // --- statistics / network / timezone / roles / functions / subsystems ---
 app.get('/brms/api/v1.1/device/statistics/count-by-device-category/list', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), req.query)));
@@ -1356,10 +1397,9 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const mediamtxPath = 'test';
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${mediamtxPath}?token=${token}`;
+  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${MEDIAMTX_CAMERA_PATH}?token=${token}`;
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
-  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now() });
+  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: MEDIAMTX_CAMERA_PATH });
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,

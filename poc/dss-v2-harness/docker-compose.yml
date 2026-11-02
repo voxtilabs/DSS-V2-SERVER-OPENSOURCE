@@ -28,6 +28,8 @@ services:
       - ARS_PORT=9500
       - SIP_PORT=5080
       - MEDIAMTX_URL=rtsp://mediamtx:8554
+      - MEDIAMTX_API_URL=http://mediamtx:9997
+      - MEDIAMTX_CAMERA_PATH=cam1
     networks:
       - dss-network
     restart: unless-stopped
