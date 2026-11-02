@@ -58,30 +58,11 @@ import {
   seedInitialDevices,
   createDeviceRecord,
   persistDevice,
-  loadDevicesFromDisk,
-  ONVIF_FALLBACK_IDENTITY
+  loadDevicesFromDisk
 } from './e025-devices.js';
 // E-026: load persisted devices from disk so they survive restarts and
 // appear in device/page, tree/*, statistics immediately.
 loadDevicesFromDisk();
-// E-026: pre-register the ONVIF camera 192.168.0.238:8021 so it always shows
-// in the device tree and device page, even before the operator adds it.
-const ONVIF_CAMERA_INPUT = {
-  deviceIp: '192.168.0.238',
-  devicePort: 8021,
-  protocolType: '99',
-  deviceCategory: '1',
-  deviceType: '62',
-  deviceName: 'EBA1_LECTOR',
-  serverCode: 'video#local',
-  channelCount: 1,
-  manufacturer: 'AI Sentinel',
-  deviceCode: 'ONVIF-0238'
-};
-const ONVIF_CAMERA_IDENTITY = { ...ONVIF_FALLBACK_IDENTITY, source: 'onvif-preload' };
-const ONVIF_CAMERA_RECORD = createDeviceRecord(ONVIF_CAMERA_INPUT, ONVIF_CAMERA_IDENTITY);
-persistDevice(ONVIF_CAMERA_RECORD);
-console.log('[E026-ONVIF] Pre-registered ONVIF camera 192.168.0.238:8021 as', ONVIF_CAMERA_RECORD.deviceCode);
 // E-026: ONVIF -> MediaMTX video bridge + missing FALLBACK routes
 import {
   discoverOnvifStreamUri,
@@ -764,11 +745,11 @@ async function brmRpcHandler(req) {
     const probe = await probeDeviceFor(input);
     const probeOk = probe.ok !== false;
     const identity = {
-      manufacturer: probeOk ? (probe.manufacturer || '') : ONVIF_FALLBACK_IDENTITY.manufacturer,
-      model: probeOk ? (probe.model || '') : ONVIF_FALLBACK_IDENTITY.model,
-      firmwareVersion: probeOk ? (probe.firmwareVersion || '') : ONVIF_FALLBACK_IDENTITY.firmwareVersion,
-      serialNumber: probeOk ? (probe.serialNumber || input.devSequence) : ONVIF_FALLBACK_IDENTITY.serialNumber,
-      hardwareId: probeOk ? (probe.hardwareId || '') : ONVIF_FALLBACK_IDENTITY.hardwareId,
+      manufacturer: probeOk ? (probe.manufacturer || '') : '',
+      model: probeOk ? (probe.model || '') : '',
+      firmwareVersion: probeOk ? (probe.firmwareVersion || '') : '',
+      serialNumber: probeOk ? (probe.serialNumber || input.devSequence) : '',
+      hardwareId: probeOk ? (probe.hardwareId || '') : '',
       ipAddress: probe.ipAddress,
       source: probeOk ? 'probe' : 'onvif-fallback'
     };
@@ -1087,15 +1068,13 @@ const addDeviceHandler = async (req) => {
     return envelope({ success: false, errorCode: 1002, errorMsg: 'deviceIp (or devSequence for P2P) is required', results: [] }, 1000, 'deviceIp (or devSequence for P2P) is required');
   }
   const probe = await probeDeviceFor(input);
-  // E-026: ONVIF fallback - never block the UI. If probe fails, use known
-  // identity immediately so the client never sees "operation timed out".
   const probeOk = probe.ok !== false;
   const identity = {
-    manufacturer: probeOk ? (probe.manufacturer || '') : ONVIF_FALLBACK_IDENTITY.manufacturer,
-    model: probeOk ? (probe.model || '') : ONVIF_FALLBACK_IDENTITY.model,
-    firmwareVersion: probeOk ? (probe.firmwareVersion || '') : ONVIF_FALLBACK_IDENTITY.firmwareVersion,
-    serialNumber: probeOk ? (probe.serialNumber || input.devSequence) : ONVIF_FALLBACK_IDENTITY.serialNumber,
-    hardwareId: probeOk ? (probe.hardwareId || '') : ONVIF_FALLBACK_IDENTITY.hardwareId,
+    manufacturer: probeOk ? (probe.manufacturer || '') : '',
+    model: probeOk ? (probe.model || '') : '',
+    firmwareVersion: probeOk ? (probe.firmwareVersion || '') : '',
+    serialNumber: probeOk ? (probe.serialNumber || input.devSequence) : '',
+    hardwareId: probeOk ? (probe.hardwareId || '') : '',
     ipAddress: probe.ipAddress,
     source: probeOk ? 'probe' : 'onvif-fallback'
   };

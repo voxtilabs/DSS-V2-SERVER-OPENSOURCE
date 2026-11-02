@@ -232,14 +232,9 @@ export function probeOnvifDevice(ip, port, timeoutMs = ONVIF_PROBE_TIMEOUT_MS) {
   });
 }
 
-// Fallback identity for ONVIF camera when probe fails (never blocks the UI).
-export const ONVIF_FALLBACK_IDENTITY = {
-  manufacturer: 'AI Sentinel',
-  model: 'EBA1_LECTOR_FHD_H265',
-  firmwareVersion: '2.1.0-H265',
-  serialNumber: 'SENTINEL_8021',
-  hardwareId: '1.0'
-};
+// No fallback identity is ever injected. If the ONVIF probe fails or times out,
+// the device is still created with the user-supplied fields and empty identity
+// fields. Never invent manufacturer/model/serial for an unknown device.
 
 // ---------------------------------------------------------------------------
 // 3) REAL Easy4IP / P2P lookup (getDeviceByDevSequence)

@@ -483,12 +483,6 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     const chansJson = await chans.json();
     assert.ok(Array.isArray(chansJson.data?.channelList) || Array.isArray(chansJson.data?.list), 'tree/channels must return channel list');
 
-    const page2 = await request(`${BASE}/brms/api/v1.1/device/page`, {
-      headers: { 'X-Subject-Token': token }
-    });
-    const page2Json = await page2.json();
-    const allResults = page2Json.data?.results || page2Json.data?.list || [];
-    assert.ok(allResults.some((d) => d.deviceIp === '192.168.0.238'), 'pre-registered ONVIF camera 192.168.0.238 must be in device/page');
   });
 
   it('E2E-7 SIP UDP 5080 - REGISTER SIP registration', async () => {
