@@ -56,7 +56,6 @@ import {
   probeEasy4IPReachability,
   probeOnvifDevice,
   registerArsDevice,
-  seedInitialDevices,
   createDeviceRecord,
   persistDevice,
   loadDevicesFromDisk
@@ -74,7 +73,10 @@ import {
 } from './e026-video.js';
 // E-025: the mock camera is part of the device registry so /device/page,
 // /tree/* and the statistics all report the same set of devices.
-seedInitialDevices();
+// E-028: the seeded mock ("Test Camera" @127.0.0.1:37777, manufacturer
+// "Dahua", model "MockIPC") was an INVENTED device identity - E-026 removed
+// the invented ONVIF fallback for the same reason. The registry now only
+// holds devices the operator really added (identity taken from the camera).
 // E-028: /web/client-module/ now serves the REAL production DSS web bundle
 // mirrored to web-module/ (see EV-078). No invented UI is served anywhere.
 
@@ -1197,7 +1199,7 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
 app.get('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
 app.get('/brms/api/v1.0/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
 app.post('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload({ ...req.query, ...(req.body || {}) })));
-app.get('/brms/api/v1.1/discover/device/page', async () => envelope(buildDiscoverDevicePagePayload()));
+app.get('/brms/api/v1.1/discover/device/page', async (req) => envelope(buildDiscoverDevicePagePayload(req.query)));
 app.get('/brms/api/v1.1/device/channel/page', async () => {
   const list = allChannels();
   return envelope({ list, results: list, channelList: list, items: list, total: list.length, pageNo: 1, pageSize: list.length || 20 });
@@ -1993,6 +1995,11 @@ function createARSTCPServer() {
 
 async function start() {
   try {
+    // E-028: same keep-alive policy as the TLS listeners (Node default 5s is
+    // too short for the real client holding a connection across the add flow).
+    app.server.keepAliveTimeout = 65000;
+    app.server.headersTimeout = 66000;
+    app.server.requestTimeout = 120000;
     await app.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`BRMS Gateway listening on http://0.0.0.0:${PORT}`);
 
@@ -2009,6 +2016,25 @@ async function start() {
           resolve();
         });
         server.on('error', reject);
+      });
+      // E-028: Node's default keepAliveTimeout is 5s. The native DPSDK client
+      // holds one TLS connection across the whole add flow (cost-time ->
+      // summary -> POST /device, which can take 10s while the ONVIF probe
+      // runs) and then polls on it. The server closed the idle socket, the
+      // next request died with ECONNRESET before it reached Fastify and the
+      // client reported "Operation timed out". Keep the socket alive long
+      // enough for the real client.
+      httpsServer.keepAliveTimeout = 65000;
+      httpsServer.headersTimeout = 66000;
+      httpsServer.requestTimeout = 120000;
+      // E-028: Node answers malformed/keep-alive-desynced requests with a bare
+      // 400 before Fastify ever sees them (the client then reports
+      // "Operation timed out"). Log the parser error so it is diagnosable.
+      httpsServer.on('clientError', (err, socket) => {
+        let dump = '';
+        try { const b = socket.read(); if (b) dump += b.toString('latin1'); } catch { /* ignore */ }
+        console.error('[E028-CLIENT-ERR] ' + (err && err.code ? err.code : '') + ' ' + (err && err.message ? err.message : err) + ' raw=' + JSON.stringify(dump.slice(0, 200)));
+        try { socket.destroy(); } catch { /* ignore */ }
       });
       createWebSocketServer(httpsServer);
     }
@@ -2027,6 +2053,13 @@ async function start() {
           resolve();
         });
         server.on('error', reject);
+      });
+      httpsServer2.keepAliveTimeout = 65000;
+      httpsServer2.headersTimeout = 66000;
+      httpsServer2.requestTimeout = 120000;
+      httpsServer2.on('clientError', (err, socket) => {
+        console.error('[E028-CLIENT-ERR-9443] ' + (err && err.code ? err.code : '') + ' ' + (err && err.message ? err.message : err));
+        try { socket.destroy(); } catch { /* ignore */ }
       });
       createWebSocketServer(httpsServer2);
     }

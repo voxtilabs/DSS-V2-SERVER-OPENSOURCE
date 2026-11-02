@@ -610,52 +610,86 @@ export function buildDevicePagePayload(query = {}) {
 // initialized === "1" (INITIALIZED) or "2" (MODIFY_IP) - enum extracted verbatim
 // from the production bundle (real-index-BIzql2yJ.js). An empty list made the
 // native add dialog wait forever -> DPSDK "Operation timed out".
-export function buildDiscoverDevicePagePayload() {
-  const seen = new Set();
-  const discovered = [...DISCOVERED_DEVICES.values()].map((d) => {
-    seen.add(`${d.deviceIp}:${Number(d.devicePort)}`);
-    return {
-      deviceIp: d.deviceIp,
-      devicePort: d.devicePort,
-      protocolType: d.protocolType,
-      deviceCategory: d.deviceCategory,
-      deviceType: d.deviceType,
-      deviceName: d.deviceName,
-      deviceCode: '',
-      manufacturer: d.probe?.manufacturer || '',
-      model: d.probe?.model || '',
-      serialNumber: d.probe?.serialNumber || '',
-      firmwareVersion: d.probe?.firmwareVersion || '',
-      online: d.probe?.online === false ? 0 : 1,
-      initialized: d.registered ? '1' : '',
-      modifiedIp: '0',
-      discoveredAt: d.discoveredAt
-    };
+// E-028: ONE row per ip:port. A scanned-but-not-yet-added device used to be
+// emitted first with initialized:"" and the registered copy second with
+// initialized:"1"; the client matched the first row and kept waiting until the
+// 30s timeout. Registered devices now always win the row.
+export function buildDiscoverDevicePagePayload(query = {}) {
+  const key = (ip, port) => `${ip}:${Number(port)}`;
+  const registered = new Map();
+  for (const d of DEVICE_REGISTRY.values()) registered.set(key(d.deviceIp, d.devicePort), d);
+
+  const list = [];
+  const emitted = new Set();
+  const registeredRow = (d) => ({
+    deviceIp: d.deviceIp,
+    devicePort: String(d.devicePort ?? ''),
+    protocolType: d.protocolType,
+    deviceCategory: d.deviceCategory,
+    deviceType: d.deviceType,
+    deviceName: d.deviceName,
+    deviceCode: d.deviceCode,
+    deviceId: d.deviceId || d.deviceCode,
+    manufacturer: d.manufacturer || '',
+    model: d.model || '',
+    serialNumber: d.serialNumber || '',
+    firmwareVersion: d.firmwareVersion || '',
+    online: d.online === false ? 0 : 1,
+    initialized: '1',
+    modifiedIp: '0',
+    status: 1,
+    deviceStatus: 'online',
+    errorCode: 0,
+    errorMsg: '',
+    channelNum: d.channelNum || 1,
+    discoveredAt: d.createTime || d.discoveredAt || ''
   });
-  // Registered devices (already added via POST /device) surface as INITIALIZED.
-  const registered = [...DEVICE_REGISTRY.values()].map((d) => {
-    const key = `${d.deviceIp}:${Number(d.devicePort)}`;
-    if (seen.has(key)) seen.delete(key);
-    return {
-      deviceIp: d.deviceIp,
-      devicePort: Number(d.devicePort),
-      protocolType: d.protocolType,
-      deviceCategory: d.deviceCategory,
-      deviceType: d.deviceType,
-      deviceName: d.deviceName,
-      deviceCode: d.deviceCode,
-      manufacturer: d.manufacturer || '',
-      model: d.model || '',
-      serialNumber: d.serialNumber || '',
-      firmwareVersion: d.firmwareVersion || '',
-      online: d.online ?? 1,
-      initialized: '1',
-      modifiedIp: '0',
-      discoveredAt: d.createTime
-    };
+  const discoveredRow = (d) => ({
+    deviceIp: d.deviceIp,
+    devicePort: String(d.devicePort ?? ''),
+    protocolType: d.protocolType,
+    deviceCategory: d.deviceCategory,
+    deviceType: d.deviceType,
+    deviceName: d.deviceName,
+    deviceCode: '',
+    deviceId: '',
+    manufacturer: d.probe?.manufacturer || '',
+    model: d.probe?.model || '',
+    serialNumber: d.probe?.serialNumber || '',
+    firmwareVersion: d.probe?.firmwareVersion || '',
+    online: d.probe?.online === false ? 0 : 1,
+    initialized: d.registered ? '1' : '',
+    modifiedIp: '0',
+    status: 1,
+    deviceStatus: d.probe?.online === false ? 'offline' : 'online',
+    errorCode: 0,
+    errorMsg: '',
+    discoveredAt: d.discoveredAt
   });
-  const list = [...discovered, ...registered];
-  return { list, results: list, items: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: Math.max(20, list.length) };
+
+  for (const d of DISCOVERED_DEVICES.values()) {
+    const k = key(d.deviceIp, d.devicePort);
+    if (emitted.has(k)) continue;
+    emitted.add(k);
+    list.push(registered.has(k) ? registeredRow(registered.get(k)) : discoveredRow(d));
+  }
+  for (const [k, d] of registered) {
+    if (emitted.has(k)) continue;
+    emitted.add(k);
+    list.push(registeredRow(d));
+  }
+  // the client may filter by initialization state
+  const wanted = query && query.initialized !== undefined && query.initialized !== null && String(query.initialized) !== '';
+  const filtered = wanted ? list.filter((r) => r.initialized === String(query.initialized)) : list;
+  return {
+    list: filtered,
+    results: filtered,
+    items: filtered,
+    total: filtered.length,
+    totalCount: filtered.length,
+    pageNo: 1,
+    pageSize: Math.max(20, filtered.length)
+  };
 }
 
 export function buildDiscoverDeviceInitPayload(body = {}) {
@@ -1008,24 +1042,10 @@ export function buildP2PStatusPayload() {
 }
 
 // ---------------------------------------------------------------------------
-// 9) Seed device: the tree/device-page/stats responses must agree with each
-//    other, so the long-lived mock camera is part of the same registry.
+// 9) Seed device: RETIRED in E-028.
+//    The seeded mock ("Test Camera" @127.0.0.1:37777, manufacturer "Dahua",
+//    model "MockIPC") was an invented device identity, the same class of
+//    fabrication E-026 removed for the ONVIF fallback. The registry now only
+//    contains devices the operator really added, with the identity reported
+//    by the device itself.
 // ---------------------------------------------------------------------------
-export function seedInitialDevices() {
-  if (DEVICE_REGISTRY.size) return DEVICE_REGISTRY;
-  createDeviceRecord(normalizeDeviceInput({
-    deviceIp: '127.0.0.1',
-    devicePort: 37777,
-    protocolType: '1',
-    deviceCategory: '1',
-    deviceType: '6',
-    deviceName: 'Test Camera',
-    serverCode: 'video#local',
-    channelCount: 1,
-    manufacturer: 'Dahua',
-    deviceCode: 'CAM001'
-  }), { source: 'seed' });
-  const seed = DEVICE_REGISTRY.get('CAM001');
-  if (seed) { seed.model = 'MockIPC'; seed.channelNum = 1; }
-  return DEVICE_REGISTRY;
-}

@@ -866,3 +866,55 @@ Verified live on 10.10.20.120:1443: index.html + js/.pnpm-IcGsI3MK.js
 (200 text/javascript) + css/index.css served; storage/plan endpoints return
 full plan contracts; add->discover poll now completes (200, initialized:"1").
 Tests: unit 22/22 PASS, e2e 10/10 PASS.
+
+## EV-079 - E-028b: bundle mirror path resolution + discover-poll rows + keep-alive (verified live 2026-11-02)
+
+Operator re-test after EV-078: the Device Config / Storage Plan tabs stayed
+"loading" forever, the ONVIF add still showed "Operation timed out" and a
+"provider abnormal" toast. Server resources were ruled out first (0 restarts,
+no OOM, disk 54% with 6.6GB free, 1.25GB RAM available, container RSS 25MB).
+
+Root causes found in the REAL traces (docker logs of the operator session +
+raw payloads):
+1. MIRROR PATH BUG: relative import specifiers were resolved against the bundle
+   root instead of the referrer's directory. js/index-BhDUzoCV.js imports
+   "./en-BWpsHIjg.js" (which lives in js/) - v1 fetched
+   /web/client-module/en-BWpsHIjg.js -> 404 -> silently dropped. The client
+   then got 404 for js/en-*.js and js/WebVersion-CK50iK5l.js and the real SPA
+   could never finish loading ("loading" forever). Fix: mirror resolver now
+   distinguishes referencer-relative ("./x") from bundle-root relative
+   ("css/x", "js/x"); closure grew 413 -> 987 files (27.8MB), 986 assets served
+   200 (0 failures).
+2. DUPLICATE DISCOVER ROWS: the poll emitted the scanned device first with
+   initialized:"" and the registered copy second with initialized:"1". The
+   client matched the first row, never saw the INITIALIZED flag and waited
+   until its 30e4 ms deadline -> "Operation timed out". Fix (e025-devices.js):
+   ONE row per ip:port, registered wins, devicePort returned as the string the
+   client sent, optional initialized filter honoured.
+3. KEEP-ALIVE TOO SHORT: Node's default server.keepAliveTimeout is 5s. The
+   native DPSDK holds ONE TLS connection across cost-time -> summary ->
+   POST /device (the ONVIF probe can take 10s) and then polls on it; the idle
+   socket was closed and the next request died with ECONNRESET before reaching
+   Fastify (server logged HPE_INVALID_METHOD from the HTTP parser). Fix:
+   keepAliveTimeout 65s / headersTimeout 66s / requestTimeout 120s on the HTTP,
+   1443 and 9443 listeners, plus a clientError logger that dumps the raw bytes.
+4. INVENTED DEVICE IDENTITY: the seeded mock ("Test Camera" @127.0.0.1:37777,
+   manufacturer "Dahua", model "MockIPC") was an invented identity (same class
+   E-026 removed for the ONVIF fallback). The seed is retired: the registry now
+   holds only devices the operator really added.
+5. LAB HYGIENE: the e2e suite created devices on the operator's server
+   (loopback ONVIF probe + auto-registered NVR). The suite now deletes its own
+   lab devices in an after() hook; the operator's real camera is untouched.
+
+Verified live (10.10.20.120:1443):
+- DPSDK-style replay (ONE connection, cost-time -> summary -> POST /device ->
+  poll every second for 30s): 30/30 polls answered 200 with the added device
+  and initialized:"1"; keep-alive header now timeout=65.
+- Bundle integrity: 986/986 assets served 200.
+- Device list: only the real camera (192.168.0.238:8021, AI Sentinel
+  EBA1_LECTOR_FHD_H265, serial SENTINEL_8021).
+- Tests: unit 22/22 PASS, e2e 10/10 PASS (3 consecutive runs).
+
+Mirror tool committed for reproducibility:
+poc/dss-v2-harness/brms-gateway/tools/mirror-web-module.mjs (assets stay out
+of git; brms-gateway/web-module/ is gitignored and baked into the image).

@@ -729,3 +729,17 @@ Verification:
 - Always GET /web/client-module/?userId=..&locale=..&skin=..&logLevel=..; module
   routing is in-page (hash router of the REAL production bundle mirrored by the
   gateway). Inventeds pages are prohibited; bundle missing -> 503 neutral.
+
+### E-028 additions (verified live 2026-11-02)
+- /web/client-module/ serves the mirrored production bundle: hashed chunks
+  immutable (Cache-Control: public, max-age=604800, immutable), index.html
+  no-store, extensionless paths fall back to the real index.html (hash router),
+  missing bundle -> 503 neutral page. Every referenced chunk MUST resolve
+  (986/986 verified) or the real SPA never finishes loading.
+- GET /brms/api/v1.1/discover/device/page: ONE row per ip:port; a registered
+  device is returned with initialized:"1" (INITIALIZED) even when it was
+  discovered by a scan first - duplicate rows with initialized:"" made the
+  native add dialog time out.
+- Transport: keepAliveTimeout 65s on 1443/9443/11443 (Node's 5s default closed
+  the socket the native client keeps across the add flow -> ECONNRESET ->
+  "Operation timed out").

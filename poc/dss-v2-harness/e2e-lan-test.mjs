@@ -1,4 +1,4 @@
-import { describe, it, before } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import https from 'node:https';
@@ -551,5 +551,32 @@ Content-Length: 0\r
         if (err) reject(err);
       });
     });
+  });
+
+  // Lab hygiene: this suite creates devices (loopback ONVIF probe + auto
+  // registered NVR). They must not stay in the operator's device list - only
+  // the real cameras (192.168.0.x) are kept.
+  after(async () => {
+    try {
+      const page = await request(`${BASE}/brms/api/v1.1/device/page?pageSize=100`, {
+        headers: { 'X-Subject-Token': token }
+      });
+      const rows = (await page.json()).data?.results || [];
+      const lab = rows.filter((d) => {
+        const ip = String(d.deviceIp || '');
+        if (ip.startsWith('127.')) return true;
+        if (ip === '10.10.20.120' && /NVR/i.test(String(d.deviceName || ''))) return true;
+        return false;
+      });
+      if (!lab.length) return;
+      await request(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+        body: JSON.stringify({ deviceCodes: lab.map((d) => d.deviceCode) })
+      });
+      console.log(`E2E cleanup: removed ${lab.length} lab device(s)`);
+    } catch (err) {
+      console.log('E2E cleanup skipped:', err.message);
+    }
   });
 });
