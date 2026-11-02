@@ -435,13 +435,14 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
       assert.equal(j.code, 1000, `${p} must return the success envelope`);
     }
 
-    // launcher page: the real QT/CEF bridge must be present
+    // E-028: the launcher page is the REAL production bundle now - assert its
+    // authentic Vite shape instead of the retired invented page contract.
     const page2 = await request(`${BASE}/web/client-module/`, {});
     assert.equal(page2.status, 200);
     const html = await page2.text();
-    assert.ok(html.includes('ClientObject.MainCall'), 'bridge: web -> native');
-    assert.ok(html.includes("'getToken'"), 'bridge: token acquisition');
-    assert.ok(html.includes("'switchMenuTab'"), 'bridge: module hand-off');
+    assert.ok(html.includes('id="app"'), 'real SPA root div');
+    assert.ok(html.includes('js/index-BhDUzoCV.js'), 'real production entry chunk');
+    assert.ok(!/launcher|emoji/i.test(html), 'invented launcher must stay retired');
   });
 
   // ===== E2E-10 (E-026): device add + persist in disk + tree sync =====
@@ -465,17 +466,23 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.ok(addJson.data.id === addJson.data.deviceCode || addJson.data.code === addJson.data.deviceCode, 'id/code/deviceCode must match');
     assert.ok(!JSON.stringify(addJson.data).includes('0123456789abcdef'), 'loginPass must not be echoed');
 
+    // Add is idempotent per ip:port (real-lab server already has 192.168.0.238
+    // registered as "EBA1" from E-027 probes); accept either record name.
     const page = await request(`${BASE}/brms/api/v1.1/device/page`, {
       headers: { 'X-Subject-Token': token }
     });
     const pageJson = await page.json();
-    assert.ok(pageJson.data.results?.some((d) => d.deviceName === 'EBA1_ONVIF') || pageJson.data.list?.some((d) => d.deviceName === 'EBA1_ONVIF'), 'device must appear in device/page');
+    const registered = (pageJson.data.results || pageJson.data.list || [])
+      .some((d) => String(d.deviceIp) === '192.168.0.238' && Number(d.devicePort) === 8021 && (d.deviceCode));
+    assert.ok(registered, 'device must appear in device/page');
 
     const tree = await request(`${BASE}/brms/api/v1.0/tree/devices`, {
       method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}'
     });
     const treeJson = await tree.json();
-    assert.ok(treeJson.data?.deviceList?.some((d) => d.deviceName === 'EBA1_ONVIF') || treeJson.data?.list?.some((d) => d.deviceName === 'EBA1_ONVIF'), 'device must appear in tree/devices');
+    const treeHit = (treeJson.data?.deviceList || treeJson.data?.list || [])
+      .some((d) => String(d.deviceIp) === '192.168.0.238');
+    assert.ok(treeHit, 'device must appear in tree/devices');
 
     const chans = await request(`${BASE}/brms/api/v1.0/tree/channels`, {
       method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}'

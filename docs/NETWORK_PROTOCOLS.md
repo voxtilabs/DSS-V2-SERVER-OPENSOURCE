@@ -702,3 +702,30 @@ Verification:
   curl -sk -X POST https://10.10.20.120:1443/brms/api/v1.0/MTS/Video/StartVideo \
     -H 'X-Subject-Token: <token>' -d '{"channelId":"1000171","streamType":1}'
   timeout 8 bash -c 'exec 3<>/dev/tcp/localhost/9100; printf "OPTIONS rtsp://localhost:9100/cam1 RTSP/1.0\r\nCSeq: 1\r\n\r\n" >&3; read -t 5 line <&3; echo ""'
+
+## E-027/E-028 additions (verified live 2026-11-02)
+
+### Device add poll contract (native DPSDK, UA "lightMyRequest")
+- POST /brms/api/v1.1/device/discover/cost-time | discover/summary -> identity probe.
+- POST /brms/api/v1.1/device -> add (idempotent per ip:port; returns device + results[]).
+- GET /brms/api/v1.1/discover/device/page?initialized=&orderType=2&... -> the add
+  dialog polls this until the added device appears with initialized == "1"
+  (INITIALIZED; enum INITIALIZED:"1", MODIFY_IP:"2", ADAPTED:"3" from
+  real-index-BIzql2yJ.js). Poll deadline 30e4 ms; empty list = DPSDK
+  "Operation timed out". Our payload merges the device registry + discovered
+  scans; registered devices always report initialized:"1".
+- config/interface/common/timeout: data.timeout in SECONDS (client multiplies x1000).
+
+### Storage Plan (menuCode 003005)
+- POST /brms/api/v1.{0,1}/storage/plan/channel/plan-config-status/fetch/batch/list
+  body {channels:[id]} -> data.results[{channelId,configured,status,configStatus}].
+- GET|POST|PUT /brms/api/v1.{0,1}/storage/plan/channel/:channelCode/new-device-record-plan
+  -> 24x7 template contract {code,name,enable,planPeriod[7]{weekday,enable,
+  timeSlices[{timeSliceStart,timeSliceEnd}]},planWeekDays,recordType,streamType,scheduleType}.
+- SSRecordController (EV-037): POST /brms/api/v1.0/SS/Record/{QueryRecord,StartRecord,
+  StopRecord,LockRecord,UnlockRecord,DeleteRecord}.
+
+### /web/client-module/ (CefRender.exe entry)
+- Always GET /web/client-module/?userId=..&locale=..&skin=..&logLevel=..; module
+  routing is in-page (hash router of the REAL production bundle mirrored by the
+  gateway). Inventeds pages are prohibited; bundle missing -> 503 neutral.

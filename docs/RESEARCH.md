@@ -801,3 +801,68 @@ Fix:
   so added devices appear instantly in Device list and Monitoring Center tree.
 
 Tests: unit 22/22 PASS, e2e 10/10 PASS (new E2E-10 verifies add->page->tree sync).
+
+## EV-077 - E-027 second pass: crash chain, discover-page poll contract, fault barriers (verified live 2026-11-02)
+
+Operator symptoms after E-026: (1) invented launcher UI replaced Device Config /
+Storage Plan views; (2) Storage Plan APIs missing; (3) ONVIF add still reported
+"Operation timed out".
+
+Real add-flow trace (probes + docker logs, UA "lightMyRequest" = native DPSDK):
+  POST /brms/api/v1.1/device/discover/cost-time  -> {costTime, results:[{deviceIp,...}]}
+  POST /brms/api/v1.1/device/discover/summary    -> full identity (real: AI
+    Sentinel EBA1_LECTOR_FHD_H265 SENTINEL_8021) - connectivity to the camera
+    was NEVER the problem (ens19 ARP REACHABLE; MediaMTX pulled cam1 2h26m 25fps).
+  POST /brms/api/v1.1/device                     -> 200 add, idempotent per ip:port
+  GET  /brms/api/v1.1/discover/device/page       -> THIS was the timeout: the
+    poll returned an EMPTY list (built from DISCOVERED_DEVICES only), so the
+    native dialog waited forever. Client polls with timeout 30e4 ms
+    (real-index-BIzql2yJ.js) and dies with "Operation timed out".
+
+Crash chain: after the add, an unhandled promise rejection "Error: aborted at
+abortIncoming (ECONNRESET)" (manual https wrapper socket teardown) killed Node
+v20.20.2 -> container restart mid-flow -> client saw a dead server.
+
+Fixes implemented:
+- process-level fault barriers: unhandledRejection/uncaughtException log
+  [E027-FATAL-BAR] with stack and keep the process alive.
+- 250ms watchdog logs [E027-WATCHDOG] stalls >800ms (isolated blocking-loop
+  theory: max observed stall 972ms, loop NOT blocked -> hang was the empty poll).
+- buildDiscoverDevicePagePayload rewritten (e025-devices.js): merges registry +
+  discovered; registered devices get initialized:"1" / MODIFY_IP:"2" spread -
+  enum taken verbatim from the production bundle [l={INITIALIZED:"1",
+  MODIFY_IP:"2"}, t={ADAPTED:"3"}].
+- Storage Plan module (e027-storage.js) + routes (index.js Phase E-027):
+  POST /brms/api/v1.{0,1}/storage/plan/channel/plan-config-status/fetch/batch/list
+  GET|POST|PUT /brms/api/v1.{0,1}/storage/plan/channel/:channelCode/new-device-record-plan
+  (SSRecordController endpoints already existed from EV-037; duplicates removed).
+
+Tests: unit 22/22 PASS, e2e 10/10 PASS.
+
+## EV-078 - E-028: retire invented UI - serve the REAL production web bundle (verified live 2026-11-02)
+
+Operator verdict: the white "Device Management / Storage Plan" tables the
+gateway rendered under /web/client-module/ are NOT the DSS UI - they were
+gateway-built inventions. PROHIBITED since the operator directive (E-027 step 2
+fallback path) and now fully retired.
+
+Fix: mirror the authentic production bundle that a real DSS Pro server serves
+under /web/client-module/ (same source used in EV-071 for contract recovery,
+200.54.10.50:1443) into brms-gateway/web-module/ (gitignored, 413 files,
+13.8 MB, copied into the image by the Dockerfile).
+
+- index.js serves the mirrored bundle statically:
+  GET /web/client-module/          -> real index.html (Vite, entry js/index-BhDUzoCV.js)
+  GET /web/client-module/<asset>   -> file with correct MIME; hashed chunks
+                                      immutable cache, index.html no-store
+  unmatched extensionless paths    -> SPA fallback to the real index.html
+  bundle missing                   -> 503 neutral page (still NO fake UI)
+- src/e027-ui.js (invented SPA) deleted; src/test/brms.test.js E-025-invented
+  assertions replaced with real-bundle assertions (E-028).
+- Real module routing is in-page (hash router inside the bundle); the Qt/CEF
+  bridge (webAPICaller / MainCall tokens) lives in the bundles themselves.
+
+Verified live on 10.10.20.120:1443: index.html + js/.pnpm-IcGsI3MK.js
+(200 text/javascript) + css/index.css served; storage/plan endpoints return
+full plan contracts; add->discover poll now completes (200, initialized:"1").
+Tests: unit 22/22 PASS, e2e 10/10 PASS.

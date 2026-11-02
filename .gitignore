@@ -32,6 +32,12 @@ vendor/
 node_modules/
 dist-web/
 
+# E-028: mirrored production DSS web bundle (third-party assets, image-only)
+poc/dss-v2-harness/brms-gateway/web-module/
+
+# Runtime device persistence (lab state, never versioned)
+poc/dss-v2-harness/brms-gateway/data/
+
 # --- Entornos y secretos ---
 .env
 .env.*

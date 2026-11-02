@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs';
 import https from 'node:https';
+import path from 'node:path';
 import net from 'node:net';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'node:url';
@@ -74,12 +75,35 @@ import {
 // E-025: the mock camera is part of the device registry so /device/page,
 // /tree/* and the statistics all report the same set of devices.
 seedInitialDevices();
-// E-025: launcher page with the real QT/CEF bridge (see the module for the
-// evidence extracted from CefRender.exe / PluginFactory.dll / real bundles).
-import { launcherHomeHtml, deviceManagementHtml, storagePlanHtml } from './e027-ui.js';
+// E-028: /web/client-module/ now serves the REAL production DSS web bundle
+// mirrored to web-module/ (see EV-078). No invented UI is served anywhere.
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ===== E-027: PROCESS-LEVEL FAULT BARRIERS =====
+// The gateway was dying with "triggerUncaughtException (Error: aborted /
+// ECONNRESET)" whenever an in-flight or upgraded socket closed mid-request.
+// The native DSS Client then saw a dead server and rendered "Operation timed
+// out". Log the full stack instead of killing the process.
+process.on('unhandledRejection', (reason) => {
+  const st = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+  console.error('[E027-FATAL-BAR] unhandledRejection (process kept alive):\n' + st);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[E027-FATAL-BAR] uncaughtException (process kept alive):\n' + (err instanceof Error ? (err.stack || err.message) : String(err)));
+});
+
+// E-027 watchdog: detect event-loop stalls (the ONVIF poll hung with no
+// request reaching Fastify's onRequest hook, so something between TLS and
+// fastify starves the loop when it happens after a device add).
+let __hb = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  const dt = now - __hb;
+  if (dt > 800) console.error('[E027-WATCHDOG] event loop stalled ' + dt + 'ms');
+  __hb = now;
+}, 250);
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
@@ -1149,6 +1173,26 @@ app.post('/brms/api/v1.1/device/move/batch', async (req) => envelope(buildDevice
 app.post('/brms/api/v1.1/device/password/change/batch', async (req) => envelope(buildDevicePasswordChangeBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/timezone/update/batch', async (req) => envelope(buildDeviceTimezoneUpdateBatchPayload(req.body)));
 
+// ===== E-027: STORAGE PLAN / SS RECORD ROUTES =====
+// Needed by the Storage Plan tab (003005) and the Device Config dialogs.
+import {
+  buildPlanConfigStatusPayload,
+  getChannelRecordPlan,
+  setChannelRecordPlan,
+  buildSSQueryRecordPayload,
+  buildSSRecordActionPayload
+} from './e027-storage.js';
+for (const p of ['/brms/api/v1.1/storage/plan/channel/plan-config-status/fetch/batch/list', '/brms/api/v1.0/storage/plan/channel/plan-config-status/fetch/batch/list']) {
+  app.post(p, async (req) => envelope(buildPlanConfigStatusPayload(req.body)));
+}
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  app.get(`${host}/storage/plan/channel/:channelCode/new-device-record-plan`, async (req) => envelope(getChannelRecordPlan(req.params.channelCode)));
+  app.put(`${host}/storage/plan/channel/:channelCode/new-device-record-plan`, async (req) => envelope(setChannelRecordPlan(req.params.channelCode, req.body)));
+  app.post(`${host}/storage/plan/channel/:channelCode/new-device-record-plan`, async (req) => envelope(setChannelRecordPlan(req.params.channelCode, req.body)));
+}
+// E-027 note: /brms/api/v1.0/SS/Record/QueryRecord already exists in the
+// EV-037 section below with the { preHandler: auth } shape - not duplicated here.
+
 // --- device lists ---
 app.get('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
 app.get('/brms/api/v1.0/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
@@ -1279,16 +1323,58 @@ app.get('/admin/api/v1.1/domain/download/urlInfo', async (req) => {
 //                    accounts/current answered 401 -> "init error (token=no)")
 //   tile click:      MainCall('switchMenuTab', JSON({menuCode,pluginName,
 //                    menuName,externData}), cb)
-app.get('/web/client-module/', async (req, reply) => {
-  reply.type('text/html; charset=utf-8');
-  const module = req.query?.module || '';
-  if (module === '001001' || module === 'device') {
-    return deviceManagementHtml();
+//
+// ===== E-028: REAL production web bundle under /web/client-module/ =====
+// CefRender.exe always loads the same base URL (userId/locale/skin/logLevel
+// query; the module marker never gets past the URL). The mirrored bundle is
+// the one a real DSS Pro server serves (EV-078), so the client renders its
+// authentic Device Config / Storage Plan / Monitoring UI - no invented pages.
+const WEB_MODULE_DIR = path.resolve(__dirname, '..', 'web-module');
+const WEB_MIME = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.webp': 'image/webp', '.pak': 'application/octet-stream'
+};
+function webModuleIndexReply(reply) {
+  const idx = path.join(WEB_MODULE_DIR, 'index.html');
+  if (fs.existsSync(idx)) {
+    reply.type('text/html; charset=utf-8').header('cache-control', 'no-store');
+    return fs.createReadStream(idx);
   }
-  if (module === '003005' || module === 'storage' || module === 'ss') {
-    return storagePlanHtml();
+  reply.type('text/html; charset=utf-8').code(503);
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>DSS Client</title></head><body style="font-family:sans-serif;padding:40px;color:#333"><h3 style="margin:0">DSS Client web module not available</h3><p style="font-size:13px;margin-top:8px">The production /web/client-module bundle is not deployed on this gateway. Mirror web-module/ and rebuild.</p></body></html>';
+}
+app.get('/web/client-module/*', async (req, reply) => {
+  let rel;
+  try {
+    rel = decodeURIComponent(String(req.url || '').split('?')[0]).replace(/^\/web\/client-module\/?/, '');
+  } catch {
+    reply.code(400);
+    return 'bad path';
   }
-  return launcherHomeHtml();
+  if (rel === '' || rel === '/') return webModuleIndexReply(reply);
+  if (rel.includes('..')) { reply.code(400); return 'bad path'; }
+  const abs = path.join(WEB_MODULE_DIR, rel);
+  if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+    const ext = path.extname(abs).toLowerCase();
+    const last = rel.split('/').pop() || '';
+    // hashed Vite chunks are immutable; index.html always revalidates
+    const immutable = /\.[A-Za-z0-9_-]{8}\.(?:js|mjs|css)$/.test(last);
+    reply.type(WEB_MIME[ext] || 'application/octet-stream')
+      .header('cache-control', immutable ? 'public, max-age=604800, immutable' : 'no-cache');
+    return fs.createReadStream(abs);
+  }
+  // SPA fallback: paths without a file extension resolve to the real index.html
+  const last = rel.split('/').pop() || '';
+  if (!last.includes('.')) return webModuleIndexReply(reply);
+  reply.code(404);
+  return 'not found';
 });
 app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/client-module/'); });
 
@@ -1915,21 +2001,7 @@ async function start() {
       httpsServer = https.createServer({
         key: fs.readFileSync(SSL_KEY),
         cert: fs.readFileSync(SSL_CERT)
-      }, async (req, res) => {
-        const chunks = [];
-        for await (const chunk of req) { chunks.push(chunk); }
-        const body = Buffer.concat(chunks).toString('utf8');
-        if (body) console.log('[REQ-RAW-BODY]', JSON.stringify({ url: req.url, body: body.slice(0, 4000) }));
-        try {
-          const response = await app.inject({ method: req.method, url: req.url, payload: body, headers: req.headers });
-          res.statusCode = response.statusCode;
-          Object.entries(response.headers).forEach(([k, v]) => res.setHeader(k, v));
-          res.end(response.body);
-        } catch (err) {
-          console.error('HTTPS proxy error:', err);
-          res.statusCode = 500; res.end('Internal Server Error');
-        }
-      });
+      }, app.routing.bind(app));
 
       await new Promise((resolve, reject) => {
         const server = httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
@@ -1947,21 +2019,7 @@ async function start() {
       httpsServer2 = https.createServer({
         key: fs.readFileSync(SSL_KEY_2),
         cert: fs.readFileSync(SSL_CERT_2)
-      }, async (req, res) => {
-        const chunks = [];
-        for await (const chunk of req) { chunks.push(chunk); }
-        const body = Buffer.concat(chunks).toString('utf8');
-        if (body) console.log('[REQ-RAW-BODY]', JSON.stringify({ url: req.url, body: body.slice(0, 4000) }));
-        try {
-          const response = await app.inject({ method: req.method, url: req.url, payload: body, headers: req.headers });
-          res.statusCode = response.statusCode;
-          Object.entries(response.headers).forEach(([k, v]) => res.setHeader(k, v));
-          res.end(response.body);
-        } catch (err) {
-          console.error('HTTPS 9443 proxy error:', err);
-          res.statusCode = 500; res.end('Internal Server Error');
-        }
-      });
+      }, app.routing.bind(app));
 
       await new Promise((resolve, reject) => {
         const server = httpsServer2.listen(HTTPS_PORT_2, '0.0.0.0', () => {

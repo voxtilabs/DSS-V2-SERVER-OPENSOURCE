@@ -605,22 +605,57 @@ export function buildDevicePagePayload(query = {}) {
   };
 }
 
+// E-027: the real client polls this page with `initialized=` after adding a
+// device and keeps waiting until the added device shows up with
+// initialized === "1" (INITIALIZED) or "2" (MODIFY_IP) - enum extracted verbatim
+// from the production bundle (real-index-BIzql2yJ.js). An empty list made the
+// native add dialog wait forever -> DPSDK "Operation timed out".
 export function buildDiscoverDevicePagePayload() {
-  const list = [...DISCOVERED_DEVICES.values()].map((d) => ({
-    deviceIp: d.deviceIp,
-    devicePort: d.devicePort,
-    protocolType: d.protocolType,
-    deviceCategory: d.deviceCategory,
-    deviceType: d.deviceType,
-    deviceName: d.deviceName,
-    manufacturer: d.probe?.manufacturer || '',
-    model: d.probe?.model || '',
-    serialNumber: d.probe?.serialNumber || '',
-    firmwareVersion: d.probe?.firmwareVersion || '',
-    online: d.probe?.online === false ? 0 : 1,
-    discoveredAt: d.discoveredAt
-  }));
-  return { list, results: list, items: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: list.length || 20 };
+  const seen = new Set();
+  const discovered = [...DISCOVERED_DEVICES.values()].map((d) => {
+    seen.add(`${d.deviceIp}:${Number(d.devicePort)}`);
+    return {
+      deviceIp: d.deviceIp,
+      devicePort: d.devicePort,
+      protocolType: d.protocolType,
+      deviceCategory: d.deviceCategory,
+      deviceType: d.deviceType,
+      deviceName: d.deviceName,
+      deviceCode: '',
+      manufacturer: d.probe?.manufacturer || '',
+      model: d.probe?.model || '',
+      serialNumber: d.probe?.serialNumber || '',
+      firmwareVersion: d.probe?.firmwareVersion || '',
+      online: d.probe?.online === false ? 0 : 1,
+      initialized: d.registered ? '1' : '',
+      modifiedIp: '0',
+      discoveredAt: d.discoveredAt
+    };
+  });
+  // Registered devices (already added via POST /device) surface as INITIALIZED.
+  const registered = [...DEVICE_REGISTRY.values()].map((d) => {
+    const key = `${d.deviceIp}:${Number(d.devicePort)}`;
+    if (seen.has(key)) seen.delete(key);
+    return {
+      deviceIp: d.deviceIp,
+      devicePort: Number(d.devicePort),
+      protocolType: d.protocolType,
+      deviceCategory: d.deviceCategory,
+      deviceType: d.deviceType,
+      deviceName: d.deviceName,
+      deviceCode: d.deviceCode,
+      manufacturer: d.manufacturer || '',
+      model: d.model || '',
+      serialNumber: d.serialNumber || '',
+      firmwareVersion: d.firmwareVersion || '',
+      online: d.online ?? 1,
+      initialized: '1',
+      modifiedIp: '0',
+      discoveredAt: d.createTime
+    };
+  });
+  const list = [...discovered, ...registered];
+  return { list, results: list, items: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: Math.max(20, list.length) };
 }
 
 export function buildDiscoverDeviceInitPayload(body = {}) {

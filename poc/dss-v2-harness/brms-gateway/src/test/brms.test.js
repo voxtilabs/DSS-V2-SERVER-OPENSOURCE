@@ -291,17 +291,22 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(alert.data.list) && alert.data.list.length > 0 && alert.data.list[0].alertType);
   });
 
-  it('E-025 launcher page exposes the real QT/CEF bridge contract', async () => {
+  it('E-028 /web/client-module serves the REAL production bundle', async () => {
     const html = await (await fetch(`${BASE}/web/client-module/`)).text();
-    // web -> native entry point injected by CefRender.exe
-    assert.ok(html.includes('window.ClientObject.MainCall'), 'must call ClientObject.MainCall');
-    // token acquisition (the E-024 page never asked native -> 401)
-    assert.ok(html.includes("'getToken'"), 'must ask the native for the token');
-    // native module hand-off
-    assert.ok(html.includes("'switchMenuTab'"), 'tile click must hand off via switchMenuTab');
-    assert.ok(html.includes('menuCode') && html.includes('pluginName') && html.includes('externData'));
-    // native -> web dispatcher
-    assert.ok(html.includes('window.webAPICaller') && html.includes("localStorage.getItem('token')"));
+    // the mirrored production Vite index (EV-078), not any invented launcher
+    assert.ok(html.includes('id="app"'), 'real SPA root div');
+    assert.ok(html.includes('js/index-BhDUzoCV.js'), 'real production entry chunk');
+    assert.ok(html.includes('modulepreload'), 'real modulepreload graph');
+    assert.ok(!/launcher|emoji/i.test(html), 'invented launcher must not come back');
+    // mirrored hashed assets resolve with proper MIME
+    const js = await fetch(`${BASE}/web/client-module/js/.pnpm-IcGsI3MK.js`);
+    assert.equal(js.status, 200);
+    assert.ok((js.headers.get('content-type') || '').includes('javascript'));
+    const css = await fetch(`${BASE}/web/client-module/css/index.css`);
+    assert.equal(css.status, 200);
+    // hash-router fallback: extensionless paths resolve to the same index.html
+    const spa = await fetch(`${BASE}/web/client-module/storage-plan`);
+    assert.equal(spa.status, 200);
   });
 
   it('E-025 discover/device/join/batch + check/exist + delete/batch', async () => {
