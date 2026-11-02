@@ -76,7 +76,7 @@ import {
 seedInitialDevices();
 // E-025: launcher page with the real QT/CEF bridge (see the module for the
 // evidence extracted from CefRender.exe / PluginFactory.dll / real bundles).
-import { LAUNCHER_PAGE_HTML } from './e025-launcher-page.js';
+import { launcherHomeHtml, deviceManagementHtml, storagePlanHtml } from './e027-ui.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1112,25 +1112,27 @@ const addDeviceHandler = async (req) => {
     console.log('[E025-ADD] WS broadcast failed:', err.message);
   }
 
-  // E-026: ONVIF dynamic RTSP discovery - discover the camera's real RTSP URI
-  // via SOAP GetProfiles/GetStreamUri and register it in MediaMTX on demand.
+  // E-026: ONVIF dynamic RTSP discovery - fire-and-forget AFTER responding,
+  // so the client never waits for MediaMTX configuration.
   if (input.protocolType === '99' && input.deviceIp && created) {
-    try {
-      const rtspUri = await discoverOnvifStreamUri(input.deviceIp, input.devicePort);
-      if (rtspUri) {
-        await configureMediaMTXPath(MEDIAMTX_CAMERA_PATH, rtspUri);
-        created.rtspUri = rtspUri;
-        created.onvifStreamUri = rtspUri;
-        persistDevice(created);
-        console.log('[E026-ONVIF]', JSON.stringify({
-          deviceIp: input.deviceIp, devicePort: input.devicePort,
-          protocolType: input.protocolType, rtspUri,
-          mediamtxPath: MEDIAMTX_CAMERA_PATH
-        }));
+    setImmediate(async () => {
+      try {
+        const rtspUri = await discoverOnvifStreamUri(input.deviceIp, input.devicePort);
+        if (rtspUri) {
+          await configureMediaMTXPath(MEDIAMTX_CAMERA_PATH, rtspUri);
+          created.rtspUri = rtspUri;
+          created.onvifStreamUri = rtspUri;
+          persistDevice(created);
+          console.log('[E026-ONVIF]', JSON.stringify({
+            deviceIp: input.deviceIp, devicePort: input.devicePort,
+            protocolType: input.protocolType, rtspUri,
+            mediamtxPath: MEDIAMTX_CAMERA_PATH
+          }));
+        }
+      } catch (err) {
+        console.log('[E026-ONVIF] discovery failed:', err.message);
       }
-    } catch (err) {
-      console.log('[E026-ONVIF] discovery failed:', err.message);
-    }
+    });
   }
 
   return envelope(result);
@@ -1279,7 +1281,14 @@ app.get('/admin/api/v1.1/domain/download/urlInfo', async (req) => {
 //                    menuName,externData}), cb)
 app.get('/web/client-module/', async (req, reply) => {
   reply.type('text/html; charset=utf-8');
-  return LAUNCHER_PAGE_HTML;
+  const module = req.query?.module || '';
+  if (module === '001001' || module === 'device') {
+    return deviceManagementHtml();
+  }
+  if (module === '003005' || module === 'storage' || module === 'ss') {
+    return storagePlanHtml();
+  }
+  return launcherHomeHtml();
 });
 app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/client-module/'); });
 

@@ -80,7 +80,7 @@ function soapPost(url, body, soapAction) {
       port: u.port || 80,
       path: u.pathname,
       method: 'POST',
-      timeout: 3000,
+      timeout: 1500,
       headers: {
         'Content-Type': 'application/soap+xml; charset=utf-8',
         'SOAPAction': `"${soapAction}"`,
