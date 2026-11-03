@@ -20,7 +20,31 @@ webrtcAddress: :8889
 webrtcICEServers: []
 
 # API settings
+api: yes
 apiAddress: :9997
+
+# Control API access: the brms-gateway container (compose network 172.18.0.0/16)
+# manages paths programmatically (E-034). MediaMTX only grants API rights to
+# localhost by default, which is why the gateway got 401. Grant by SOURCE IP -
+# no credentials are stored in this repository.
+authInternalUsers:
+  # publish/read/playback stay OPEN to every source (MediaMTX defaults): the
+  # native DSS Client reads rtsp://<host>:9100/cam_<code>?token=... from the
+  # LAN - restricting read to the docker net made every external DESCRIBE 401.
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+  # API/metrics only from the compose network, where the gateway lives.
+  - user: any
+    pass:
+    ips: [172.18.0.0/16]
+    permissions:
+      - action: api
+      - action: metrics
 
 # Metrics settings
 metricsAddress: :9998

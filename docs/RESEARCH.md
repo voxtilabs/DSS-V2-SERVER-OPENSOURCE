@@ -1123,7 +1123,29 @@ Contract sources (all real, zero invention):
    MediaMTX path cam_<deviceCode>; MTS/Video/StartVideo resolves the path from
    the channelId, so the Live View plays the channel the operator picked.
 
-Verification: unit suite green (30 tests incl. E-031..E-038), standalone 43/43
-endpoint probe green (login 2-step, catalogs, trees, channel list, StartVideo,
-view CRUD, RPC), e2e green; all endpoints checked are the ones the operator's
-trace shows the client calling right after login and after an add.
+## EV-084 - E-034 fixed live: MediaMTX path provisioning + ONVIF stream source (2026-11-03)
+
+`cam_<deviceCode>` provisioning used to always report `configured:false` on the
+deployed gateway. Three real root causes (all verified with raw traces, none
+assumed): (1) the MediaMTX control API was disabled (`api: yes` was missing
+from mediamtx.yml although apiAddress existed); (2) the API auth default only
+grants API rights to localhost — the gateway reached it from 172.18.0.0/16 so
+every call got 401; fixed by `authInternalUsers` IP-based grant `{user: any,
+ips: [172.18.0.0/16], permissions: [{action: api}...]}` — no credentials in
+the repo, and permission entries MUST be objects (strings crash MediaMTX);
+further live lesson: publish/read/playback must stay OPEN to all IPs (read
+restricted to the docker net made every external DSS Client DESCRIBE 401),
+(3) configureMediaMTXPath called a non-existing endpoint — the REAL v1.11.3
+router is add/patch/replace + DELETE /v3/config/paths/delete/<name>
+(internal/api/api.go). ONVIF GetStreamUri also failed although the camera is
+ONVIF-live: the lab camera serves Media under /onvif/media_service (announced
+in GetCapabilities) and validates the FULL per-operation SOAPAction
+(".../media/wsdl/GetProfiles" -> 2946 B Profile_1; the generic action answered
+an empty envelope). The standard flow now implemented: GetCapabilities -> Media
+XAddr -> GetProfiles -> GetStreamUri (+ WSSE digest when credentials exist).
+Live result: discoverOnvifStreamUri -> rtsp://192.168.0.238:8554/EBA1_LECTOR,
+path created, StartVideo -> rtsp://10.10.20.120:9100/cam_<code>, REAL RTSP
+DESCRIBE -> RTSP/1.0 200 OK, delete -> device AND MediaMTX path removed.
+Evidence: docs/evidence/E-034-mediapath-provisioning.md. Suites: unit 33/0
+(1 skip), e2e 10/10 (two consecutive runs), live-verify 15/15.
+

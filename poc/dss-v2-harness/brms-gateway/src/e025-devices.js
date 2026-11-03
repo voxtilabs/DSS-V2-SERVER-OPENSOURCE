@@ -56,6 +56,7 @@ import { fileURLToPath } from 'node:url';
 import {
   discoverOnvifStreamUri,
   configureMediaMTXPath,
+  removeMediaMTXPath,
   mediaMtxPathForDevice,
   dahuaRtspUri
 } from './e026-video.js';
@@ -140,13 +141,14 @@ export async function ensureDeviceStream(device) {
   let source = 'cached';
 
   if (!rtspUri) {
+    const creds = { userName: device.userName || device.loginName, password: device.loginPass || device.password };
     if (protocol === '99' || port === 8021) {
-      const uri = await discoverOnvifStreamUri(ip, port);
+      const uri = await discoverOnvifStreamUri(ip, port, creds);
       if (uri) { rtspUri = uri; source = 'onvif'; }
     }
     if (!rtspUri && port !== 8021) {
       // the camera may still expose ONVIF on the standard ONVIF port
-      const uri = await discoverOnvifStreamUri(ip, 8021);
+      const uri = await discoverOnvifStreamUri(ip, 8021, creds);
       if (uri) { rtspUri = uri; source = 'onvif-8021'; }
     }
     if (!rtspUri) {
@@ -976,7 +978,13 @@ export function buildDeviceUnauthorizedPagePayload() {
 export function buildDeviceDeleteBatchPayload(body = {}) {
   const codes = [].concat(body.deviceCodes || body.codes || body.list || []).filter(Boolean);
   let removed = 0;
-  for (const code of codes) { if (DEVICE_REGISTRY.delete(String(code))) removed += 1; }
+  for (const code of codes) {
+    if (DEVICE_REGISTRY.delete(String(code))) removed += 1;
+    // E-034 hygiene: the deleted device vacates its MediaMTX path too.
+    if (code) {
+      setImmediate(() => { if (!removeMediaMTXPath(mediaMtxPathForDevice({ deviceCode: code }))) console.log('[E034-STREAM] path removal ignored for', code); });
+    }
+  }
   // E-032: rewrite the store so deleted devices do NOT come back after a
   // restart (the registry and devices.json used to drift apart).
   if (removed) saveDevicesToDisk();

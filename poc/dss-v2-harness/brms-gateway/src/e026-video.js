@@ -15,36 +15,83 @@
 //   DELETE /v3/paths/{name}
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 
 // RTSP path name in MediaMTX for the ONVIF camera
 export const MEDIAMTX_CAMERA_PATH = process.env.MEDIAMTX_CAMERA_PATH || 'cam1';
 export const MEDIAMTX_API_URL = process.env.MEDIAMTX_API_URL || 'http://mediamtx:9997';
 
 // Discover ONVIF stream URI from the camera via SOAP GetProfiles/GetStreamUri
-export async function discoverOnvifStreamUri(deviceIp, devicePort = 8021) {
+// WSSE UsernameToken per the ONVIF SOAP spec (PasswordDigest =
+// base64(sha1(nonceB64 + created + password))). Cameras that require
+// credentials for GetProfiles/GetStreamUri (the lab one does NOT, but Dahua
+// devices in production DO) would otherwise drop the call at the transport.
+function wsseHeader(user, pass) {
+  if (!user) return '';
+  const nonce = crypto.randomBytes(16);
+  const nonceB64 = nonce.toString('base64');
+  const created = new Date().toISOString().replace('.000Z', 'Z').replace(/\.\d+Z$/, 'Z');
+  const digest = crypto.createHash('sha1')
+    .update(Buffer.concat([nonce, Buffer.from(String(pass || ''), 'utf8'), Buffer.from(created, 'utf8')]))
+    .digest('base64');
+  return `<env:Header>
+    <wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
+                   xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+      <wsse:UsernameToken><wsse:Username>${user}</wsse:Username>
+        <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">${digest}</wsse:Password>
+        <wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">${nonceB64}</wsse:Nonce>
+        <wsu:Created>${created}</wsu:Created>
+      </wsse:UsernameToken>
+    </wsse:Security>
+  </env:Header>`;
+}
+
+export async function discoverOnvifStreamUri(deviceIp, devicePort = 8021, auth = {}) {
   const base = `http://${deviceIp}:${devicePort}`;
   const soapAction = 'http://www.onvif.org/ver10/media/wsdl';
-  const getProfilesBody = `<?xml version="1.0" encoding="UTF-8"?>
-<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
-  <env:Body><trt:GetProfiles/></env:Body></env:Envelope>`;
+  const devAction = 'http://www.onvif.org/ver10/device/wsdl';
+  // WSSE security header: PasswordDigest per ONVIF spec (nonce + created + pass).
+  const wsse = wsseHeader(auth.userName || auth.user || auth.loginName, auth.password || auth.pass);
+  const sec = (xml) => xml.replace('<env:Body>', (wsse || '') + '\n<env:Body>');
+  // Namespace-agnostic tag matches: cameras emit arbitrary prefixes
+  // (trt:, tt:, s: or ns0:). The lab camera answers with s:/tt:/trt:.
+  const rxProfiles = /<(?:[A-Za-z0-9]+:)?Profiles[^>]*token="([^"]+)"/;
+  const rxUri = /<(?:[A-Za-z0-9]+:)?Uri>([^<]+)<\/(?:[A-Za-z0-9]+:)?Uri>/;
+
+  // Standard flow: GetCapabilities (device) -> Media XAddr -> GetProfiles ->
+  // GetStreamUri against the MEDIA SERVICE the camera itself advertises.
+  // The lab camera serves /onvif/media_service; "onvif/media" answers with an
+  // empty <tds:wsdlResponse/> (diagnosed live, 2026-11-03).
+  let mediaEndpoint = `${base}/onvif/media_service`;
+  try {
+    const capsBody = sec(`<?xml version="1.0" encoding="UTF-8"?>
+<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <env:Body><tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities></env:Body></env:Envelope>`);
+    const caps = await soapPost(`${base}/onvif/device_service`, capsBody, devAction + '/GetCapabilities');
+    // The first XAddr AFTER the <tt:Media> element is the Media service the
+    // camera itself advertises (lab camera: http://ip:8021/onvif/media_service).
+    const idxMedia = caps.search(/<(?:[A-Za-z0-9]+:)?Media>/);
+    if (idxMedia >= 0) {
+      const mx = caps.slice(idxMedia).match(/<(?:[A-Za-z0-9]+:)?XAddr>([^<]+)<\/(?:[A-Za-z0-9]+:)?XAddr>/);
+      if (mx) { mediaEndpoint = mx[1].replace(/\/$/, ''); }
+    }
+  } catch { /* fall back to the conventional endpoint */ }
 
   let profileToken = '';
-  try {
-    const profiles = await soapPost(`${base}/onvif/media`, getProfilesBody, soapAction);
-    const m = profiles.match(/<trt:Profiles[^>]*token="([^"]+)"/);
-    if (m) profileToken = m[1];
-  } catch (e) {
-    // Try the device_service endpoint as fallback
+  for (const ep of [mediaEndpoint, `${base}/onvif/media`, `${base}/onvif/media_service`, `${base}/onvif/device_service`]) {
     try {
-      const profiles = await soapPost(`${base}/onvif/device_service`, getProfilesBody, soapAction);
-      const m = profiles.match(/<trt:Profiles[^>]*token="([^"]+)"/);
-      if (m) profileToken = m[1];
-    } catch { /* ignore */ }
+      const getProfilesBody = sec(`<?xml version="1.0" encoding="UTF-8"?>
+<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+  <env:Body><trt:GetProfiles/></env:Body></env:Envelope>`);
+      const profiles = await soapPost(ep, getProfilesBody, `${soapAction}/GetProfiles`);
+      const m = profiles.match(rxProfiles);
+      if (m) { profileToken = m[1]; mediaEndpoint = ep; break; }
+    } catch { /* try next endpoint */ }
   }
 
   if (!profileToken) return null;
 
-  const getStreamBody = `<?xml version="1.0" encoding="UTF-8"?>
+  const getStreamBody = sec(`<?xml version="1.0" encoding="UTF-8"?>
 <env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
   <env:Body>
     <trt:GetStreamUri>
@@ -55,20 +102,13 @@ export async function discoverOnvifStreamUri(deviceIp, devicePort = 8021) {
       <trt:ProfileToken>${profileToken}</trt:ProfileToken>
     </trt:GetStreamUri>
   </env:Body>
-</env:Envelope>`;
+</env:Envelope>`);
 
   try {
-    const stream = await soapPost(`${base}/onvif/media`, getStreamBody, soapAction);
-    const m = stream.match(/<tt:Uri>([^<]+)<\/tt:Uri>/);
+    const stream = await soapPost(mediaEndpoint, getStreamBody, `${soapAction}/GetStreamUri`);
+    const m = stream.match(rxUri);
     if (m) return m[1];
-  } catch {
-    try {
-      const stream = await soapPost(`${base}/onvif/device_service`, getStreamBody, soapAction);
-      const m = stream.match(/<tt:Uri>([^<]+)<\/tt:Uri>/);
-      if (m) return m[1];
-    } catch { /* ignore */ }
-  }
-
+  } catch { /* fall through */ }
   return null;
 }
 
@@ -80,7 +120,7 @@ function soapPost(url, body, soapAction) {
       port: u.port || 80,
       path: u.pathname,
       method: 'POST',
-      timeout: 1500,
+      timeout: 2500,
       headers: {
         'Content-Type': 'application/soap+xml; charset=utf-8',
         'SOAPAction': `"${soapAction}"`,
@@ -97,18 +137,30 @@ function soapPost(url, body, soapAction) {
   });
 }
 
-// Configure a MediaMTX path to pull from an RTSP source
+// Configure a MediaMTX path to pull from an RTSP source.
+// MediaMTX v3 control API routes (v1.11.3, internal/api/api.go):
+//   POST   /v3/config/paths/add/<name>       create the static entry
+//   PATCH  /v3/config/paths/patch/<name>     alter an existing entry
+//   DELETE /v3/config/paths/delete/<name>    remove it
+// (there is NO /v3/paths/configure nor .../remove/<name>).
 export async function configureMediaMTXPath(pathName, rtspSource) {
-  const body = JSON.stringify({
-    path: { name: pathName, source: rtspSource, sourceOnDemand: true },
-    action: 'setSource'
-  });
+  const name = encodeURIComponent(String(pathName || ''));
+  const body = JSON.stringify({ source: rtspSource, sourceOnDemand: true });
+  const tryCall = (method, p) =>
+    fetch(`${MEDIAMTX_API_URL}${p}`, { method, headers: { 'Content-Type': 'application/json' }, body });
   try {
-    const res = await fetch(`${MEDIAMTX_API_URL}/v3/paths/configure`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body
-    });
+    const add = await tryCall('POST', `/v3/config/paths/add/${name}`);
+    if (add.ok) return true;
+    //_ALREADY_EXISTS -> alter the existing entry instead
+    const patch = await tryCall('PATCH', `/v3/config/paths/patch/${name}`);
+    return patch.ok;
+  } catch { return false; }
+}
+
+// E-032 hygiene: drop the device's MediaMTX path when the device is deleted.
+export async function removeMediaMTXPath(pathName) {
+  try {
+    const res = await fetch(`${MEDIAMTX_API_URL}/v3/config/paths/delete/${encodeURIComponent(String(pathName || ''))}`, { method: 'DELETE' });
     return res.ok;
   } catch { return false; }
 }

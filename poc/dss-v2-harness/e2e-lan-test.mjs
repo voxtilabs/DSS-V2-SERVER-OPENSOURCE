@@ -168,19 +168,31 @@ async function probeRtsp(rtspUrl) {
 }
 
 // ─── WebSocket event listener helper ────────────────────────────────────
-async function waitForWsEvent(token, timeoutMs = 15000) {
+async function waitForWsEvent(token, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`wss://10.10.20.120:1443/brms/api/v1.0/event/ws?token=${token}`, {
       rejectUnauthorized: false,
     });
 
     const timer = setTimeout(() => {
+      clearInterval(udpKeepalive);
       ws.close();
       reject(new Error('WebSocket event timeout'));
     }, timeoutMs);
 
     let welcomeReceived = false;
     let udpSent = false;
+    // UDP is lossy by design: keep re-sending the alarm every 2s until the
+    // WS bridge forwards the event, instead of betting on a single datagram
+    // (a dropped datagram made this test flaky, ~1 in 8 runs).
+    const udpKeepalive = setInterval(() => {
+      if (!welcomeReceived) return;
+      const udp = dgram.createSocket('udp4');
+      udp.send('ANPR_EBA|CAM001|plate=E2E_TEST\r\n', 18800, '10.10.20.120', (err) => {
+        if (err) console.error('UDP send error:', err);
+        udp.close();
+      });
+    }, 2000);
 
     ws.on('open', () => {
       // Connected, wait for events
@@ -190,7 +202,7 @@ async function waitForWsEvent(token, timeoutMs = 15000) {
       const text = data.toString();
       if (!welcomeReceived && text.includes('WELCOME')) {
         welcomeReceived = true;
-        // Send UDP alarm AFTER welcome received
+        // Send UDP alarm AFTER welcome received (first shot, keepalive takes over)
         if (!udpSent) {
           udpSent = true;
           const udp = dgram.createSocket('udp4');
@@ -202,6 +214,7 @@ async function waitForWsEvent(token, timeoutMs = 15000) {
         return;
       }
       if (text.includes('ANPR_EBA') || text.includes('ALARM') || text.includes('event')) {
+        clearInterval(udpKeepalive);
         clearTimeout(timer);
         ws.close();
         resolve(text);
@@ -209,11 +222,13 @@ async function waitForWsEvent(token, timeoutMs = 15000) {
     });
 
     ws.on('error', (err) => {
+      clearInterval(udpKeepalive);
       clearTimeout(timer);
       reject(err);
     });
 
     ws.on('close', () => {
+      clearInterval(udpKeepalive);
       clearTimeout(timer);
       if (!welcomeReceived) {
         reject(new Error('WebSocket closed before welcome'));
@@ -317,16 +332,34 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
   });
 
   it('E2E-3 MTS & RTSP 9100 - Real TCP probe with OPTIONS + DESCRIBE', async () => {
+    // Self-contained: the registry may be EMPTY (starts fresh, only operator
+    // devices). This test registers its own real ONVIF lab device, drives the
+    // per-device stream pipeline to a REAL RTSP DESCRIBE, and cleans up.
+    const addBody = JSON.stringify({
+      deviceIp: '192.168.0.238', devicePort: 8021, protocolType: '99',
+      deviceCategory: '1', deviceType: '62', deviceName: 'E3-STREAM-PROBE',
+      serverCode: 'video#local', encoderChannelCount: 1
+    });
+    const add = await request(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: addBody
+    });
+    assert.equal(add.status, 200);
+    const addJson = await add.json();
+    const streamCode = addJson.data?.deviceCode;
+    assert.ok(streamCode, 'add must return a deviceCode');
+    await new Promise(r => setTimeout(r, 2500)); // ONVIF GetStreamUri + MTX path
+
     const r = await request(`${BASE}/brms/api/v1.0/MTS/Video/StartVideo`, {
       method: 'POST',
       headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channelId: '1000171$1$0$0', streamType: 1, dataType: 1 })
+      body: JSON.stringify({ channelId: `${streamCode}$1$0$0`, streamType: 1, dataType: 1 })
     });
     assert.equal(r.status, 200);
     const j = await r.json();
     const d = j.data || j;
     const rtspUrl = d.url; // Already uses PUBLIC_HOST=10.10.20.120
     assert.ok(rtspUrl && rtspUrl.includes('rtsp://10.10.20.120:9100/'));
+    assert.ok(rtspUrl.includes(`cam_${streamCode}`), 'per-device MediaMTX path (E-034)');
     assert.ok(rtspUrl.includes('token='));
     assert.ok(d.hlsUrl && d.hlsUrl.includes('/hls'));
 
@@ -336,7 +369,7 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.ok(result.optionsOk, 'RTSP OPTIONS did not return 200 OK');
     // DESCRIBE may return 200 OK with SDP (if stream available) or 404 Not Found (if no publisher)
     // Both are valid RTSP responses
-    assert.ok(result.describeOk || result.describeNotFound, 
+    assert.ok(result.describeOk || result.describeNotFound,
       'RTSP DESCRIBE did not return valid RTSP response (expected 200 OK or 404 Not Found)');
     if (result.describeOk && result.sdp) {
       // If stream is available, verify H.265 in SDP
@@ -344,6 +377,14 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     } else if (result.describeNotFound) {
       console.log('No stream publisher available (404 Not Found) - RTSP protocol working correctly');
     }
+
+    // Lab hygiene: remove this test's own device right away (device AND its
+    // MediaMTX path are dropped by the E-034 delete pipeline).
+    await request(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [streamCode] })
+    });
   });
 
   it('E2E-4 UDP 18800 -> WebSocket event bridge', async () => {
