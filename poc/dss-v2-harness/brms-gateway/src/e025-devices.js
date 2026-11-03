@@ -53,6 +53,12 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  discoverOnvifStreamUri,
+  configureMediaMTXPath,
+  mediaMtxPathForDevice,
+  dahuaRtspUri
+} from './e026-video.js';
 import { dirname } from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -115,6 +121,63 @@ export function saveDevicesToDisk() {
 export function persistDevice(record) {
   DEVICE_REGISTRY.set(record.deviceCode, record);
   saveDevicesToDisk();
+}
+
+// E-034: give EVERY registered device a working RTSP path, no matter how it
+// was registered (manual add, Discover join/batch, ONVIF add, Dahua
+// auto-register). The Live View plays the URL returned by
+// MTS/Video/StartVideo, so the device must own its MediaMTX path.
+//
+// Discovery order (real, never simulated):
+//   1) the camera's own ONVIF GetStreamUri (the lab camera answers on 8021)
+//   2) the Dahua native RTSP convention (EV-013) when the camera is not ONVIF
+export async function ensureDeviceStream(device) {
+  if (!device || !device.deviceIp) return null;
+  const ip = String(device.deviceIp);
+  const port = Number(device.devicePort) || 37777;
+  const protocol = String(device.protocolType || '');
+  let rtspUri = String(device.rtspUri || '');
+  let source = 'cached';
+
+  if (!rtspUri) {
+    if (protocol === '99' || port === 8021) {
+      const uri = await discoverOnvifStreamUri(ip, port);
+      if (uri) { rtspUri = uri; source = 'onvif'; }
+    }
+    if (!rtspUri && port !== 8021) {
+      // the camera may still expose ONVIF on the standard ONVIF port
+      const uri = await discoverOnvifStreamUri(ip, 8021);
+      if (uri) { rtspUri = uri; source = 'onvif-8021'; }
+    }
+    if (!rtspUri) {
+      rtspUri = dahuaRtspUri(ip);
+      source = 'dahua-convention';
+    }
+  } else {
+    source = String(device.streamSource || 'cached');
+  }
+
+  // The path name only depends on the device code, so it is already set at
+  // creation time (the RTSP source may still be unknown).
+  const pathName = device.mediamtxPath || mediaMtxPathForDevice(device);
+  const configured = await configureMediaMTXPath(pathName, rtspUri);
+  device.rtspUri = rtspUri;
+  device.mediamtxPath = pathName;
+  device.streamSource = source;
+  device.streamConfigured = !!configured;
+  persistDevice(device);
+  console.log('[E034-STREAM]', JSON.stringify({
+    deviceCode: device.deviceCode, deviceIp: ip, devicePort: port,
+    rtspUri, mediamtxPath: pathName, source, configured
+  }));
+  return device;
+}
+
+// Resolve the device that owns a channel id ("<deviceCode>$1$0$0").
+export function findDeviceByChannelId(channelId) {
+  const code = String(channelId || '').split('$')[0];
+  if (!code) return null;
+  return DEVICE_REGISTRY.get(code) || null;
 }
 
 export function nextDeviceCode(ip, prefix = 'D') {
@@ -375,9 +438,16 @@ export function createDeviceRecord(input, identity = {}) {
     collected: 1,
     createTime: new Date().toISOString(),
     updateTime: new Date().toISOString(),
-    source: identity.source || 'manual'
+    source: identity.source || 'manual',
+    // E-034: the MediaMTX path of this device is derived from its code, so it
+    // is known before the RTSP source is probed. MTS/Video/StartVideo resolves
+    // the path from the channel id, so every device owns its own stream.
+    mediamtxPath: mediaMtxPathForDevice({ deviceCode: code })
   };
-  DEVICE_REGISTRY.set(code, record);
+  // E-032: persist immediately. The discovery "join/batch" path creates the
+  // record here (not via POST /device, which persists on its own), so without
+  // this write the device only lived in RAM and vanished on the next restart.
+  persistDevice(record);
   return record;
 }
 
@@ -388,9 +458,33 @@ export function findDeviceByIpPort(ip, port) {
   return null;
 }
 
+// E-038: the DSS channel code layout is
+//     <deviceCode>$<unitType>$0$<channelSeq>
+// proven in the PRODUCTION DSS web bundle (web-module/js/device-JBrSmGvP.js):
+//     UNIT_TYPE:{ENC:"1",DEC:"2",ALARM_IN:"3",...}
+// and in web-module/js/index-Cr8Ld85_.js:
+//     I.editDeviceInfo.deviceCode + "$" + xe.UNIT_TYPE.ENC + "$0$" + e.channelSeq
+// The server package confirms the same layout:
+//   com.dcc.admin.common.constants.device.UnitType  (Encoder = 1, Decoder = 2, ...)
+//   com.dcc.admin.biz.device.constants.DeviceResourceEnum.getChannelResourceType()
+//       -> ChannelIdUtils.getUnitType(channelId) -> UnitType.getByType(...)
+//          -> the unit type is the SECOND segment of the channel code.
+// Before E-038 the gateway wrote "<code>$<channelNo>$0$0", so the second
+// segment carried the channel number: a 2nd channel was parsed as a DECODER
+// channel (unit type 2) by the client and by the server logic.
+export const DSS_UNIT_TYPE_ENC = '1';
+
+export function dssChannelCode(deviceCode, channelSeq) {
+  return `${deviceCode}$${DSS_UNIT_TYPE_ENC}$0$${channelSeq}`;
+}
+
 function channelVo(device, no) {
+  const channelSeq = Math.max(0, Number(no) - 1);
   return {
-    channelId: `${device.deviceCode}$${no}$0$0`,
+    channelId: dssChannelCode(device.deviceCode, channelSeq),
+    channelCode: dssChannelCode(device.deviceCode, channelSeq),
+    channelSeq,
+    unitType: DSS_UNIT_TYPE_ENC,
     channelNo: no,
     channelName: no === 1 ? device.deviceName : `${device.deviceName} CH${no}`,
     deviceCode: device.deviceCode,
@@ -429,7 +523,7 @@ export function buildDeviceAddPayload(body, identity = {}, publicHost = '10.10.2
   const input = normalizeDeviceInput(body);
   const existing = findDeviceByIpPort(input.deviceIp, input.devicePort);
   const device = existing || createDeviceRecord(input, identity);
-  DEVICE_REGISTRY.set(device.deviceCode, { ...device, ...identity, deviceIp: input.deviceIp || device.deviceIp });
+  persistDevice({ ...device, ...identity, deviceIp: input.deviceIp || device.deviceIp });
   const created = DEVICE_REGISTRY.get(device.deviceCode);
   const channels = [];
   for (let i = 1; i <= created.channelNum; i++) channels.push(channelVo(created, i));
@@ -817,6 +911,46 @@ export function buildDeviceAddBatchPayload(body = {}) {
   return buildDiscoverJoinBatchPayload(body);
 }
 
+// E-031: web SPA resource helpers (proven from useDeviceApi-CXeZa_J4.js +
+// u-device-Clmrne3b.js + index-BQObycDy.js; all three previously answered from
+// the generic fallback, which left live-view/storage/monitor trees without
+// channel rows and produced the broken GET /device/undefined requests).
+//   getChannels     -> POST /brms/api/v1.1/device/channel/list {ids:[...]}
+//                      consumer: `const{code,data}=await c({ids}); return data.results`
+export function buildChannelListPayload(body = {}) {
+  const all = allChannels();
+  const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  const results = ids.length ? all.filter((ch) => ids.includes(ch.channelId)) : all;
+  return { results, list: results, total: results.length };
+}
+
+//   getDeviceOrganizations
+//     -> POST /brms/api/v1.1/device/organization/fetch/batch/list
+//        {deviceCodes:[...]}; consumers iterate the DATA ARRAY itself
+//        (index-B8bjlgBo.js: const{data:l}; _(l,(e)=>e.deviceCode===e.id))
+export function buildDeviceOrganizationBatchPayload(body = {}) {
+  const codes = Array.isArray(body.deviceCodes) ? body.deviceCodes.map(String) : [];
+  const rows = [];
+  for (const d of DEVICE_REGISTRY.values()) {
+    if (codes.length && !codes.includes(String(d.deviceCode))) continue;
+    rows.push({
+      deviceCode: d.deviceCode,
+      deviceName: d.deviceName,
+      orgCode: d.orgCode || '001',
+      orgName: 'Root Org',
+      pId: '0'
+    });
+  }
+  return rows;
+}
+
+//   getDevice       -> GET /brms/api/v1.1/device/{deviceCode}
+//                      consumer: `getDeviceInfo` returns `data` untouched
+export function findDevicePayloadByCode(deviceCode) {
+  if (!deviceCode) return null;
+  return DEVICE_REGISTRY.get(String(deviceCode)) || null;
+}
+
 export function buildDeviceCheckExistPayload(body = {}) {
   const input = normalizeDeviceInput(body);
   const existing = findDeviceByIpPort(input.deviceIp, input.devicePort);
@@ -843,6 +977,9 @@ export function buildDeviceDeleteBatchPayload(body = {}) {
   const codes = [].concat(body.deviceCodes || body.codes || body.list || []).filter(Boolean);
   let removed = 0;
   for (const code of codes) { if (DEVICE_REGISTRY.delete(String(code))) removed += 1; }
+  // E-032: rewrite the store so deleted devices do NOT come back after a
+  // restart (the registry and devices.json used to drift apart).
+  if (removed) saveDevicesToDisk();
   return { success: true, removed, deleted: removed, results: [], list: [], total: removed };
 }
 

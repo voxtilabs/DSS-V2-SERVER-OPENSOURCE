@@ -1034,3 +1034,96 @@ Two independent defects, both proven from the mirrored bundle (zero guessing):
 
 Verified: unit 27/27 (28 total), e2e 10/10; live probe of /admin/API/tree/*
 before the fix returned the CAM001 mock (screenshotted in session log).
+
+## EV-081b - E-031: live-view resource helper endpoints (verified live 2026-11-03)
+
+The Live-View/Playback module of the client fetches its channel resources through
+helper endpoints that used to fall into the generic fallback:
+
+- POST /brms/api/v1.1/device/channel/list {ids:[channelId...]} (also GET) ->
+  {results:[channelVo]} rows keyed by channelId; every known id is returned with
+  channelId/channelNo/deviceCode/deviceName; UNKNOWN ids are FILTERED OUT
+  (exact empty results, never a fallback error).
+- POST /brms/api/v1.1/device/organization/fetch/batch/list {deviceCodes:[]} ->
+  data IS the rows array ([{deviceCode, orgCode, orgName}]) - consumers iterate
+  it directly, no ListVo wrapper.
+- GET /brms/api/v1.1/device/{code} -> the device record; unknown code -> exact
+  404. These three were probed live against 10.10.20.120 and passed.
+
+## EV-082 - E-032: registry persistence with a bind-mounted volume
+(verified live 2026-11-03)
+
+The registry was RAM-only: any `docker restart` dropped everything the
+operator had added and the client tree came up empty after a reboot.
+
+- Every write path now persists: POST /device (manual add), POST /device/p2p-register,
+  join/batch (discover), discover/device/init, ARS auto-register and delete/batch.
+- data/devices.json reload is logged at boot ("Loaded N devices from ...").
+- docker-compose.yml bind-mounts ./brms-gateway/data:/app/data so the store
+  survives image rebuilds and container recreation.
+- Live proof: add -> docker restart -> device still on /device/page, trees and
+  channel list, and its MediaMTX path is re-provisioned on demand.
+
+## EV-083 - E-033/E-034/E-035/E-037/E-038: native contracts recovered from the
+produ-ction server package + bundle (2026-11-03)
+
+Root cause of "the add works in Device Config but nothing appears in Live View /
+Monitoring / Storage": the native Qt client (DSS Client 8.006, DPSDK.dll) builds
+its device tree from keys we were NOT serving.
+
+Contract sources (all real, zero invention):
+1. SERVER PACKAGE (General_DSS-Ultimate_Server_Win64_IS_V8.008...exe, decoded
+   with the E-009 pipeline: outer-db.bin + LZMA block @d2+772125 + javap):
+   - com.dcc.admin.restapi.api.v1s0.vo.tree.DeviceOrgTreeVo{List<OrgNodeVo> departments}
+   - com.dcc.admin.restapi.api.v1s0.vo.tree.DeviceTreeVo{List<DeviceInfoVo> devices}
+   - DeviceTreeController mappings: GET /deviceOrg (AuthCheck PUBLIC), POST /devices
+   - OrgNodeVo{code,parentCode,name,orgType,modifyTime,deparmentsCount,domainId,
+     device:[OrgDeviceNodeVo{id,sort}],channel:[OrgChannelNodeVo{id,sort}],sn,
+     sourceType,sourceId,associateId,remark,authority}
+   - DeviceInfoVo{code,name,category,type,model,deviceModelStr,status,offlineReason,
+     protocol,manufacturer,deviceIp,devicePort,registId,proxyIp,proxyPort,userName,
+     password,callNumber,loginType,sn,alarmRecordPosition,capability,orgCode,
+     units:[DeviceUnitInfoVo],sipId,sipPwd,...}
+   - DeviceUnitInfoVo{unitType,unitSeq,...,channels:[DeviceChannelInfoVo]}
+   - DeviceChannelInfoVo{channelCode,channelName,channelSeq,status,...}
+   - The native DPSDK.dll string pool (0x180cdd138) contains "departments" right
+     after "Resource.Tree.GetDeviceOrg"; "devices/isParent/parentName" for
+     GetDeviceTree. The bundle SPA reads deviceList/orgList.
+   => fix: serve departments/devices (REAL) + orgList/deviceList (aliased web).
+2. BRM RPC family: Resource.Tree.GetDeviceOrg / GetDeviceTree / GetDevices and
+   Resource.Device.GetDeviceAllOrg / GetDeviceByOrgCode used to return the
+   generic empty envelope ({}), leaving the Monitor Center tree EMPTY. Now the
+   same builders answer the RPC transport (both "Resource.*" and the
+   URL-prefixed "BRM.Resource.*" spellings).
+3. MENUS: real catalog = sys_menu (86 rows, p_data.sql) with
+   MenuVo{menuCode,menuName,pid}; role grants =
+   sys_role_menu_default_relation (ROLE_TYPE 1 = Super Administrator -> all 86,
+   ROLE_TYPE 2 -> 81, ROLE_TYPE 3 -> 68). The old invented menus 100..700 are
+   GONE. GetMenuRights = union(leveldb harvest 158, seed 86) = 172 real codes.
+   Limitation documented: MENU_NAME is an i18n key; the localized string lives
+   in the MyISAM `func` table (not recoverable from the package), so menuName
+   carries the real MEMO value.
+4. FUNCTIONS: com.dcc.admin.restapi.common.constant.FunctionType -> record=1,
+   ptzOperateAndConfig=2, talk=3, recordLock=5, recordTips=6, liveView=8,
+   playback=9, download=10, privacyMasking=11, ptzOperate=13, syncTime=15,
+   livePreview=17, deviceWeb=21, broadcast=23, playAudio=24, controlVolume=25,
+   panoramicSplicing=27. adm_role_function(ROLE_ID=1) = 1,2,3,5,6,8,9,10,11 +
+   adm_dev_privilege(ROLE_ID=1) = 8/9/10/11 on NODE_CODE 001 =>
+   BRM.User.GetUserFunctions now returns these REAL codes (was: []).
+5. CHANNEL ID: the real DSS layout is <deviceCode>$<unitType>$0$<channelSeq>
+   with unitType ENC=1 (bundle device-JBrSmGvP.js UNIT_TYPE + server
+   com.dcc.admin.common.constants.device.UnitType Encoder=1 +
+   DeviceResourceEnum -> ChannelIdUtils.getUnitType = segment 2). We wrote
+   <code>$<n>$0$0 before, so a 2nd channel was read as a DECODER (unitType 2).
+   Now: code$1$0$0, code$1$0$1, ... (E-038).
+6. VIEWS: ViewController contract from the package
+   (ViewTreeVo{viewInfos:[{viewType,viewDirs}]}/ViewDirVo/ViewVo/WindowVo/
+   WindowLayoutVo), public+private viewInfos=2 entries, windows as strings.
+7. STREAMS: every registered device (manual/discover/ONVIF/ARS/P2P/RTSP) owns
+   MediaMTX path cam_<deviceCode>; MTS/Video/StartVideo resolves the path from
+   the channelId, so the Live View plays the channel the operator picked.
+
+Verification: unit suite green (30 tests incl. E-031..E-038), standalone 43/43
+endpoint probe green (login 2-step, catalogs, trees, channel list, StartVideo,
+view CRUD, RPC), e2e green; all endpoints checked are the ones the operator's
+trace shows the client calling right after login and after an add.

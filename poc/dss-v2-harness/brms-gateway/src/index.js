@@ -42,6 +42,9 @@ import {
   buildDiscoverDevicePagePayload,
   buildDiscoverDetailPayload,
   buildDiscoverJoinBatchPayload,
+  buildChannelListPayload,
+  buildDeviceOrganizationBatchPayload,
+  findDevicePayloadByCode,
   buildDiscoverCostTimePayload,
   buildDiscoverSummaryPayload,
   buildFunctionAvailablePayload,
@@ -71,6 +74,42 @@ import {
   MEDIAMTX_API_URL,
   FALLBACK_ROUTES
 } from './e026-video.js';
+// E-034: every registered device owns its own MediaMTX RTSP path.
+import { ensureDeviceStream, findDeviceByChannelId } from './e025-devices.js';
+// E-033: real monitor/view contract (saved layouts) extracted from the
+// original DSS Server V8.008 package (ViewController / ViewTreeVo / ...).
+import {
+  loadViewsFromDisk,
+  buildViewTreePayload,
+  buildViewDirPayload,
+  addViewDir,
+  updateViewDir,
+  batchDeleteViewDir,
+  addView,
+  updateView,
+  renameView,
+  batchDeleteView,
+  shareView,
+  ackShareView,
+  buildShareViewPayload,
+  buildUnreadShareViewsPayload
+} from './e033-monitor-views.js';
+// E-037: real native contracts (menu catalog, function rights, device/org
+// tree) extracted from the original DSS Server V8.008 package.
+import {
+  DSS_MENU_CATALOG,
+  DSS_FUNCTION_CATALOG,
+  DSS_ADMIN_FUNCTION_CODES,
+  DSS_ADMIN_DEVICE_PRIVILEGES,
+  DSS_ROLE_MENU_CODES,
+  buildMenuAvailablePayload,
+  buildMenuAvailableFlag,
+  buildFunctionListPayload,
+  buildNativeDeviceTreePayload,
+  buildNativeOrgTreePayload,
+  buildNativeAllOrgPayload
+} from './e037-native-tree.js';
+loadViewsFromDisk();
 // E-025: the mock camera is part of the device registry so /device/page,
 // /tree/* and the statistics all report the same set of devices.
 // E-028: the seeded mock ("Test Camera" @127.0.0.1:37777, manufacturer
@@ -724,12 +763,64 @@ async function brmRpcHandler(req) {
   // ===== E-021: RPC shapes (parsers contracted via REA/DPSDK + live trace) =====
   // GetMenuRights registrar row: menuType / forbiddenMenus / menuRights
   // (DPSDK string pool 0x180cd6f08). E-022: serve REAL menuRights from leveldb.
-  if (method === 'BRM.User.GetMenuRights') return rpcEnvelope(method, { menuType: Number((b.data && b.data.menuType) || 2), menuRights: REAL_MENU_RIGHTS, rights: REAL_MENU_RIGHTS, menuList: REAL_MENU_RIGHTS, forbiddenMenus: REAL_FORBIDDEN_MENUS, count: REAL_MENU_RIGHTS.length });
+  // E-035: the rights are the union of the REAL seed grants of the Super
+  // Administrator role (sys_role_menu_default_relation, 86 codes) and the
+  // REAL codes harvested from the server leveldb (158) - the leveldb harvest
+  // was missing 14 real menus (001,002,003,004,010,002005004,002007002-4,
+  // 003001002,004002003,004003002,004004004-5), so a menu could be hidden.
+  if (method === 'BRM.User.GetMenuRights') {
+    const rights = [...new Set([...(DSS_ROLE_MENU_CODES['1'] || []), ...REAL_MENU_RIGHTS])];
+    return rpcEnvelope(method, {
+      menuType: Number((b.data && b.data.menuType) || 2),
+      menuRights: rights,
+      rights,
+      menuList: rights,
+      forbiddenMenus: REAL_FORBIDDEN_MENUS,
+      count: rights.length
+    });
+  }
   // GetChannelsCount parser reads int `count` (DPSDK 0x1800d3ed0).
-  if (method === 'BRM.User.GetChannelsCount') return rpcEnvelope(method, { count: 1 });
-  // GetUserFunctions parser reads `functions` (DPSDK 0x1800e2500); empty list =
-  // no extra feature gating, launcher menus come from menu/available/list.
-  if (method === 'BRM.User.GetUserFunctions') return rpcEnvelope(method, { functions: [], functionList: [], count: 0 });
+  if (method === 'BRM.User.GetChannelsCount') return rpcEnvelope(method, { count: DEVICE_REGISTRY.size });
+  // E-035: GetUserFunctions -> UserFunctionVo{List<String> functions}.
+  // The codes are the REAL ones of the Super Administrator role
+  // (adm_role_function ROLE_ID=1 in the server seed + FunctionType enum):
+  // 1 record, 2 ptzOperateAndConfig, 3 talk, 5 recordLock, 6 recordTips,
+  // 8 liveView, 9 playback, 10 download, 11 privacyMasking.
+  // An EMPTY list told the client that the account owns no live-view /
+  // playback function at all.
+  if (method === 'BRM.User.GetUserFunctions') {
+    const functions = DSS_ADMIN_FUNCTION_CODES.slice();
+    return rpcEnvelope(method, {
+      functions,
+      functionList: functions,
+      authorizedFunctionCodes: functions,
+      devicePrivileges: DSS_ADMIN_DEVICE_PRIVILEGES.slice(),
+      count: functions.length
+    });
+  }
+  // E-037: the Monitor Center (Live View / Monitoring tabs) builds its
+  // resource tree through these BRM RPC methods. They used to fall through to
+  // the generic empty envelope, so the native tree stayed EMPTY.
+  //   Resource.Tree.GetDeviceOrg  -> {departments:[OrgNodeVo]}
+  //   Resource.Tree.GetDeviceTree -> {devices:[DeviceInfoVo]}
+  //   Resource.Tree.GetDevices    -> {devices:[DeviceInfoVo]}
+  //   Resource.Device.GetDeviceAllOrg / GetDeviceByOrgCode -> departments
+  // Both spellings are dispatched: the transport URL /brms/api/BRM/:ns/:fn
+  // prefixes "BRM." (observed in the mirrored client), and the DPSDK string
+  // pool lists the plain "Resource.Tree.*" names.
+  if (method === 'Resource.Tree.GetDeviceOrg' || method === 'BRM.Resource.Tree.GetDeviceOrg') {
+    const p = buildNativeOrgTreePayload();
+    return rpcEnvelope(method, { ...p, orgType: '1', subOrgCount: '0', hasData: p.departments.length ? '1' : '0' });
+  }
+  if (method === 'Resource.Tree.GetDeviceTree' || method === 'Resource.Tree.GetDevices' ||
+      method === 'BRM.Resource.Tree.GetDeviceTree' || method === 'BRM.Resource.Tree.GetDevices') {
+    const data = b.data || b;
+    return rpcEnvelope(method, buildNativeDeviceTreePayload(data));
+  }
+  if (method === 'Resource.Device.GetDeviceAllOrg' || method === 'Resource.Device.GetDeviceByOrgCode' ||
+      method === 'BRM.Resource.Device.GetDeviceAllOrg' || method === 'BRM.Resource.Device.GetDeviceByOrgCode') {
+    return rpcEnvelope(method, buildNativeAllOrgPayload());
+  }
   // TvWall contract keys from the shared registrar pool (0x180caf958 zone):
   // tvWallId, wallMode, screens, splitCaps, maxFreeWindows, editFlag.
   if (method === 'BRM.TvWall.GetTvWalls' || method === 'BRM.TvWall.GetTvWall') return rpcEnvelope(method, { tvWalls: [], list: [], wallList: [], count: 0 });
@@ -782,6 +873,8 @@ async function brmRpcHandler(req) {
     const result = buildDeviceAddPayload(data, identity, PUBLIC_HOST, RTSP_PORT);
     const created = result.device || result.results?.[0];
     persistDevice(created);
+    // E-034: the RPC path provisions the same per-device RTSP path.
+    scheduleStreamProvisioning(created);
     return rpcEnvelope(method, {
       code: 1000,
       desc: 'Success',
@@ -830,74 +923,36 @@ app.get('/admin/API/server/serviceStatus/:svc', async (req) => envelope({
 }));
 
 // Device/org tree for the Qt stack (the "failed to get device data" blocker).
-const TREE_ORG = { orgCode: '001', orgName: 'Root Org', parentOrgCode: '0', pOrgCode: '0', orgType: '0', sort: 1, deviceNum: 1, childCount: 0, status: 1 };
-// (E-030: legacy TREE_DEVICE/TREE_CHANNELS mocks retired — replaced by the
-// live registry builders in adminTreePayload below.)
-// E-030: EVERY admin tree view renders the LIVE registry. The static mock
-// (CAM001/"Mock Camera 01") made the native DSS Client app show a device that
-// does not exist and hide real additions — the app queries these exact
-// endpoints at login and its tree never re-uses the web SPA's
-// grade-device-tree payload.
-function adminTreeDeviceVo(d) {
-  return {
-    deviceId: d.deviceId || d.deviceCode,
-    deviceCode: d.deviceCode,
-    deviceName: d.deviceName,
-    deviceType: d.deviceType ?? 2,
-    type: d.deviceType ?? 2,
-    ip: d.deviceIp || d.ip || '',
-    port: d.devicePort || 37777,
-    manufacturer: d.manufacturer || 'Dahua',
-    model: d.model || '',
-    protocol: d.protocolName || 'Dahua',
-    status: d.status ?? 1,
-    online: d.online ?? 1,
-    orgCode: d.orgCode || '001'
-  };
-}
+// E-037: the tree is now built with the REAL native contract recovered from
+// the DSS Server V8.008 package:
+//   GET  /admin/API/tree/deviceOrg -> DeviceOrgTreeVo{departments:[OrgNodeVo]}
+//   POST /admin/API/tree/devices   -> DeviceTreeVo{devices:[DeviceInfoVo]}
+// Before E-037 the gateway answered {orgList,deviceList,channelList}; the
+// native client (DPSDK.dll string pool 0x180cdd138) parses "departments" and
+// "devices", so the native tree was EMPTY -> the device never showed up in
+// Live View / Monitoring / Storage (only the web SPA, which reads
+// "deviceList", showed it). Both key sets are served, with real values only.
 function adminTreePayload() {
-  const deviceList = [...DEVICE_REGISTRY.values()].map(adminTreeDeviceVo);
-  const org = { ...TREE_ORG, deviceNum: deviceList.length };
-  return { orgList: [org], deviceList, channelList: allChannels() };
+  return buildNativeOrgTreePayload();
 }
 app.get('/admin/API/tree/deviceOrg', async () => envelope(adminTreePayload()));
+app.get('/admin/api/tree/deviceOrg', async () => envelope(adminTreePayload()));
 
-// Menu availability (~"failed to get menu"): launcher menu tree with subsections
-// (user report: "faltaban todas las opciones" - the launcher renders children).
-const ADMIN_MENUS = [
-  { menuId: '100', id: '100', menuName: 'Monitoring Center', name: 'Monitoring Center', parentId: '0', parent: '0', sort: 1, icon: 'monitor', url: '/realtime', children: [
-    { menuId: '101', id: '101', menuName: 'Real-Time Video', name: 'Real-Time Video', parentId: '100', sort: 1, url: '/realtime/live' },
-    { menuId: '102', id: '102', menuName: 'Playback', name: 'Playback', parentId: '100', sort: 2, url: '/realtime/playback' },
-    { menuId: '103', id: '103', menuName: 'E-map', name: 'E-map', parentId: '100', sort: 3, url: '/realtime/emap' }
-  ] },
-  { menuId: '200', id: '200', menuName: 'Event Center', name: 'Event Center', parentId: '0', parent: '0', sort: 2, icon: 'event', url: '/event', children: [
-    { menuId: '201', id: '201', menuName: 'Real-Time Event', name: 'Real-Time Event', parentId: '200', sort: 1, url: '/event/live' },
-    { menuId: '202', id: '202', menuName: 'Event Search', name: 'Event Search', parentId: '200', sort: 2, url: '/event/search' },
-    { menuId: '203', id: '203', menuName: 'Event Rules', name: 'Event Rules', parentId: '200', sort: 3, url: '/event/rules' }
-  ] },
-  { menuId: '300', id: '300', menuName: 'DeepXplore', name: 'DeepXplore', parentId: '0', parent: '0', sort: 3, icon: 'deepxplore', url: '/deepxplore', children: [
-    { menuId: '301', id: '301', menuName: 'Intelligent Retrieval', name: 'Intelligent Retrieval', parentId: '300', sort: 1, url: '/deepxplore/retrieval' }
-  ] },
-  { menuId: '400', id: '400', menuName: 'Intelligent Analysis', name: 'Intelligent Analysis', parentId: '0', parent: '0', sort: 4, icon: 'intel', url: '/analysis', children: [
-    { menuId: '401', id: '401', menuName: 'Face Recognition', name: 'Face Recognition', parentId: '400', sort: 1, url: '/analysis/face' },
-    { menuId: '402', id: '402', menuName: 'Vehicle Management', name: 'Vehicle Management', parentId: '400', sort: 2, url: '/analysis/vehicle' },
-    { menuId: '403', id: '403', menuName: 'Heat Map', name: 'Heat Map', parentId: '400', sort: 3, url: '/analysis/heatmap' }
-  ] },
-  { menuId: '500', id: '500', menuName: 'Access Management', name: 'Access Management', parentId: '0', parent: '0', sort: 5, icon: 'access', url: '/access', children: [
-    { menuId: '501', id: '501', menuName: 'Door Management', name: 'Door Management', parentId: '500', sort: 1, url: '/access/door' },
-    { menuId: '502', id: '502', menuName: 'Person Management', name: 'Person Management', parentId: '500', sort: 2, url: '/access/person' }
-  ] },
-  { menuId: '600', id: '600', menuName: 'Parking Lot', name: 'Parking Lot', parentId: '0', parent: '0', sort: 6, icon: 'parking', url: '/parking', children: [
-    { menuId: '601', id: '601', menuName: 'Parking Overview', name: 'Parking Overview', parentId: '600', sort: 1, url: '/parking/overview' },
-    { menuId: '602', id: '602', menuName: 'Parking Records', name: 'Parking Records', parentId: '600', sort: 2, url: '/parking/records' }
-  ] },
-  { menuId: '700', id: '700', menuName: 'Maintenance Center', name: 'Maintenance Center', parentId: '0', parent: '0', sort: 7, icon: 'maintenance', url: '/maintenance', children: [
-    { menuId: '701', id: '701', menuName: 'System Status', name: 'System Status', parentId: '700', sort: 1, url: '/maintenance/status' },
-    { menuId: '702', id: '702', menuName: 'Device Maintenance', name: 'Device Maintenance', parentId: '700', sort: 2, url: '/maintenance/device' },
-    { menuId: '703', id: '703', menuName: 'Log Search', name: 'Log Search', parentId: '700', sort: 3, url: '/maintenance/logs' }
-  ] }
-];
-app.get('/brms/api/v1.1/menu/available/list', async () => envelope({ menuList: ADMIN_MENUS, list: ADMIN_MENUS }));
+// E-035: menu availability. The previous answer was an INVENTED menu tree
+// (ids 100..700, names like "Monitoring Center") which matches no real DSS
+// menu code, so the launcher could not map a tile to its plugin.
+// The REAL catalog comes from the server package seed (sys_menu, 86 rows) and
+// the role grants from sys_role_menu_default_relation:
+//   GET /brms/api/v1.1/menu/available/list?roleId=1
+//     -> MenuController.getMenusById(Long) -> ResponseInfo<ListVo<MenuVo>>
+//        ListVo{results}, MenuVo{menuCode, menuName, pid}
+app.get('/brms/api/v1.1/menu/available/list', async (req) =>
+  envelope(buildMenuAvailablePayload(req.query?.roleId ?? '1')));
+// MenuController.checkMenuAvailable(code) -> MenuAvailableVo{available}
+app.get('/brms/api/v1.1/menu/:code/available', async (req) =>
+  envelope(buildMenuAvailableFlag(req.params?.code)));
+// MenuController.getMenuFunctions(Integer) -> ListVo<MenuFunctionVo>
+app.get('/brms/api/v1.1/menu/function/list', async () => envelope(buildFunctionListPayload()));
 
 // System / config endpoints (shape unknown -> benign empties + dual keys).
 // E-022: serve REAL functionConfig from leveldb cache.
@@ -1155,26 +1210,14 @@ const addDeviceHandler = async (req) => {
     console.log('[E025-ADD] WS broadcast failed:', err.message);
   }
 
-  // E-026: ONVIF dynamic RTSP discovery - fire-and-forget AFTER responding,
-  // so the client never waits for MediaMTX configuration.
-  if (input.protocolType === '99' && input.deviceIp && created) {
+  // E-034: per-device RTSP path. The path name is already known (it only
+  // depends on the device code); the RTSP source is discovered from the
+  // camera (ONVIF GetStreamUri, Dahua convention as last resort) and the
+  // MediaMTX path is configured in the background so the client never waits.
+  if (created) {
     setImmediate(async () => {
-      try {
-        const rtspUri = await discoverOnvifStreamUri(input.deviceIp, input.devicePort);
-        if (rtspUri) {
-          await configureMediaMTXPath(MEDIAMTX_CAMERA_PATH, rtspUri);
-          created.rtspUri = rtspUri;
-          created.onvifStreamUri = rtspUri;
-          persistDevice(created);
-          console.log('[E026-ONVIF]', JSON.stringify({
-            deviceIp: input.deviceIp, devicePort: input.devicePort,
-            protocolType: input.protocolType, rtspUri,
-            mediamtxPath: MEDIAMTX_CAMERA_PATH
-          }));
-        }
-      } catch (err) {
-        console.log('[E026-ONVIF] discovery failed:', err.message);
-      }
+      try { await ensureDeviceStream(created); }
+      catch (err) { console.log('[E034-STREAM] manual add failed:', err.message); }
     });
   }
 
@@ -1265,8 +1308,40 @@ app.post('/brms/api/v1.1/device/unauthorized/add/batch', async () => envelope({ 
 app.post('/brms/api/v1.1/device/unauthorized/delete/batch', async () => envelope({ success: true, results: [], list: [] }));
 
 // --- discovery join (LAN scan result -> device tree) ---
-app.post('/brms/api/v1.1/discover/device/init', async (req) => envelope(buildDiscoverDeviceInitPayload(req.body)));
-app.post('/brms/api/v1.1/discover/device/join/batch', async (req) => envelope(buildDiscoverJoinBatchPayload(req.body)));
+// E-036: EVERY registration funnel (Discover join, Discover init, manual
+// add, Dahua auto-register) persists the device AND provisions its own
+// MediaMTX path, so the device is visible in every tree and playable.
+function scheduleStreamProvisioning(devices) {
+  const list = Array.isArray(devices) ? devices : [devices];
+  for (const d of list) {
+    if (!d || !d.deviceIp) continue;
+    setImmediate(async () => {
+      try { await ensureDeviceStream(d); }
+      catch (err) { console.log('[E034-STREAM] provisioning failed:', err.message); }
+    });
+  }
+}
+app.post('/brms/api/v1.1/discover/device/join/batch', async (req) => {
+  const payload = buildDiscoverJoinBatchPayload(req.body);
+  scheduleStreamProvisioning(payload.list || payload.deviceList || []);
+  return envelope(payload);
+});
+app.post('/brms/api/v1.1/discover/device/init', async (req) => {
+  const payload = buildDiscoverDeviceInitPayload(req.body);
+  scheduleStreamProvisioning(payload.device || payload.deviceVo || []);
+  return envelope(payload);
+});
+
+// E-031: web SPA resource helpers (live view / storage / monitor trees read
+// these; see EV-081b - they previously answered from the generic fallback).
+app.post('/brms/api/v1.1/device/channel/list', async (req) => envelope(buildChannelListPayload(req.body || {})));
+app.post('/brms/api/v1.1/device/organization/fetch/batch/list', async (req) =>
+  envelope(buildDeviceOrganizationBatchPayload(req.body || {})));
+app.get('/brms/api/v1.1/device/:deviceCode', async (req, reply) => {
+  const payload = findDevicePayloadByCode(req.params?.deviceCode);
+  if (!payload) return reply.code(404).send(envelope(null, 404, 'Device not found'));
+  return envelope(payload);
+});
 app.post('/brms/api/v1.1/discover/device/network/update', async () => envelope({ success: true }));
 
 // ===== E-026: MISSING FALLBACK ROUTES =====
@@ -1291,7 +1366,10 @@ app.get('/brms/api/v1.1/role/page', roleHandler);
 app.post('/brms/api/v1.1/role/page', roleHandler);
 app.get('/brms/api/v1.1/role/list', roleHandler);
 app.get('/brms/api/v1.1/role/all/list', roleHandler);
-app.get('/brms/api/v1.1/function/available/list', async () => envelope(buildFunctionAvailablePayload()));
+// E-035: the REAL function catalog (FunctionType enum of the server package).
+// The previous answer listed invented codes ("realtime", "playback", ...)
+// while the real DSS addresses functions by numeric code.
+app.get('/brms/api/v1.1/function/available/list', async () => envelope(buildFunctionListPayload()));
 app.get('/brms/api/v1.1/subsystem/available/list', async () => envelope(buildSubsystemAvailablePayload()));
 app.get('/brms/api/v1.1/subsystem/register/warning', async () => envelope({ warningList: [], list: [], total: 0 }));
 // OMMS (alarm service) previously 404'd -> "abnormal data" in the Event Center.
@@ -1299,20 +1377,12 @@ app.get('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(buildA
 app.post('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(buildAlertTypeListPayload()));
 
 // --- GET variants of the tree (launcher prefetch used GET -> fallback) ---
-app.get('/brms/api/v1.0/tree/orgs', async () => envelope({
-  orgList: [{ orgId: '1', orgCode: '001', orgName: 'Root', parentId: '0', orgType: 1, sort: 1, deviceNum: Math.max(1, DEVICE_REGISTRY.size), childCount: 0, status: 1 }]
-}));
-app.get('/brms/api/v1.0/tree/devices', async () => envelope({
-  deviceList: [...DEVICE_REGISTRY.values()], list: [...DEVICE_REGISTRY.values()], orgCode: '001', containVirtualDevice: '1', total: DEVICE_REGISTRY.size
-}));
+// E-037: they answer with the REAL native contract (departments/devices).
+app.get('/brms/api/v1.0/tree/orgs', async () => envelope(buildNativeOrgTreePayload()));
+app.get('/brms/api/v1.0/tree/devices', async () => envelope(buildNativeDeviceTreePayload({})));
 app.get('/brms/api/v1.0/tree/channels', async () => {
   const channelList = allChannels();
   return envelope({ channelList, list: channelList, total: channelList.length });
-});
-// Same dynamic data on the admin API base used by the native Qt stack.
-app.get('/brms/api/v1.1/tree/device-tree', async () => {
-  const deviceList = [...DEVICE_REGISTRY.values()];
-  return envelope({ orgList: [{ orgId: '1', orgCode: '001', orgName: 'Root', parentId: '0', orgType: 1, sort: 1 }], deviceList, channelList: allChannels() });
 });
 
 // ===== E-021: exact contracts for the routes that hit [FALLBACK] in the live
@@ -1320,27 +1390,86 @@ app.get('/brms/api/v1.1/tree/device-tree', async () => {
 
 // POST /admin/API/tree/devices arrives with a filter body: {categories: [],
 // sourceTypes: [], orgCode: "", deviceCodes: [], containVirtualDevice: "1"}.
+// E-037: the answer now carries the REAL DeviceTreeVo.devices array (the
+// native client parses "devices"); "deviceList"/"list" stay as aliases for
+// the web SPA.
 app.post('/admin/API/tree/devices', async (req) => {
   const b = req.body || {};
-  const p = adminTreePayload();
-  let deviceList = p.deviceList;
-  // Honor explicit deviceCodes filters (client asks for a specific subtree).
-  if (Array.isArray(b.deviceCodes) && b.deviceCodes.length) {
-    const want = new Set(b.deviceCodes.map(String));
-    deviceList = deviceList.filter((d) => want.has(d.deviceCode));
-  }
-  return envelope({
-    ...p, deviceList, list: deviceList,
-    orgCode: String(b.orgCode || ''), containVirtualDevice: String(b.containVirtualDevice || '1'), total: deviceList.length
-  });
+  const p = buildNativeDeviceTreePayload(b);
+  return envelope(p);
 });
+app.post('/admin/api/tree/devices', async (req) => envelope(buildNativeDeviceTreePayload(req.body || {})));
 // favorite/tree = Dpsdk::CRestLogical::GetCollectionTree (favorites tree).
 app.get('/brms/api/v1.1/account/favorite/tree', async () => envelope({
   list: [], orgList: [], channelList: [], tree: [], favoriteList: []
 }));
 // share/unread/list = GetUnReadCollections / GetUnreadShareViews.
 app.get('/brms/api/v1.1/account/favorite/organization/share/unread/list', async () => envelope({ list: [], unreadCount: 0 }));
-app.get('/brms/api/v1.1/monitor/view/share/unread/list', async () => envelope({ list: [], unreadCount: 0, pUnreadShareViewInfo: [] }));
+// E-033: the monitor/view endpoints follow the REAL ViewController contract
+// recovered from the DSS Server V8.008 package (see e033-monitor-views.js):
+//   GET  monitor/view/view-tree?viewType=N -> ViewTreeVo{viewInfos:[{viewType,viewDirs:[]}]}
+//   POST monitor/view/view-dir              -> ViewDirVo{viewDirCode,viewDirName}
+//   GET  monitor/view/view-dir/{code}       -> ViewDirVo
+//   PUT  monitor/view/view-dir/{code}       -> ViewDirVo
+//   POST monitor/view/view-dir/delete/batch -> ResultsVo{results}
+//   POST monitor/view                       -> viewCode
+//   PUT  monitor/view/{code}                -> viewCode
+//   PUT  monitor/view/{code}/rename         -> viewCode
+//   POST monitor/view/delete/batch          -> ResultsVo{results}
+//   POST monitor/view/share                 -> ViewShareRecordVo
+//   POST monitor/view/share/ack             -> ack
+//   GET  monitor/view/share/{code}          -> ViewShareRecordVo
+//   GET  monitor/view/share/unread/list     -> ResultsVo<UnreadViewVo>
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  app.get(`${host}/monitor/view/view-tree`, async (req) =>
+    envelope(buildViewTreePayload(req.query?.viewType ?? 1)));
+  app.post(`${host}/monitor/view/view-dir`, async (req) => {
+    const r = addViewDir(req.body || {});
+    if (r.error) return envelope(null, 1001, r.error);
+    return envelope(r);
+  });
+  app.get(`${host}/monitor/view/view-dir/:code`, async (req, reply) => {
+    const r = buildViewDirPayload(req.params?.code);
+    if (!r) return reply.code(404).send(envelope(null, 404, 'View dir not found'));
+    return envelope(r);
+  });
+  app.put(`${host}/monitor/view/view-dir/:code`, async (req, reply) => {
+    const r = updateViewDir(req.params?.code, req.body || {});
+    if (!r) return reply.code(404).send(envelope(null, 404, 'View dir not found'));
+    return envelope(r);
+  });
+  app.post(`${host}/monitor/view/view-dir/delete/batch`, async (req) =>
+    envelope(batchDeleteViewDir(req.body || {})));
+  app.post(`${host}/monitor/view`, async (req) => {
+    const r = addView(req.body || {});
+    if (r.error) return envelope(null, 1001, r.error);
+    return envelope(r);
+  });
+  app.put(`${host}/monitor/view/:code/rename`, async (req, reply) => {
+    const r = renameView(req.params?.code, req.body || {});
+    if (!r) return reply.code(404).send(envelope(null, 404, 'View not found'));
+    return envelope(r);
+  });
+  app.put(`${host}/monitor/view/:code`, async (req, reply) => {
+    const r = updateView(req.params?.code, req.body || {});
+    if (!r) return reply.code(404).send(envelope(null, 404, 'View not found'));
+    return envelope(r);
+  });
+  app.post(`${host}/monitor/view/delete/batch`, async (req) => envelope(batchDeleteView(req.body || {})));
+  app.post(`${host}/monitor/view/del`, async (req) => envelope(batchDeleteView(req.body || {})));
+  app.post(`${host}/monitor/view/share/ack`, async (req) => envelope(ackShareView(req.body || {})));
+  app.post(`${host}/monitor/view/share`, async (req) => {
+    const r = shareView(req.body || {});
+    if (r.error) return envelope(null, 1001, r.error);
+    return envelope(r);
+  });
+  app.get(`${host}/monitor/view/share/unread/list`, async () => envelope(buildUnreadShareViewsPayload()));
+  app.get(`${host}/monitor/view/share/:code`, async (req, reply) => {
+    const r = buildShareViewPayload(req.params?.code);
+    if (!r) return reply.code(404).send(envelope(null, 404, 'Share record not found'));
+    return envelope(r);
+  });
+}
 // latest/unhandled/record/list = GetHistoryAlarmRecords (7-day top-1000).
 app.get('/brms/api/v1.1/alarm/latest/unhandled/record/list', async () => envelope({ list: [], records: [], total: 0 }));
 
@@ -1579,27 +1708,38 @@ app.get('/brms/api/v1.0/license', { preHandler: auth }, async () => envelope({
 // E-025: the POST tree routes are what the native Qt stack calls after a login
 // and after an add; they must return the live device registry so a manually
 // added / discovered / auto-registered device shows up in the client tree.
-app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => envelope({
-  orgList: [{ orgId: '1', orgCode: '001', orgName: 'Root', parentId: '0', orgType: 1, sort: 1, deviceNum: Math.max(1, DEVICE_REGISTRY.size), childCount: 0, status: 1 }]
-}));
-app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async () => {
-  const deviceList = [...DEVICE_REGISTRY.values()];
-  return envelope({ deviceList, list: deviceList, orgCode: '001', containVirtualDevice: '1', total: deviceList.length });
-});
+// E-037: they now answer with the REAL native contract (departments/devices).
+app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => envelope(buildNativeOrgTreePayload()));
+app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async (req) =>
+  envelope(buildNativeDeviceTreePayload(req.body || {})));
 app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => {
   const channelList = allChannels();
   return envelope({ channelList, list: channelList, total: channelList.length });
 });
+// E-037: the v1.1 tree helpers of the web SPA and of the native stack.
+app.get('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgTreePayload()));
+app.post('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgTreePayload()));
+// The client also probes the org tree with POST on the v1.1 + v1.0 bases.
+app.get('/brms/api/v1.1/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
+app.post('/brms/api/v1.1/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
+app.post('/brms/api/v1.0/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
+app.post('/brms/api/v1.1/tree/devices', async (req) => envelope(buildNativeDeviceTreePayload(req.body || {})));
+app.post('/brms/api/v1.0/tree/deviceOrgs', async () => envelope(buildNativeOrgTreePayload()));
 
 // ===== MTS VIDEO =====
+// E-034: the Live View opens the URL returned here. Every registered device
+// owns its own MediaMTX path (cam_<deviceCode>) so the stream of the camera
+// the operator picked is the stream that is played.
 app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
   const { channelId, streamType, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, trackId } = req.body;
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${MEDIAMTX_CAMERA_PATH}?token=${token}`;
+  const device = findDeviceByChannelId(channelId);
+  const pathName = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
-  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: MEDIAMTX_CAMERA_PATH });
+  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
@@ -1970,8 +2110,10 @@ function createARSTCPServer() {
             // E-025: auto-registered devices must behave like manually added
             // ones: show up in /device/page, /tree/devices, /tree/channels and
             // /device/statistics/count-by-device-category/list.
+            // E-034/E-036: they also need their own MediaMTX path.
             try {
-              registerArsDevice(deviceInfo);
+              const registered = registerArsDevice(deviceInfo);
+              scheduleStreamProvisioning(registered);
             } catch (err) {
               console.log('[ARS TCP] registerArsDevice failed:', err.message);
             }

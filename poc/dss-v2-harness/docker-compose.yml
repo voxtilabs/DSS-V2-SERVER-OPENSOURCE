@@ -13,6 +13,11 @@ services:
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
     volumes:
       - ../certs:/certs:ro
+      # E-032: the device registry (data/devices.json) MUST survive a container
+      # recreation (image rebuild + `up -d`), otherwise every operator device
+      # vanishes from the tree after each deploy. The bind mount also matches
+      # the path used by the local dev server (brms-gateway/data/devices.json).
+      - ./brms-gateway/data:/app/data
     environment:
       - PORT=11443
       - HTTPS=true

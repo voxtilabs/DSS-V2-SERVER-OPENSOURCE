@@ -113,13 +113,28 @@ export async function configureMediaMTXPath(pathName, rtspSource) {
   } catch { return false; }
 }
 
+// E-034: one MediaMTX path per registered device. The Live View opens the
+// stream returned by MTS/Video/StartVideo, so every device (added by hand,
+// from Discover, by ONVIF or by Dahua auto-register) must own its path.
+export function mediaMtxPathForDevice(device) {
+  const code = String(device?.deviceCode || '').replace(/[^A-Za-z0-9_-]/g, '');
+  return code ? `cam_${code}` : MEDIAMTX_CAMERA_PATH;
+}
+
+// Dahua native RTSP convention (documented EV-013). Used only as a LAST
+// resort when the camera does not answer ONVIF.
+export function dahuaRtspUri(ip, channel = 1, subtype = 0) {
+  return `rtsp://${ip}:554/cam/realmonitor?channel=${channel}&subtype=${subtype}`;
+}
+
 // Missing FALLBACK routes implementations - return benign envelopes so the
 // client never sees "data abnormal" toasts.
 // These were observed during operator testing:
 export const FALLBACK_ROUTES = {
   // User / role management
   'GET /brms/api/v1.1/user/list': { list: [], total: 0 },
-  'GET /brms/api/v1.1/monitor/view/view-tree': { viewTree: [], list: [], total: 0 },
+  // E-033: monitor/view/view-tree is NOT a fallback any more - it is served by
+  // the real ViewController contract (see e033-monitor-views.js).
   'GET /brms/api/v1.1/config/ai/privacy': { enable: 0, privacyMask: [], list: [] },
   'GET /admin/API/user/fish-eye-data': { fishEyeData: [], list: [], total: 0 },
   // Face / AI

@@ -832,3 +832,110 @@ first Sunday of April, both 24:00 -> our "9/1/0".."4/1/0" 00:00:00 values.
   carry ONLY failure rows (result != "0"); full success = results: [].
   The single-add dialog sets its failure flag on every row it sees, so a
   success row inside results is mislabeled "Failed to add device".
+
+## 27. NATIVE TREE CONTRACT - DeviceOrgTreeVo / DeviceTreeVo (E-037, verified)
+
+The DSS Client desktop app (WINPC_V2, DPSDK.dll) builds its resource tree from
+the admin API base. Recovered from the ORIGINAL server package V8.008
+(outer-db.bin + LZMA block + javap):
+
+    GET  /admin/API/tree/deviceOrg          (AuthCheck PUBLIC; DeviceTreeController)
+         -> {code:1000, data:{...DeviceOrgTreeVo, aliases...}}
+            DeviceOrgTreeVo{departments:[OrgNodeVo]}
+            OrgNodeVo{code, parentCode, name, orgType, modifyTime,
+                      deparmentsCount, domainId,
+                      device:[{id, sort}], channel:[{id, sort}],
+                      sn, sourceType, sourceId, associateId, remark, authority}
+            aliases served for the web SPA: orgList (=departments),
+            deviceList (DeviceInfoVo[]), channelList, orgCode
+
+    POST /admin/API/tree/devices {categories, sourceTypes, orgCode,
+                                  deviceCodes, containVirtualDevice}
+         -> {code:1000, data:{...DeviceTreeVo, aliases...}}
+            DeviceTreeVo{devices:[DeviceInfoVo]}
+            DeviceInfoVo{code, name, category, type, model, deviceModelStr,
+                         status, offlineReason, protocol, manufacturer,
+                         deviceIp, devicePort, registId, proxyIp, proxyPort,
+                         userName, password, callNumber, loginType, sn,
+                         alarmRecordPosition, capability, orgCode,
+                         units:[DeviceUnitInfoVo], sipId, sipPwd, ...,
+                         isParent, parentName, addType}
+            DeviceUnitInfoVo{unitType = "1" (ENC), unitSeq, ...,
+                             channels:[DeviceChannelInfoVo]}
+            DeviceChannelInfoVo{channelCode = <code>$1$0$<seq>, channelName,
+                                channelSeq, status, channelType = "1", ...}
+
+DPSDK string pool keys prove the native parse side:
+    ResourceTreeGetDeviceOrg / Resource.Tree.GetDeviceOrg / departments (0x180cdd138)
+    ResourceTreeGetDeviceTree / isParent / parentName (0x180cdd52x)
+    ResourceTreeGetDevices / categories / containVirtualDevice (0x180cdbc0)
+The web SPA reads orgList/deviceList: the gateway serves BOTH key sets from one
+builder. loginType enum (server LoginType): DIRECT_LOGIN=0 REGIST=6
+PROXY_LOGIN=7 MCD=8 ONVIF=9 GB28181=10 P2P=14 RTSP=15; addType: regist / onvif
+/ gb28181 / sn / rtsp / ip. Device filters (DeviceTreeXo) honoured:
+deviceCodes / categories / sourceTypes / orgCode / containVirtualDevice.
+
+## 28. MENUS + FUNCTIONS (real catalogs, E-035)
+
+Sources: seed SQL p_data.sql (sys_menu 86 rows, sys_role_menu_default_relation
+235 rows, adm_role_function 18 rows, adm_dev_privilege 8 rows) + enum
+com.dcc.admin.restapi.common.constant.FunctionType (javap -c) + the
+function_config.properties resource (201 feature keys).
+
+    GET  /brms/api/v1.1/menu/available/list?roleId=1
+         -> ListVo{results:[MenuVo{menuCode, menuName, menuNameKey, pid,
+                                   sort, systemCode}]}
+          86 rows for ROLE_TYPE 1 (Super Administrator), 81 for 2, 68 for 3.
+    GET  /brms/api/v1.1/menu/:code/available  -> MenuAvailableVo{available "1"/"0"}
+    GET  /brms/api/v1.1/menu/function/list    -> functionCode/name/pId
+    GET  /brms/api/v1.1/function/available/list  (FunctionType enum):
+            record=1 ptzOperateAndConfig=2 talk=3 recordLock=5 recordTips=6
+            liveView=8 playback=9 download=10 privacyMasking=11 ptzOperate=13
+            syncTime=15 livePreview=17 deviceWeb=21 broadcast=23 playAudio=24
+            controlVolume=25 panoramicSplicing=27
+    RPC  BRM.User.GetUserFunctions -> functions = role codes
+         (admin = adm_role_function ROLE_ID=1: 1,2,3,5,6,8,9,10,11)
+    RPC  BRM.User.GetMenuRights -> menuRights = union(leveldb harvest 158,
+         seed 86) = 172 real codes; the 14 seed-only codes are 001/002/003/004/
+         010/002005004/002007002-4/003001002/004002003/004003002/004004004-5.
+    Limitation: MENU_NAME is an i18n key (menu.basic...) in the seed; localized
+    text lives in the MyISAM func table (not in the package) -> menuName
+    carries the real MEMO value (e.g. "basicConfiguration").
+    adm_dev_privilege(ROLE_ID=1): DEVICE_PRIV_CODE 8 liveView, 9 playback,
+    10 download, 11 privacyMasking on NODE_CODE 001 (whole tree).
+
+## 29. CHANNEL ID + PER-DEVICE STREAM (E-038/E-034) and MONITOR VIEWS (E-033)
+
+CHANNEL ID (E-038).  Layout: <deviceCode>$<unitType>$0$<channelSeq> (0-based).
+    Proof: bundle device-JBrSmGvP.js UNIT_TYPE:{ENC:"1",DEC:"2",...}
+           bundle index-Cr8Ld85_.js deviceCode + "$" + UNIT_TYPE.ENC + "$0$" + channelSeq
+           server UnitType Encoder=1 + DeviceResourceEnum.getChannelResourceType
+           -> ChannelIdUtils.getUnitType(channelId) = segment 2.
+    Encoder video: unitType 1, e.g. D00712RD0005$1$0$0. The gateway previously
+    wrote <code>$<n>$0$0 (n = channel number): a 2nd channel parsed as a
+    DECODER (unit type 2). Trees, channel/list, StartVideo and plan pages use
+    the real layout now.
+
+PER-DEVICE STREAM (E-034).  Every registration funnel (manual add, discover
+join/batch, discover init, ONVIF, Dahua ARS auto-register TCP 9500, P2P
+easy4ip, RTSP) provisions its own MediaMTX path cam_<deviceCode>:
+    - RTSP source: ONVIF GetStreamUri probe (ONVIF on :37777 falls back to
+      :8021), Dahua convention rtsp://<ip>:554 as last resort.
+    - MTS/Video/StartVideo resolves the path from the channelId (segment 1 =
+      deviceCode) via findDeviceByChannelId.
+    - Provisioned in the background (setImmediate); createDeviceRecord stores
+      mediamtxPath at add time so StartVideo never waits.
+
+MONITOR VIEWS (E-033).  Contract from the package (ViewController / ViewTreeVo
+/ ViewDirTreeVo / ViewDataTreeVo / ViewVo / WindowLayoutVo / WindowDataVo):
+
+    GET  monitor/view/view-tree?viewType=N -> ViewTreeVo{viewInfos:[...]}
+         ALWAYS two viewInfos (public viewType=1 + private) with viewDirs[];
+         viewShareable "0"/"1"; rootDir "1" when viewDirLevel==1; window
+         geometry as STRINGS (windowTotal / griddingRows / griddingCols).
+    POST/GET/PUT/DELETE monitor/view/view-dir[...]  ViewDirVo{viewDirCode, viewDirName}
+    POST/PUT monitor/view[...]                      -> {viewCode}
+    POST monitor/view/share [+ /ack + /share/{code} + /share/unread/list]
+
+Served on both /brms/api/v1.1 and v1.0; persisted in data/views.json (E-032
+persistence rules apply).

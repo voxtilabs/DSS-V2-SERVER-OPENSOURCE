@@ -1,12 +1,14 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import dgram from 'node:dgram';
 
 const BASE = 'http://127.0.0.1:11443';
 const USER = 'admin';
 const PASS = 'admin123';
+const STORE_PATH = new URL('../../data/devices.json', import.meta.url);
 
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
 function doubleMd5(user, pass) { return md5(md5(user + md5(pass))); }
@@ -35,7 +37,18 @@ function waitForServer() {
 
 describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 }, () => {
   before(async () => {
-    serverProc = spawn('node', ['src/index.js'], { cwd: 'C:/Users/bruno/Downloads/LOCURA DSS/poc/dss-v2-harness/brms-gateway', stdio: 'pipe' });
+    serverProc = spawn('node', ['src/index.js'], { cwd: 'C:/Users/bruno/Downloads/LOCURA DSS/poc/dss-v2-harness/brms-gateway', stdio: ['ignore', 'pipe', 'pipe'] });
+    // CRITICAL: consume the server pipes. The gateway logs every request
+    // ([REQ]/[RES] debug lines); with stdio:'pipe' and NO reader the OS pipe
+    // buffer (64 KiB) fills and console.log BLOCKS the server event loop
+    // mid-suite, making every later test time out and the runner never exit.
+    const pipeFile = (stream, name) => {
+      stream.setEncoding('utf8');
+      stream.on('data', () => { /* drain */ });
+      stream.on('error', () => { /* suite-end */ });
+    };
+    pipeFile(serverProc.stdout, 'out');
+    pipeFile(serverProc.stderr, 'err');
     await waitForServer();
     // Additional wait to ensure all endpoints are ready
     await new Promise(r => setTimeout(r, 1000));
@@ -73,9 +86,15 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const r = await fetch(`${BASE}/brms/api/v1.0/tree/orgs`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(r.status, 200);
     const j = await r.json();
-    assert.ok(j.data?.orgList?.length > 0);
-    const org = j.data.orgList[0];
-    assert.ok(org.orgId && org.orgName && org.parentId && org.orgType !== undefined);
+    // E-037: real contract = DeviceOrgTreeVo{departments:[OrgNodeVo]} from the
+    // server package; orgList stays as an alias for the web SPA.
+    assert.ok(j.data?.departments?.length > 0);
+    // orgList is a serialized alias of departments (same content, not the same JS object)
+    assert.deepEqual(j.data.orgList, j.data.departments);
+    const org = j.data.departments[0];
+    // OrgNodeVo real keys + the aliases the native client (DPSDK pool) parses.
+    assert.ok(org.code && org.name && org.orgType !== undefined);
+    assert.ok(org.orgCode === '001' && org.orgName && org.parentCode !== undefined && org.parentOrgCode !== undefined);
   });
 
   it('tree/devices returns DeviceTreeVo structure', async () => {
@@ -335,6 +354,85 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(del.data.removed >= 1);
   });
 
+  it('E-031 device/channel/list + organization/fetch/batch/list + GET device/{code} (live view resource helpers)', async () => {
+    // create a device
+    await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceName: 'E031-CAM', deviceIp: '127.0.0.7', devicePort: 37777, protocolType: '99', channelCount: 2, addType: '1' })
+    });
+    const page = await (await fetch(`${BASE}/brms/api/v1.1/device/page?pageSize=100`, { headers: { 'X-Subject-Token': token } })).json();
+    const rows = page.data.results || page.data.list || [];
+    const dev = rows.find((d) => d.deviceIp === '127.0.0.7');
+    assert.ok(dev, 'E031-CAM registered');
+
+    // POST /device/channel/list {ids} -> data.results rows keyed by channelId
+    // E-038: real channelId = <code>$<unitType ENC=1>$0$<channelSeq0>.
+    const ch = await (await fetch(`${BASE}/brms/api/v1.1/device/channel/list`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ ids: [`${dev.deviceCode}$1$0$0`, `${dev.deviceCode}$1$0$1`] })
+    })).json();
+    assert.equal(ch.code, 1000);
+    assert.ok(Array.isArray(ch.data.results) && ch.data.results.length === 2, 'results rows keyed by channelId');
+    for (const row of ch.data.results) {
+      assert.equal(row.deviceCode, dev.deviceCode);
+      assert.ok(row.channelId && row.channelName);
+    }
+    // unknown ids -> exact EMPTY results (never a generic fallback)
+    const miss = await (await fetch(`${BASE}/brms/api/v1.1/device/channel/list`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ ids: ['no$such$0$0'] })
+    })).json();
+    assert.deepEqual(miss.data.results, []);
+
+    // POST /device/organization/fetch/batch/list -> data IS the rows array
+    const orgRows = await (await fetch(`${BASE}/brms/api/v1.1/device/organization/fetch/batch/list`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [dev.deviceCode] })
+    })).json();
+    assert.equal(orgRows.code, 1000);
+    assert.ok(Array.isArray(orgRows.data), 'data is the row array (consumers iterate it directly)');
+    assert.equal(orgRows.data[0].deviceCode, dev.deviceCode);
+    assert.ok(orgRows.data[0].orgCode && orgRows.data[0].orgName);
+
+    // GET /device/{code} -> data object; unknown -> 404 (not the fallback)
+    const det = await (await fetch(`${BASE}/brms/api/v1.1/device/${dev.deviceCode}`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(det.code, 1000);
+    assert.equal(det.data.deviceName, 'E031-CAM');
+    const none = await fetch(`${BASE}/brms/api/v1.1/device/NO-SUCH`, { headers: { 'X-Subject-Token': token } });
+    assert.equal(none.status, 404);
+
+    await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [dev.deviceCode] })
+    });
+  });
+
+  it('E-032 registry persistence: discovery join/batch writes devices.json, delete/batch rewrites it', async () => {
+    const readStore = () => {
+      try { return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')); } catch { return []; }
+    };
+    // 1) the DISCOVERY path (the one the DSS Client uses from "Discovered
+    // Devices") must persist the device - it used to live only in RAM.
+    const join = await (await fetch(`${BASE}/brms/api/v1.1/discover/device/join/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devices: [{ deviceIp: '127.0.0.32', devicePort: 37777, protocolType: '99', deviceName: 'E032-PERSIST', encoderChannelCount: 1 }] })
+    })).json();
+    assert.equal(join.code, 1000);
+    const created = (join.data.list || []).find((d) => d.deviceIp === '127.0.0.32');
+    assert.ok(created, 'device created through the discovery path');
+    assert.ok(readStore().some((d) => d.deviceCode === created.deviceCode),
+      'join/batch persisted the device to data/devices.json');
+
+    // 2) delete/batch must REMOVE it from disk too (no resurrection on restart)
+    const del = await (await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceCodes: [created.deviceCode] })
+    })).json();
+    assert.ok(del.data.removed >= 1);
+    assert.ok(!readStore().some((d) => d.deviceCode === created.deviceCode),
+      'delete/batch rewrote data/devices.json');
+  });
+
   it('E-025 p2p easy4ip parse: HTTP 200 + empty <return/> means not published', async () => {
     // Real cloud answer for a serial that is not on Easy4IP (captured live):
     //   HTTP/1.1 200 OK ... <return></return>
@@ -518,6 +616,178 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       body: JSON.stringify({ ids: ['no-such-row'] })
     })).json();
     assert.equal(bad.data.results[0].result, '110113');
+  });
+
+  // ===== E-037/E-038: REAL native tree contract (departments/devices) =====
+  it('E-037 native tree: departments/devices carry the real DTO + every registration funnel', async () => {
+    // Register a device through the MANUAL add funnel and one through the
+    // DISCOVER funnel; both must appear in the native trees.
+    const add = await (await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceName: 'E037-CAM', deviceIp: '127.0.0.71', devicePort: 37777, protocolType: '99', channelCount: 2, addType: '1' })
+    })).json();
+    const code = add.data.deviceCode || add.data.device?.deviceCode;
+    assert.ok(code, 'device created');
+
+    const orgTree = await (await fetch(`${BASE}/admin/API/tree/deviceOrg`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(orgTree.code, 1000);
+    // REAL contract: DeviceOrgTreeVo{departments:[OrgNodeVo]} (server package).
+    assert.ok(Array.isArray(orgTree.data.departments) && orgTree.data.departments.length > 0,
+      'departments is the real native key');
+    const dept = orgTree.data.departments[0];
+    // OrgNodeVo real fields.
+    assert.equal(dept.code, '001');
+    assert.ok(dept.name && dept.parentCode !== undefined && dept.orgType !== undefined);
+    assert.ok(Array.isArray(dept.device), 'OrgNodeVo.device carries {id,sort} rows');
+    assert.ok(dept.device.some((d) => d.id === code), 'registered device listed in the org node');
+
+    const devTree = await (await fetch(`${BASE}/admin/API/tree/devices`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ orgCode: '001', containVirtualDevice: '1', categories: [], deviceCodes: [] })
+    })).json();
+    assert.equal(devTree.code, 1000);
+    // REAL contract: DeviceTreeVo{devices:[DeviceInfoVo]}.
+    assert.ok(Array.isArray(devTree.data.devices), 'devices is the real native key');
+    const dev = devTree.data.devices.find((d) => d.code === code);
+    assert.ok(dev, 'registered device listed in the device tree');
+    // DeviceInfoVo real fields.
+    assert.equal(String(dev.status), '1');
+    assert.ok(dev.deviceIp && dev.orgCode && ['0', '6', '9', '14', '15'].includes(dev.loginType));
+    assert.ok(Array.isArray(dev.units) && dev.units.length > 0, 'DeviceInfoVo.units');
+    const unit = dev.units[0];
+    assert.equal(unit.unitType, '1', 'encoder unit type ENC=1');
+    assert.ok(Array.isArray(unit.channels) && unit.channels.length >= 2);
+    // E-038: real channelId = <code>$<unitType 1>$0$<channelSeq0>.
+    assert.equal(unit.channels[0].channelCode, `${code}$1$0$0`);
+    assert.equal(unit.channels[1].channelCode, `${code}$1$0$1`);
+
+    // Filter honouring: DeviceTreeXo.deviceCodes.
+    const filtered = await (await fetch(`${BASE}/admin/API/tree/devices`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [code] })
+    })).json();
+    assert.ok(filtered.data.devices.length >= 1);
+    assert.ok(filtered.data.devices.every((d) => d.code === code));
+
+    await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [code] })
+    });
+  });
+
+  // ===== E-035: real menu/function catalogs (seed SQL + FunctionType enum) =====
+  it('E-035 menu/function lists serve the REAL server catalogs and RPC rights', async () => {
+    const menus = await (await fetch(`${BASE}/brms/api/v1.1/menu/available/list`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(menus.code, 1000);
+    assert.ok(menus.data.results.length >= 80, 'sys_menu has 86 rows');
+    const codes = new Set(menus.data.results.map((m) => m.menuCode));
+    // Real seed codes (the invented 100..700 must be gone).
+    for (const c of ['001', '004', '004001', '004002', '004004', '010', '001001']) {
+      assert.ok(codes.has(c), `real menu ${c} present`);
+    }
+    assert.ok(!codes.has('100') && !codes.has('700'), 'invented menus removed');
+
+    const flag = await (await fetch(`${BASE}/brms/api/v1.1/menu/001/available`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(flag.data.available, '1');
+    const bad = await (await fetch(`${BASE}/brms/api/v1.1/menu/999xyz/available`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(bad.data.available, '0');
+
+    const fns = await (await fetch(`${BASE}/brms/api/v1.1/menu/function/list`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(fns.code, 1000);
+    const fnMap = new Map(fns.data.results.map((f) => [f.functionCode, f.functionName]));
+    assert.equal(fnMap.get('8'), 'liveView');
+    assert.equal(fnMap.get('9'), 'playback');
+    assert.equal(fnMap.get('2'), 'ptzOperateAndConfig');
+    assert.ok(fnMap.get('8') && fns.data.results.every((f) => f.pId !== undefined));
+
+    const avail = await (await fetch(`${BASE}/brms/api/v1.1/function/available/list`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(avail.code, 1000);
+    assert.ok(avail.data.results.some((f) => f.functionCode === '17' && f.functionName === 'livePreview'));
+
+    const rpc = await (await fetch(`${BASE}/brms/api/BRM/User/GetUserFunctions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    assert.equal(rpc.code, 1000);
+    // adm_role_function(ROLE_ID=1) = the real Super Administrator codes.
+    assert.deepEqual(rpc.data.functions, ['1', '2', '3', '5', '6', '8', '9', '10', '11']);
+    assert.ok(rpc.data.functions.includes('8'), 'liveView must be granted');
+
+    // GetMenuRights = union of the seed grants (86) + the leveldb harvest.
+    const rights = await (await fetch(`${BASE}/brms/api/BRM/User/GetMenuRights`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    const rightSet = new Set(rights.data.menuRights);
+    for (const c of ['001', '004001', '002005004', '004004004']) assert.ok(rightSet.has(c), `menu right ${c}`);
+    // Resource.Tree RPCs now answer the REAL native payload (no empty envelope).
+    // Transport path is /brms/api/BRM/:ns/:fn — "Resource.Tree".(fn).
+    const treeRpc = await (await fetch(`${BASE}/brms/api/BRM/Resource.Tree/GetDeviceOrg`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    assert.ok(Array.isArray(treeRpc.data.departments) && treeRpc.data.departments.length > 0);
+  });
+
+  // ===== E-034: every device owns its own MediaMTX path =====
+  it('E-034 StartVideo resolves the per-device MediaMTX path from the channelId', async () => {
+    const add = await (await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceName: 'E034-CAM', deviceIp: '127.0.0.74', devicePort: 37777, protocolType: '99', channelCount: 1, addType: '1' })
+    })).json();
+    const code = add.data.deviceCode || add.data.device?.deviceCode;
+    assert.ok(code, 'device created');
+    const page = await (await fetch(`${BASE}/brms/api/v1.1/device/page?pageSize=100`, { headers: { 'X-Subject-Token': token } })).json();
+    const row = (page.data.results || page.data.list || []).find((d) => d.deviceCode === code);
+    assert.equal(row.mediamtxPath, `cam_${code}`, 'creation-time path (cam_<deviceCode>)');
+
+    const sv = await (await fetch(`${BASE}/brms/api/v1.0/MTS/Video/StartVideo`, {
+      method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId: `${code}$1$0$0`, streamType: 1, dataType: 1 })
+    })).json();
+    assert.equal(sv.code, 1000);
+    assert.ok(sv.data.url.includes(`/${`cam_${code}`}?token=`),
+      `StartVideo URL must target the device path, got ${sv.data.url}`);
+
+    await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [code] })
+    });
+  });
+
+  // ===== E-033: real monitor/view contract =====
+  it('E-033 monitor/view: ViewTreeVo shape + view-dir/view CRUD round-trip', async () => {
+    const tree = await (await fetch(`${BASE}/brms/api/v1.1/monitor/view/view-tree`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(tree.code, 1000);
+    // ViewTreeVo{viewInfos:[{viewType, viewDirs:[]}]}, public + private entries.
+    assert.ok(Array.isArray(tree.data.viewInfos) && tree.data.viewInfos.length === 2);
+    for (const vi of tree.data.viewInfos) assert.ok(['1', '2'].includes(vi.viewType));
+
+    const dir = await (await fetch(`${BASE}/brms/api/v1.1/monitor/view/view-dir`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ viewDirName: 'E033-DIR' })
+    })).json();
+    const dirCode = dir.data.viewDirCode || dir.data.code;
+    assert.ok(dirCode, 'view dir created');
+
+    const view = await (await fetch(`${BASE}/brms/api/v1.1/monitor/view`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ viewName: 'E033-VIEW', viewDirCode: dirCode, windowTotal: '1', griddingRows: '1', griddingCols: '1', windows: [{ windowId: '1', channelId: 'nope$1$0$0' }] })
+    })).json();
+    assert.equal(view.code, 1000);
+    assert.ok(view.data.viewCode, 'view created');
+
+    const renamed = await fetch(`${BASE}/brms/api/v1.1/monitor/view/${view.data.viewCode}/rename`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ viewName: 'E033-VIEW-2' })
+    });
+    assert.equal(renamed.status, 200);
+
+    const afterTree = await (await fetch(`${BASE}/brms/api/v1.1/monitor/view/view-tree`, { headers: { 'X-Subject-Token': token } })).json();
+    const dirs = (afterTree.data.viewInfos[0]?.viewDirs || []).flatMap((d) => d.views || []);
+    assert.ok(dirs.some((v) => v.viewCode === view.data.viewCode), 'view listed in the tree after rename');
+
+    const del = await (await fetch(`${BASE}/brms/api/v1.1/monitor/view/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ viewCodes: [view.data.viewCode] })
+    })).json();
+    assert.equal(del.code, 1000);
+    const delDir = await (await fetch(`${BASE}/brms/api/v1.1/monitor/view/view-dir/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ viewDirCodes: [dirCode] })
+    })).json();
+    assert.equal(delDir.code, 1000);
   });
 
   after(async () => {

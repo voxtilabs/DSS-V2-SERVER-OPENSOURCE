@@ -564,8 +564,13 @@ Content-Length: 0\r
       const rows = (await page.json()).data?.results || [];
       const lab = rows.filter((d) => {
         const ip = String(d.deviceIp || '');
+        const name = String(d.deviceName || '');
         if (ip.startsWith('127.')) return true;
-        if (ip === '10.10.20.120' && /NVR/i.test(String(d.deviceName || ''))) return true;
+        if (ip === '10.10.20.120' && /NVR/i.test(name)) return true;
+        // EBA1_ONVIF is created by this suite against the REAL camera IP
+        // (192.168.0.238:8021) to exercise the ONVIF probe. It must not stay
+        // in the operator's device list - only their own camera may.
+        if (name.startsWith('EBA1')) return true;
         return false;
       });
       if (!lab.length) return;
