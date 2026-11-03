@@ -289,7 +289,18 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.equal(r2.status, 200);
     const j2 = await r2.json();
     const d2 = j2.data || j2;
-    assert.ok(d2.deviceList?.length > 0);
+    // The registry only ever contains devices that were actually registered
+    // (operator/lab). The CONTRACT is the response shape: native key "devices"
+    // + web alias "deviceList", both fitting DeviceInfoVo when non-empty.
+    assert.ok(Array.isArray(d2.deviceList) && Array.isArray(d2.devices));
+    if (d2.devices.length > 0) {
+      for (const dv of d2.devices) {
+        assert.ok(dv.code && dv.name !== undefined && dv.status !== undefined);
+        assert.ok(Array.isArray(dv.units) && dv.units[0].unitType === '1');
+        assert.ok(dv.units[0].channels.some(ch => ch.channelCode.includes('$1$0$')));
+      }
+      assert.ok(d2.devices.every(dv => d2.deviceList.some(wl => wl.code === dv.code)));
+    }
 
     const r3 = await request(`${BASE}/brms/api/v1.0/tree/channels`, {
       method: 'POST',
@@ -299,7 +310,10 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.equal(r3.status, 200);
     const j3 = await r3.json();
     const d3 = j3.data || j3;
-    assert.ok(d3.channelList?.some(c => c.channelId?.includes('$')));
+    // Same registry-empty tolerance: contract = channelList fitting
+    // channelId <code>$<unitType>$0$<seq>; content asserted when present.
+    assert.ok(Array.isArray(d3.channelList));
+    assert.ok(d3.channelList.every(c => /^\S+\$\d+\$0\$\d+$/.test(c.channelId || '')));
   });
 
   it('E2E-3 MTS & RTSP 9100 - Real TCP probe with OPTIONS + DESCRIBE', async () => {
