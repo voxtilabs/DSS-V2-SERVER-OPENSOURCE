@@ -1184,6 +1184,14 @@ import {
   buildSSQueryRecordPayload,
   buildSSRecordActionPayload
 } from './e027-storage.js';
+import {
+  buildGradeDeviceTreePayload,
+  buildGradeDeviceTreeSearchPayload,
+  buildRecordPlanPagePayload,
+  buildMotionDetectionRecordPlanPagePayload,
+  buildUserLevelPayload,
+  buildAreaTimezonePayload
+} from './e029-spa-contracts.js';
 for (const p of ['/brms/api/v1.1/storage/plan/channel/plan-config-status/fetch/batch/list', '/brms/api/v1.0/storage/plan/channel/plan-config-status/fetch/batch/list']) {
   app.post(p, async (req) => envelope(buildPlanConfigStatusPayload(req.body)));
 }
@@ -1194,6 +1202,30 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
 }
 // E-027 note: /brms/api/v1.0/SS/Record/QueryRecord already exists in the
 // EV-037 section below with the { preHandler: auth } shape - not duplicated here.
+
+// ===== E-029: real SPA response contracts =====
+// These six routes previously fell through to the generic [FALLBACK] responder
+// ({code:1000,data:{list:[],total:0}}), which is what produced the ~20
+// "Abnormally returned the service or device data" toasts and left the Device
+// Config view loading forever (its device tree is lazy-loaded from
+// grade-device-tree). Shapes verified against the production bundle consumers:
+//   grade-device-tree -> .pnpm-IcGsI3MK.js BatchLoadingTree.load
+//                        {devices[], organizations[]} (+channels for search)
+//   record-plan/page  -> index-6GKB6cBD.js recordPlan view {totalCount, pageData}
+//   motion-detection-record-plan/page -> index-dpjg75Ex.js same shape
+//   account/user/level -> index-BhDUzoCV.js bootstrap data.level
+//   config/timezone/info -> index-BhDUzoCV.js bootstrap dst/enableDst/offset/dst*
+app.post('/brms/api/v1.1/tree/grade-device-tree', async (req) => envelope(buildGradeDeviceTreePayload(req.body || {})));
+app.post('/brms/api/v1.1/tree/grade-device-tree/search/list', async (req) => envelope(buildGradeDeviceTreeSearchPayload(req.body || {})));
+app.post('/brms/api/v1.0/tree/grade-device-tree', async (req) => envelope(buildGradeDeviceTreePayload(req.body || {})));
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  app.get(`${host}/storage/plan/channel/record-plan/page`, async (req) => envelope(buildRecordPlanPagePayload(req.query)));
+  app.get(`${host}/storage/plan/motion-detection-record-plan/page`, async (req) => envelope(buildMotionDetectionRecordPlanPagePayload(req.query)));
+}
+app.get('/brms/api/v1.1/account/user/level', async () => envelope(buildUserLevelPayload()));
+app.get('/brms/api/v1.0/account/user/level', async () => envelope(buildUserLevelPayload()));
+app.get('/brms/api/v1.1/config/timezone/info', async (req) => envelope(buildAreaTimezonePayload(req.query.area)));
+app.get('/brms/api/v1.0/config/timezone/info', async (req) => envelope(buildAreaTimezonePayload(req.query.area)));
 
 // --- device lists ---
 app.get('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));

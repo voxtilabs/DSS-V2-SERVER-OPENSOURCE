@@ -9,6 +9,38 @@
 // recording mode used by NVMS/Playback (NORMAL_RECORD "1", MOTION_DETECTION "83").
 const CHANNEL_PLANS = new Map();
 
+// E-029: the Storage Plan LIST pages (record-plan/page and
+// motion-detection-record-plan/page) enumerate the plans that actually exist -
+// nothing is invented, an unconfigured channel simply is not in the list.
+export function listChannelPlans(kind) {
+  const rows = [];
+  for (const [channelId, plan] of CHANNEL_PLANS) {
+    if (plan?.kind && plan.kind !== kind) continue;
+    rows.push({
+      id: plan.id || `${channelId}-${kind}`,
+      channelId,
+      channelCode: channelId,
+      channelName: plan.channelName || channelId,
+      deviceCode: plan.deviceCode || channelId.split('$')[0],
+      deviceName: plan.deviceName || '',
+      orgCode: plan.orgCode || '001',
+      orgName: plan.orgName || 'Current Site',
+      position: plan.position ?? '1',
+      code: plan.code,
+      name: plan.name || '24x7 schedule',
+      streamType: plan.streamType ?? 1,
+      recordType: plan.recordType ?? 1,
+      enable: plan.enable ?? 1,
+      remark: plan.remark || '',
+      kind: plan.kind || kind
+    });
+  }
+  return rows;
+}
+
+// E-029: the tree/table label for the storage position filter (1 central, 2 device).
+export const STORAGE_POSITION_NAMES = { '1': 'Central Storage', '2': 'Device Storage' };
+
 function planTemplate(prefix) {
   // Default template: 24x7 normal recording; enableWeekday/days flags per slice.
   const period = [];

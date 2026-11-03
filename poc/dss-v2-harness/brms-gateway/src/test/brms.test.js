@@ -387,6 +387,142 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     await promise;
   });
 
+  // ===== E-029: the six routes that answered from the generic [FALLBACK] =====
+  // The production SPA could not read those answer bodies: they came back as
+  // {code:1000,data:{list:[],total:0}}, which produced the ~20 "Abnormally
+  // returned the service or device data" toasts and left Device Config loading
+  // forever (its tree is lazy-loaded from grade-device-tree). Each shape below
+  // is the one the mirrored production bundle consumer actually reads.
+  it('E-029 grade-device-tree returns organizations+devices with channels', async () => {
+    const body = {
+      treeType: '2', domain: '0',
+      conditions: [{ deviceCategories: ['1', '2'], unitTypes: ['1', '2'], sourceTypes: ['1'] }],
+      orgCode: '001'
+    };
+    const res = await fetch(`${BASE}/brms/api/v1.1/tree/grade-device-tree`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify(body)
+    });
+    const json = await res.json();
+    assert.equal(json.code, 1000);
+    assert.ok(Array.isArray(json.data.organizations), 'data.organizations must be an array');
+    assert.ok(Array.isArray(json.data.devices), 'data.devices must be an array (BatchLoadingTree.load destructures it)');
+    for (const d of json.data.devices) {
+      assert.ok(d.deviceCode, 'device needs deviceCode (tree id)');
+      assert.ok(d.deviceName, 'device needs deviceName (tree label)');
+      assert.ok(d.orgCode, 'device needs orgCode');
+      assert.ok(Array.isArray(d.channels), 'device needs channels[] (device node children)');
+      for (const c of d.channels) {
+        assert.ok(c.channelId, 'channel needs channelId (optimizeChannel id)');
+        assert.ok(c.channelName, 'channel needs channelName (optimizeChannel label)');
+        assert.equal(c.deviceCode, d.deviceCode, 'channel must point back to its device');
+      }
+    }
+    // EXCEEDED_FLAG_ENUM values are "0" (UNDER) when nothing is truncated.
+    assert.equal(json.data.deviceExceeded, '0');
+    assert.equal(json.data.organizationExceeded, '0');
+    assert.equal(json.data.channelExceeded, '0');
+  });
+
+  it('E-029 grade-device-tree/search/list returns channels+devices+organizations', async () => {
+    const res = await fetch(`${BASE}/brms/api/v1.1/tree/grade-device-tree/search/list`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ treeType: '2', domain: '0', orgCode: '001', keyword: 'zzz-no-match' })
+    });
+    const json = await res.json();
+    assert.equal(json.code, 1000);
+    assert.ok(Array.isArray(json.data.channels) && Array.isArray(json.data.devices) && Array.isArray(json.data.organizations));
+  });
+
+  it('E-029 record-plan/page + motion-detection-record-plan/page return totalCount+pageData', async () => {
+    // Exact production URLs (useVideoStorageConfigApi-BiF2jm_X.js):
+    //   getRecordPlans               -> /storage/plan/channel/record-plan/page
+    //   getMotionDetectionRecordPlans -> /storage/plan/motion-detection-record-plan/page  (no /channel/)
+    const urls = [
+      `${BASE}/brms/api/v1.1/storage/plan/channel/record-plan/page?page=1&pageSize=20&orgCode=&keyword=&position=1`,
+      `${BASE}/brms/api/v1.1/storage/plan/motion-detection-record-plan/page?page=1&pageSize=20&orgCode=&keyword=`
+    ];
+    for (const u of urls) {
+      const res = await fetch(u, { headers: { 'X-Subject-Token': token } });
+      const json = await res.json();
+      assert.equal(json.code, 1000, u);
+      assert.equal(typeof json.data.totalCount, 'number', `${u}: totalCount must be numeric (Number(data.totalCount))`);
+      assert.ok(Array.isArray(json.data.pageData), `${u}: pageData must be an array`);
+    }
+    // A configured plan is rendered with the exact table columns the SPA uses.
+    const res = await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceIp: '192.168.0.238', devicePort: '8021', protocolType: '99', deviceCategory: '1', deviceType: '2', deviceName: 'EBA1', serverCode: 'video#local', encoderChannelCount: 1, loginPass: '0'.repeat(32) })
+    });
+    assert.equal(res.status, 200);
+    const chan = await (await fetch(`${BASE}/brms/api/v1.0/tree/channels`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: '{}' })).json();
+    const first = (chan.data?.channelList || chan.data?.list || [])[0];
+    assert.ok(first?.channelId, 'a real channel must exist to configure a plan');
+    const put = await fetch(`${BASE}/brms/api/v1.1/storage/plan/channel/${encodeURIComponent(first.channelId)}/new-device-record-plan`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ channelId: first.channelId }) });
+    assert.equal(put.status, 200);
+    const plans = await (await fetch(`${BASE}/brms/api/v1.1/storage/plan/channel/record-plan/page?page=1&pageSize=20`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(plans.data.totalCount >= 1, 'the configured plan must be listed');
+    assert.equal(plans.data.pageData[0].channelId, first.channelId);
+    assert.ok('channelName' in plans.data.pageData[0] && 'deviceName' in plans.data.pageData[0]);
+  });
+
+  it('E-029 account/user/level returns data.level and timezone/info returns dst fields', async () => {
+    const level = await (await fetch(`${BASE}/brms/api/v1.1/account/user/level`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(level.code, 1000);
+    assert.ok(level.data.level, 'data.level is stored as roleLevel on login');
+
+    const tz = await (await fetch(`${BASE}/brms/api/v1.1/config/timezone/info?area=America/Santiago`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(tz.code, 1000);
+    for (const k of ['dstType', 'enableDst', 'timezoneOffset', 'dstBeginDate', 'dstBeginTime', 'dstEndDate', 'dstEndTime']) {
+      assert.ok(tz.data[k] !== undefined && tz.data[k] !== null && tz.data[k] !== '', `timezone/info must return ${k}`);
+    }
+    // dstBeginDate/dstEndDate are parsed as "month/week/day" - a missing value
+    // makes the client throw and store an empty localTimezone.
+    assert.match(String(tz.data.dstBeginDate), /^\d+\/\d+\/\d+$/);
+    assert.match(String(tz.data.dstEndDate), /^\d+\/\d+\/\d+$/);
+
+    // Unknown areas still answer with every key (no client-side exception).
+    const unknown = await (await fetch(`${BASE}/brms/api/v1.1/config/timezone/info?area=Europe/Nowhere`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(unknown.data.dstBeginDate && unknown.data.dstEndDate);
+  });
+
+  it('E-029 discover/page rows carry id+initStatus+protocol and join/batch resolves ids', async () => {
+    // Add-Discover page (index-DsQ1Ve9V.js): x.value = data.pageData, and the
+    // row feeds addIds = map(rows, "id") + initStatus/protocol compares.
+    const probe = { deviceIp: '192.168.0.238', devicePort: '8021', protocolType: '99', deviceCategory: '1', deviceType: '2', deviceName: 'EBA1', loginName: 'admin', loginPass: '0'.repeat(32), serverCode: 'video#local' };
+    await fetch(`${BASE}/brms/api/v1.1/device/discover/cost-time`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify(probe) });
+    const discovered = await (await fetch(`${BASE}/brms/api/v1.1/discover/device/page?page=1&pageSize=100&status=0`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(discovered.code, 1000);
+    assert.ok(Array.isArray(discovered.data.pageData), 'data.pageData is read by the Add-Discover page');
+    const row = discovered.data.pageData.find((r) => r.deviceIp === '192.168.0.238');
+    assert.ok(row?.id, 'row must have id (addIds = map(rows, "id"))');
+    assert.ok(['0', '1'].includes(row.initStatus), 'row.initStatus must be "0"/"1"');
+    assert.ok(row.protocol !== undefined, 'row.protocol is compared against DEV_PROTOCOL_TYPE');
+
+    const join = await (await fetch(`${BASE}/brms/api/v1.1/discover/device/join/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ ids: [row.id] })
+    })).json();
+    assert.equal(join.code, 1000);
+    const outcome = (join.data?.results || [])[0];
+    if (row.initStatus === '1') {
+      // already registered: strict success per the SPA check "0"===result
+      assert.equal(outcome?.result, '0', 'registered id adds as result "0"');
+      assert.equal(outcome?.deviceIp, '192.168.0.238');
+    } else {
+      // discovered-only: join must create the device (outcome success or the
+      // documented failure code 110113 when the probe record vanished).
+      assert.equal(outcome?.result, '0', 'discovered id joins as result "0"');
+    }
+    assert.notEqual(outcome?.result, '110113', 'resolvable ids must not fail');
+
+    // Unknown id -> the one SPA-known failure code with no localized text sent.
+    const bad = await (await fetch(`${BASE}/brms/api/v1.1/discover/device/join/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ ids: ['no-such-row'] })
+    })).json();
+    assert.equal(bad.data.results[0].result, '110113');
+  });
+
   after(async () => {
     await fetch(`${BASE}/brms/api/v1.0/accounts/unauthorize`, { method: 'POST', headers: { 'X-Subject-Token': token } });
     serverProc.kill();

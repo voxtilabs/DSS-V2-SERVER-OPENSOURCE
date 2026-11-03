@@ -622,9 +622,16 @@ export function buildDiscoverDevicePagePayload(query = {}) {
   const list = [];
   const emitted = new Set();
   const registeredRow = (d) => ({
+    // E-029: the Add-Discover page (index-DsQ1Ve9V.js) reads rows as
+    //   x.value = data.pageData; addIds = map(rows, "id");
+    //   row.initStatus ("0" Uninitialized / "1" Initialized), row.protocol
+    // (compared against DEV_PROTOCOL_TYPE.DAHUA "1" / ONVIF "99").
+    id: d.deviceCode,
     deviceIp: d.deviceIp,
     devicePort: String(d.devicePort ?? ''),
     protocolType: d.protocolType,
+    protocol: d.protocolType,
+    initStatus: '1',
     deviceCategory: d.deviceCategory,
     deviceType: d.deviceType,
     deviceName: d.deviceName,
@@ -645,9 +652,14 @@ export function buildDiscoverDevicePagePayload(query = {}) {
     discoveredAt: d.createTime || d.discoveredAt || ''
   });
   const discoveredRow = (d) => ({
+    // E-029: stable row id the scene-level join/batch resolves back to this
+    // discovered record (probe fields come along, the device is created on add).
+    id: `DSC-${d.deviceIp}:${d.devicePort}`,
     deviceIp: d.deviceIp,
     devicePort: String(d.devicePort ?? ''),
     protocolType: d.protocolType,
+    protocol: d.protocolType,
+    initStatus: d.registered ? '1' : '0',
     deviceCategory: d.deviceCategory,
     deviceType: d.deviceType,
     deviceName: d.deviceName,
@@ -682,6 +694,8 @@ export function buildDiscoverDevicePagePayload(query = {}) {
   const wanted = query && query.initialized !== undefined && query.initialized !== null && String(query.initialized) !== '';
   const filtered = wanted ? list.filter((r) => r.initialized === String(query.initialized)) : list;
   return {
+    // E-029: the Add-Discover page reads data.pageData (x.value = l.pageData).
+    pageData: filtered,
     list: filtered,
     results: filtered,
     items: filtered,
@@ -711,25 +725,88 @@ export function buildDiscoverDeviceInitPayload(body = {}) {
   };
 }
 
+// E-029 details (index-DsQ1Ve9V.js batchAddDiscoverDlg / detail dialog):
+//   const{code:l,data:s}=await addDiscoverDevices({...base, ids: chunk});
+//   for (const r of s.results) {
+//     "0"===r.result                                              -> succeed row
+//     r.result==Ve.DEVICE_NOT_SUPPORT_IN_AREA (110262)            -> failure row
+//     r.result==Ve.DEVICE_PROTOCOL_NOT_SUPPORT (110113)           -> failure row
+//   }
+// The SPA prefixes r.deviceName in its failure detail and fills errorMsg itself
+// per code, so the server sends result + deviceName (+empty errorMsg). ids[]
+// are the row ids plucked from /discover/device/page (registered rows: device
+// code; discovered rows: "DSC-ip:port" - resolved against DISCOVERED_DEVICES).
+const DEVICE_PROTOCOL_NOT_SUPPORT = 110113;
+const DEVICE_NOT_SUPPORT_IN_AREA = 110262;
+
 export function buildDiscoverJoinBatchPayload(body = {}) {
+  const outcomeOf = (row, code) => ({
+    result: code === 0 ? '0' : String(code),
+    id: row.id || row.deviceCode || '',
+    deviceIp: row.deviceIp || '',
+    devicePort: String(row.devicePort ?? ''),
+    deviceName: row.deviceName || '',
+    deviceCode: row.deviceCode || '',
+    errorMsg: ''
+  });
+
+  const ensureDevice = (raw) => {
+    if (!raw || typeof raw !== 'object') return null;
+    const input = normalizeDeviceInput(raw);
+    if (!input.deviceIp) return null;
+    const identity = { source: 'discovery', manufacturer: raw.manufacturer, model: raw.model, firmwareVersion: raw.firmwareVersion, serialNumber: raw.serialNumber };
+    return findDeviceByIpPort(input.deviceIp, input.devicePort) || createDeviceRecord(input, identity);
+  };
+
+  const ids = Array.isArray(body.ids) ? body.ids : null;
+  if (ids) {
+    const outcomes = [];
+    const created = [];
+    const discovered = [...DISCOVERED_DEVICES.values()];
+    for (const id of ids) {
+      if (id != null && typeof id === 'object') {
+        const device = ensureDevice(id);
+        if (device) { created.push(device); outcomes.push(outcomeOf(device, 0)); }
+        else outcomes.push(outcomeOf({}, DEVICE_PROTOCOL_NOT_SUPPORT));
+        continue;
+      }
+      const key = String(id);
+      let device = DEVICE_REGISTRY.get(key);
+      if (!device && discovered.length) {
+        const hit = discovered.find((d) =>
+          `${d.deviceIp}:${d.devicePort}` === key || `DSC-${d.deviceIp}:${d.devicePort}` === key);
+        if (hit) device = ensureDevice(hit);
+      }
+      if (device) { created.push(device); outcomes.push(outcomeOf(device, 0)); }
+      else outcomes.push(outcomeOf({}, DEVICE_PROTOCOL_NOT_SUPPORT));
+    }
+    return {
+      results: outcomes,
+      list: created,
+      deviceList: created,
+      items: created,
+      total: created.length,
+      success: true,
+      failList: []
+    };
+  }
+
   const items = Array.isArray(body.devices) ? body.devices
     : Array.isArray(body.list) ? body.list
       : Array.isArray(body.items) ? body.items : [body];
-  const created = [];
+  const created2 = [];
+  const outcomes = [];
   for (const raw of items) {
-    if (!raw || typeof raw !== 'object') continue;
-    const input = normalizeDeviceInput(raw);
-    if (!input.deviceIp) continue;
-    const identity = { source: 'discovery', manufacturer: raw.manufacturer, model: raw.model, firmwareVersion: raw.firmwareVersion, serialNumber: raw.serialNumber };
-    const device = findDeviceByIpPort(input.deviceIp, input.devicePort) || createDeviceRecord(input, identity);
-    created.push(device);
+    const device = ensureDevice(raw);
+    if (device) { created2.push(device); outcomes.push(outcomeOf(device, 0)); }
+    else outcomes.push(outcomeOf({}, DEVICE_PROTOCOL_NOT_SUPPORT));
   }
   return {
-    results: created,
-    list: created,
-    deviceList: created,
-    items: created,
-    total: created.length,
+    results: outcomes,
+    list: created2,
+    deviceList: created2,
+    items: created2,
+    total: created2.length,
     success: true,
     failList: []
   };

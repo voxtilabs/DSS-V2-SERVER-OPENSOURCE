@@ -743,3 +743,73 @@ Verification:
 - Transport: keepAliveTimeout 65s on 1443/9443/11443 (Node's 5s default closed
   the socket the native client keeps across the add flow -> ECONNRESET ->
   "Operation timed out").
+
+## 25. E-029: new-generation SPA (client module 8.006) contracts (EV-080, verified live)
+
+The six views formerly answered by the generic fallback (empty {list,total} -> "Abnormally returned the service or device data"; code 111553). Shapes read directly from the mirrored bundle consumers at web-module/js.
+
+### 25.1 Device tree (Device Config view)
+
+```jsonc
+POST /brms/api/v1.1/tree/grade-device-tree        // body: treeType "2", domain "0", conditions[...], orgCode "001"
+POST /brms/api/v1.1/tree/grade-device-tree/search/list
+{
+  "code": 1000,
+  "data": {
+    "organizations": [ { "orgCode": "001", "orgName": "Current Site", "pId": "0", "deviceCount": 1, "onlineDeviceCount": 1 } ],
+    "devices": [
+      { "id": "D0238...   ", "deviceCode": "...", "deviceName": "...", "orgCode": "001",
+        "deviceIp": "...", "devicePort": "...", "deviceType": "2", "deviceCategory": "1",
+        "status": "1", "online": 1,
+        "channels": [ { "channelId": "...", "channelName": "...", "channelNo": 1,
+                        "deviceCode": "...", "deviceName": "...", "capability": "..." } ] }
+    ],
+    "channels": [ /* flat channel rows (search view) */ ],
+    "organizationExceeded": "0", "deviceExceeded": "0", "channelExceeded": "0"
+  }
+}
+```
+- Tree unwrap: `bt(e,o) = e?.data || o`; node labels/ids come from
+  optimizeOrganization/optimizeDevice/optimizeChannel (type 1/2/3).
+- Root id is client-local "001"; deeper nodes lazy-loop query(orgCode).
+- exceeded flags: "1" OVER / "0" UNDER (BATCH.EXCEEDED_FLAG_ENUM).
+
+### 25.2 Storage plan list pages
+
+```jsonc
+GET /brms/api/v1.1/storage/plan/channel/record-plan/page?page=1&pageSize=20&orgCode=&keyword=&position=1
+GET /brms/api/v1.1/storage/plan/motion-detection-record-plan/page?page=1&pageSize=20&orgCode=&keyword=   // NO /channel/
+{
+  "code": 1000,
+  "data": { "totalCount": 1, "pageData": [ { "id": "...", "channelId": "...", "channelName": "...",
+             "deviceName": "...", "orgName": "...", "positionName": "Central Storage",
+             "timeTemplateName": "24x7 schedule", "streamTypeName": "Main Stream",
+             "remark": "", "status": "1" } ] }
+}
+```
+Rows list only CONFIGURED plans (channel/plan-config-status fetch/new-device-record-plan writes them).
+
+### 25.3 Bootstrap counters
+
+```jsonc
+GET /brms/api/v1.1/account/user/level        -> { "code": 1000, "data": { "level": "1" } }
+GET /brms/api/v1.1/config/timezone/info?area=America/Santiago
+   -> { "code": 1000, "data": { "dstType": "1", "enableDst": "1", "timezoneOffset": "-240",
+        "dstBeginDate": "9/1/0", "dstBeginTime": "00:00:00",
+        "dstEndDate": "4/1/0", "dstEndTime": "00:00:00" } }
+```
+dstBeginDate/dstEndDate are month/week/day; the client .split("/") them, so a
+missing key breaks the bootstrap. User level lands in localStorage.roleLevel.
+
+### 25.4 Add-Discover page + join batch
+
+- GET /brms/api/v1.1/discover/device/page rows must include pageData + per-row
+  id, initStatus ("0"/"1") and protocol; batch add sends those ids:
+- POST /brms/api/v1.1/discover/device/join/batch  { ids: ["D0238...", "DSC-ip:port"] }
+  -> { "code": 1000, "data": { "results": [ { "result": "0", "deviceCode": "...",
+       "deviceName": "...", "deviceIp": "...", "errorMsg": "" } ], "total": 1 } }
+- result "0" (strict string) = success; 110113 = DEVICE_PROTOCOL_NOT_SUPPORT;
+  110262 = DEVICE_NOT_SUPPORT_IN_AREA. A discovered id creates the device.
+
+Timezone note: DSS "m/w/d" maps Chile DST from first Sunday of September to
+first Sunday of April, both 24:00 -> our "9/1/0".."4/1/0" 00:00:00 values.

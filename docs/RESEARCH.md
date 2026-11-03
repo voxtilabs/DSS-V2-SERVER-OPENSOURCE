@@ -918,3 +918,79 @@ Verified live (10.10.20.120:1443):
 Mirror tool committed for reproducibility:
 poc/dss-v2-harness/brms-gateway/tools/mirror-web-module.mjs (assets stay out
 of git; brms-gateway/web-module/ is gitignored and baked into the image).
+
+## EV-080 - E-029: exact SPA contracts for the endpoints that answered from the generic
+[FALLBACK] responder (diagnosed from a real operator session, fixed and verified live 2026-11-02/03)
+
+Trigger (EV-080-diag): a fresh winpc_v2 operator session (docker logs 12:57-12:58 UTC,
+%TEMP%/op2.txt tail 900) showed 18 requests answered by the generic [FALLBACK]
+catch-all (code 1000 + `{list:[],total:0}` no matter the URL). The production SPA
+cannot read that shape: the operator counted ~20 "Abnormally returned the service
+or device data" toasts (locale key bundled with error code 111553 in
+index-B_Tt4JAU.js; toast-to-answer mapping treated 1:1) and Device Config stayed
+loading forever because its device tree comes from grade-device-tree.
+
+Evidence-first diagnosis, zero guessing:
+- The mirrored production bundle is authoritative for client harmony (the v1.1
+  server classes are NOT in the 1.7 GB payload [0] - "grade-device-tree" scanned
+  NOT FOUND).
+- "Operation timed out." lives in ResourceManagerUI::CDevAdd / PlatformConfigUI
+  translations (.qm, DSS Client 8.006 native dialogs); the web bundle does not
+  contain it. DPSDK.dll calls POST /v1.1/device/discover/{cost-time,summary},
+  /v1.1/device, /v1.1/discover/device/page, /v1.1/discover/device/join/batch,
+  /v1.1/discover/device/init, /v1.1/discover/device/network/update.
+- Operator trace timeline: dictionary/list pings, device statistics,
+  cost-time (12:57:56) -> summary -> POST /device (12:58:06, full web-store
+  body: addType "1", fingerPrintAuth, uvssChannelCount, dst fields...,
+  loginPass md5) -> ONE /discover/device/page poll -> grade-device-tree x8
+  [FALLBACK]. join/batch + init never appeared: the operator added through the
+  web device store path.
+
+Contracts implemented (all verified live - token probe, zero [FALLBACK] hits;
+unit 27/27; e2e 10/10):
+1) POST /brms/api/v1.1/tree/grade-device-tree -> amd/a=BatchLoadingTree in
+   .pnpm-IcGsI3MK.js: data = {organizations[], devices[], channels[]...}
+   optimizeOrganization: {id:orgCode,name/label:orgName,type:1,children};
+   optimizeDevice: {id:deviceCode,name/label:deviceName,type:2,children:channels};
+   optimizeChannel: {id:channelId,name/label:channelName,type:3,isLeaf:true,
+   deviceCode,capability}; root is client-local ("001" = xC const) and lazy
+   loads query(orgCode) per node (treeType "2", domain "0", orgCode "001" body
+   captured from the trace). exceeded flags: OVER "1"/UNDER "0" (BATCH enum) -
+   we always return "0". search/list -> same three arrays (+ per-view
+   keyword/ipKeyword).
+2) GET /brms/api/v1.1/storage/plan/channel/record-plan/page
+   (index-6GKB6cBD.js + useVideoStorageConfigApi-BiF2jm_X.js) and
+   GET /brms/api/v1.1/storage/plan/motion-detection-record-plan/page (no
+   /channel/ segment; index-dpjg75Ex.js): data = {totalCount:Number,pageData:[
+   rows]} with id, channelId, channelName, deviceName, orgName, positionName,
+   timeTemplateName, streamTypeName, remark, status. Rows list ONLY configured
+   plans (listChannelPlans from e027); no invented rows.
+3) GET /brms/api/v1.1/account/user/level -> data.level (bootstrap stores
+   localStorage.roleLevel).
+4) GET /brms/api/v1.1/config/timezone/info?area=X -> data = {dstType,enableDst,
+   timezoneOffset,dstBeginDate:"m/w/d",dstBeginTime,dstEndDate:"m/w/d",
+   dstEndTime}; the client does dstBeginDate.split("/") so every key must exist
+   (missing key = silent empty localTimezone). America/Santiago answered
+   UTC-4(-240) + DST 9/1/0..4/1/0.
+5) GET /brms/api/v1.1/discover/device/page (Add-Discover page
+   index-DsQ1Ve9V.js): rows now carry pageData (x.value = data.pageData) +
+   per-row id (registered: deviceCode; discovered: "DSC-ip:port"), initStatus
+   ("0" Uninitialized/"1" Initialized) and protocol (vs DEV_PROTOCOL_TYPE).
+6) POST /brms/api/v1.1/discover/device/join/batch: body ids[] are row ids
+   (addIds = map(rows, "id")); answer results[] are per-id outcomes with
+   result (strict "0" success / 110113 DEVICE_PROTOCOL_NOT_SUPPORT /
+   110262 DEVICE_NOT_SUPPORT_IN_AREA; SPA writes its own localized errorMsg,
+   server sends deviceName). A resolvable discovered id CREATES the device
+   (source discovery); unresolvable id -> 110113; legacy devices[] payloads
+   keep the device-creating behavior with outcome rows.
+
+Lab hygiene: probes add only lab devices; they are deleted after verification
+(device/delete/batch v1.1 only - v1.0 has no route); the registry ends EMPTY
+so the operator's next session re-adds the real camera themselves.
+
+Verification commands (EV-080-verify):
+- node %TEMP%/opencode/probe-e029.mjs     (replays the operator's five
+  endpoints + add flow; prints "no fallback, add still works")
+- node %TEMP%/opencode/probe-discover.mjs (pageData/id/initStatus/protocol +
+  join/batch result rows; prints "ALL GOOD")
+- docker logs ... | grep -cE '\[FALLBACK\]' -> 0 after the probe windows
