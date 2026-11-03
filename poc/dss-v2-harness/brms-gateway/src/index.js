@@ -831,21 +831,36 @@ app.get('/admin/API/server/serviceStatus/:svc', async (req) => envelope({
 
 // Device/org tree for the Qt stack (the "failed to get device data" blocker).
 const TREE_ORG = { orgCode: '001', orgName: 'Root Org', parentOrgCode: '0', pOrgCode: '0', orgType: '0', sort: 1, deviceNum: 1, childCount: 0, status: 1 };
-const TREE_DEVICE = {
-  deviceCode: 'CAM001', deviceName: 'Mock Camera 01', deviceType: 2, type: 2,
-  ip: '127.0.0.1', port: 37777, manufacturer: 'Dahua', model: 'MockIPC',
-  protocol: 'Dahua', status: 1, online: 1, orgCode: '001'
-};
-const TREE_CHANNELS = [{
-  channelId: '1000171$1$0$0', channelName: 'Mock Camera 01', deviceCode: 'CAM001',
-  channelType: 1, channelNo: 1, orgCode: '001', status: 1, online: 1,
-  videoEncode: 'H.265', audioEncode: '', ptz: 0, audio: 0, record: 0
-}];
-app.get('/admin/API/tree/deviceOrg', async () => envelope({
-  orgList: [TREE_ORG],
-  deviceList: [TREE_DEVICE],
-  channelList: TREE_CHANNELS
-}));
+// (E-030: legacy TREE_DEVICE/TREE_CHANNELS mocks retired — replaced by the
+// live registry builders in adminTreePayload below.)
+// E-030: EVERY admin tree view renders the LIVE registry. The static mock
+// (CAM001/"Mock Camera 01") made the native DSS Client app show a device that
+// does not exist and hide real additions — the app queries these exact
+// endpoints at login and its tree never re-uses the web SPA's
+// grade-device-tree payload.
+function adminTreeDeviceVo(d) {
+  return {
+    deviceId: d.deviceId || d.deviceCode,
+    deviceCode: d.deviceCode,
+    deviceName: d.deviceName,
+    deviceType: d.deviceType ?? 2,
+    type: d.deviceType ?? 2,
+    ip: d.deviceIp || d.ip || '',
+    port: d.devicePort || 37777,
+    manufacturer: d.manufacturer || 'Dahua',
+    model: d.model || '',
+    protocol: d.protocolName || 'Dahua',
+    status: d.status ?? 1,
+    online: d.online ?? 1,
+    orgCode: d.orgCode || '001'
+  };
+}
+function adminTreePayload() {
+  const deviceList = [...DEVICE_REGISTRY.values()].map(adminTreeDeviceVo);
+  const org = { ...TREE_ORG, deviceNum: deviceList.length };
+  return { orgList: [org], deviceList, channelList: allChannels() };
+}
+app.get('/admin/API/tree/deviceOrg', async () => envelope(adminTreePayload()));
 
 // Menu availability (~"failed to get menu"): launcher menu tree with subsections
 // (user report: "faltaban todas las opciones" - the launcher renders children).
@@ -916,13 +931,15 @@ app.get('/IPMS/API/entrance/parking-lot/binding-vto-itc', async () => envelope({
 // Qt-side device lists (observed 404: /admin/API/tree/devices).
 // E-025: serve the live registry (manual adds + discoveries + auto-register)
 // instead of the static mock so the tree always reflects the devices.
-app.get('/admin/API/tree/devices', async () => envelope({
-  deviceList: [...DEVICE_REGISTRY.values()], list: [...DEVICE_REGISTRY.values()], channelList: allChannels()
-}));
-app.get('/admin/API/tree/equipment-tree', async () => envelope({
-  orgList: [TREE_ORG], deviceList: [TREE_DEVICE], channelList: TREE_CHANNELS
-}));
-app.get('/admin/API/tree/search', async () => envelope({ list: [TREE_DEVICE], total: 1 }));
+app.get('/admin/API/tree/devices', async () => {
+  const p = adminTreePayload();
+  return envelope({ ...p, list: p.deviceList, total: p.deviceList.length });
+});
+app.get('/admin/API/tree/equipment-tree', async () => envelope(adminTreePayload()));
+app.get('/admin/API/tree/search', async () => {
+  const p = adminTreePayload();
+  return envelope({ list: p.deviceList, total: p.deviceList.length });
+});
 
 // E-map module (observed 404s): vector map data + raster list, benign empty.
 app.get('/emap/api/v1.1/map/vector', async () => envelope({ mapInfo: {}, vectorData: '', list: [] }));
@@ -1305,9 +1322,16 @@ app.get('/brms/api/v1.1/tree/device-tree', async () => {
 // sourceTypes: [], orgCode: "", deviceCodes: [], containVirtualDevice: "1"}.
 app.post('/admin/API/tree/devices', async (req) => {
   const b = req.body || {};
+  const p = adminTreePayload();
+  let deviceList = p.deviceList;
+  // Honor explicit deviceCodes filters (client asks for a specific subtree).
+  if (Array.isArray(b.deviceCodes) && b.deviceCodes.length) {
+    const want = new Set(b.deviceCodes.map(String));
+    deviceList = deviceList.filter((d) => want.has(d.deviceCode));
+  }
   return envelope({
-    deviceList: [TREE_DEVICE], list: [TREE_DEVICE], channelList: TREE_CHANNELS,
-    orgCode: String(b.orgCode || ''), containVirtualDevice: String(b.containVirtualDevice || '1'), total: 1
+    ...p, deviceList, list: deviceList,
+    orgCode: String(b.orgCode || ''), containVirtualDevice: String(b.containVirtualDevice || '1'), total: deviceList.length
   });
 });
 // favorite/tree = Dpsdk::CRestLogical::GetCollectionTree (favorites tree).

@@ -994,3 +994,43 @@ Verification commands (EV-080-verify):
 - node %TEMP%/opencode/probe-discover.mjs (pageData/id/initStatus/protocol +
   join/batch result rows; prints "ALL GOOD")
 - docker logs ... | grep -cE '\[FALLBACK\]' -> 0 after the probe windows
+
+## EV-081 - E-030: native app shows no added device + "Failed to add device" toast on a
+SUCCESSFUL add (diagnosed from the operator's live trace + the production bundle, 2026-11-03)
+
+Operator report (session 02:18-02:25 UTC, %TEMP%/op2-full.txt): device added from
+the Discover list ("ebaintento1000000"), got "Operation timed out." +
+"Failed to add device" and the device never appeared in the DSS Client app.
+Server side was healthy: POST /device 200 (6 ms), join/batch 200 (1 ms),
+device/page 200 - then 4 minutes of idle dashboard polls (the SPA never took its
+success path).
+
+Two independent defects, both proven from the mirrored bundle (zero guessing):
+
+1) NATIVE APP TREE (the "no aparece" half). The DSS Client desktop app renders
+   its device tree from /admin/API/tree/deviceOrg + /admin/API/tree/devices
+   (loaded at login 02:18:37; it never re-reads grade-device-tree). Those
+   endpoints still served the E-019 static mock (deviceCode "CAM001",
+   "Mock Camera 01"), so every real addition was invisible in the app tree.
+   Fix: all admin tree views (GET deviceOrg, GET devices, GET equipment-tree,
+   GET search, POST devices incl. deviceCodes filter) now render the LIVE
+   registry (adminTreePayload/adminTreeDeviceVo in index.js); org deviceNum
+   tracks the registry size. Verified live: both tree endpoints answered
+   CAM001 before the fix.
+
+2) "Failed to add device" ON SUCCESS (the false toast half). The production
+   bundle index-DsQ1Ve9V.js `je` single-add handler contains:
+     "0"===a.result?(e=!0,l+=t+a.errorMsg):...  ... e?u.detail({message:"Failed to add device",...}):(u.info("Successfully added the devices."),Ge(),me())
+   i.e. ANY results row - even a result "0" success row - sets the failure flag
+   and shows the failure dialog, skipping the success toast + refresh. The
+   batch dialog (batchAddDiscoverDlg) treats "0" rows as successes, so the only
+   response shape correct for BOTH consumers is: results carries ONLY failure
+   rows; full success = results: []. Our join/batch was returning success rows.
+   Fix (e025-devices.js toPayload): results/failList = failed outcomes only.
+   (EV-030-todo: "Operation timed out." remains a client-side 30 s timer text
+   native to the .qm resources; it was harmless on the wire - every request
+   answered 200 in <= 8 ms - and the success fix restores the client state
+   machine so no timeout window is left open.)
+
+Verified: unit 27/27 (28 total), e2e 10/10; live probe of /admin/API/tree/*
+before the fix returned the CAM001 mock (screenshotted in session log).

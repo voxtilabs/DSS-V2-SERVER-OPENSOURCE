@@ -813,3 +813,22 @@ missing key breaks the bootstrap. User level lands in localStorage.roleLevel.
 
 Timezone note: DSS "m/w/d" maps Chile DST from first Sunday of September to
 first Sunday of April, both 24:00 -> our "9/1/0".."4/1/0" 00:00:00 values.
+
+## 26. E-030: native app device tree + join/batch results semantics (EV-081)
+
+- The DSS Client desktop app draws its device tree from
+  /admin/API/tree/deviceOrg + /admin/API/tree/devices (admin API base, loaded at
+  login; NOT grade-device-tree). Contracts:
+    GET  tree/deviceOrg?channelTypes=<c>&sort=&orgCode=
+         -> {orgList:[{orgCode:"001",orgName,deviceNum,childCount,status:1}],
+             deviceList:[{deviceCode,deviceName,deviceType,type,ip,port,
+             manufacturer,model,protocol,status,online,orgCode}],
+             channelList:[{channelId:"code$1$0$0",channelName,deviceCode,
+             channelType:1,channelNo:1,orgCode,status,online,videoEncode,...}]}
+    POST tree/devices {categories,orgCode,deviceCodes,containVirtualDevice}
+         -> same deviceList/channelList + {orgCode,containVirtualDevice,total}
+  All rows come from the live device registry (never the E-019 CAM001 mock).
+- join/batch results semantics (proven from index-DsQ1Ve9V.js): results must
+  carry ONLY failure rows (result != "0"); full success = results: [].
+  The single-add dialog sets its failure flag on every row it sees, so a
+  success row inside results is mislabeled "Failed to add device".

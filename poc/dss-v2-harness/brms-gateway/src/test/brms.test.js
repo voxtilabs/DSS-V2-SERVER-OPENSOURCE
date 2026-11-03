@@ -324,9 +324,12 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     })).json();
     assert.equal(chk.data.exist, true);
 
+    // E-030: results carries ONLY failure rows; created devices live in list.
+    assert.ok(Array.isArray(jj.data.results) && jj.data.results.length === 0);
+    assert.ok(jj.data.list.length >= 1);
     const del = await (await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceCodes: [jj.data.results[jj.data.results.length - 1].deviceCode] })
+      body: JSON.stringify({ deviceCodes: [jj.data.list[jj.data.list.length - 1].deviceCode] })
     })).json();
     assert.equal(del.code, 1000);
     assert.ok(del.data.removed >= 1);
@@ -503,17 +506,11 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       body: JSON.stringify({ ids: [row.id] })
     })).json();
     assert.equal(join.code, 1000);
-    const outcome = (join.data?.results || [])[0];
-    if (row.initStatus === '1') {
-      // already registered: strict success per the SPA check "0"===result
-      assert.equal(outcome?.result, '0', 'registered id adds as result "0"');
-      assert.equal(outcome?.deviceIp, '192.168.0.238');
-    } else {
-      // discovered-only: join must create the device (outcome success or the
-      // documented failure code 110113 when the probe record vanished).
-      assert.equal(outcome?.result, '0', 'discovered id joins as result "0"');
-    }
-    assert.notEqual(outcome?.result, '110113', 'resolvable ids must not fail');
+    // E-030: full success -> results carries NO rows (the single-add dialog
+    // mislabels any row as "Failed to add device"); the device must exist.
+    assert.deepEqual(join.data?.results, [], 'full success = empty results');
+    assert.notEqual(join.data?.total, 0, 'device must be created');
+    assert.notEqual('110113', 'resolvable ids must not fail');
 
     // Unknown id -> the one SPA-known failure code with no localized text sent.
     const bad = await (await fetch(`${BASE}/brms/api/v1.1/discover/device/join/batch`, {

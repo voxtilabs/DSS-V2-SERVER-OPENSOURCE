@@ -749,6 +749,13 @@ export function buildDiscoverJoinBatchPayload(body = {}) {
     deviceCode: row.deviceCode || '',
     errorMsg: ''
   });
+  // E-030: results carries ONLY failure rows. Evidence — the real bundle
+  // index-DsQ1Ve9V.js `je` handler: the single-add dialog sets its failure flag
+  // on EVERY row it iterates ("0"===a.result?(e=!0,...) ...) and shows
+  // "Failed to add device" whenever results is non-empty, so a success row in
+  // results mislabels a successful add. The batch dialog
+  // (batchAddDiscoverDlg) counts succeed = chunk.length - results.length, so
+  // an empty results array on full success is correct for BOTH consumers.
 
   const ensureDevice = (raw) => {
     if (!raw || typeof raw !== 'object') return null;
@@ -757,6 +764,16 @@ export function buildDiscoverJoinBatchPayload(body = {}) {
     const identity = { source: 'discovery', manufacturer: raw.manufacturer, model: raw.model, firmwareVersion: raw.firmwareVersion, serialNumber: raw.serialNumber };
     return findDeviceByIpPort(input.deviceIp, input.devicePort) || createDeviceRecord(input, identity);
   };
+
+  const toPayload = (outcomes, created) => ({
+    results: outcomes.filter((o) => o.result !== '0'),
+    list: created,
+    deviceList: created,
+    items: created,
+    total: created.length,
+    success: true,
+    failList: outcomes.filter((o) => o.result !== '0')
+  });
 
   const ids = Array.isArray(body.ids) ? body.ids : null;
   if (ids) {
@@ -780,15 +797,7 @@ export function buildDiscoverJoinBatchPayload(body = {}) {
       if (device) { created.push(device); outcomes.push(outcomeOf(device, 0)); }
       else outcomes.push(outcomeOf({}, DEVICE_PROTOCOL_NOT_SUPPORT));
     }
-    return {
-      results: outcomes,
-      list: created,
-      deviceList: created,
-      items: created,
-      total: created.length,
-      success: true,
-      failList: []
-    };
+    return toPayload(outcomes, created);
   }
 
   const items = Array.isArray(body.devices) ? body.devices
@@ -801,15 +810,7 @@ export function buildDiscoverJoinBatchPayload(body = {}) {
     if (device) { created2.push(device); outcomes.push(outcomeOf(device, 0)); }
     else outcomes.push(outcomeOf({}, DEVICE_PROTOCOL_NOT_SUPPORT));
   }
-  return {
-    results: outcomes,
-    list: created2,
-    deviceList: created2,
-    items: created2,
-    total: created2.length,
-    success: true,
-    failList: []
-  };
+  return toPayload(outcomes, created2);
 }
 
 export function buildDeviceAddBatchPayload(body = {}) {
