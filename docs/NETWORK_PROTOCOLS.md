@@ -1044,13 +1044,62 @@ decompiling DPSDK.dll, not from string pools.
 Gateway contract after E-087 (buildMqConfigPayload + root spread in the
 BRM.Config.GetMqConfig route): UseMqFlag=1, MQType:"stomp",
 MQConfig:"host:61616", addr:"host:61616" (same value), userName:"admin",
-password:"admin", enableTls:"0", mqtt:"", SSLEnable:0, UnSSLPort:61616,
+password:"admin", enableTls:"", mqtt:"", SSLEnable:0, UnSSLPort:61616,
 ProtocolVersion:"MQTT", httpsMode:0, plus the 18 TopicInfos. Removing addr
 is what broke attempt 3 (MQConfig empty in the client log, zero sockets to
 61616, notify PUBLISH with 0 subscribers, "Operation timed out" toast).
+
+Transport (E-087 update, lab-confirmed 2026-11-04): MSG.exe
+(SDKMSG::CMQSDKManager::MQInit, file 0x1f6340) builds
+`failover:(ssl://%s)?startupMaxReconnectAttempts=1&wireFormat.maxInactivityDuration=0&connection.connectResponseTimeout=5000`
+(ssl strings 0x1f6458/0x1f6470) or the tcp:// variant (0x1f64e0/0x1f6500)
+and ALWAYS sets `decaf.net.ssl.disablePeerVerification` (0x1f6128) - the
+lab client went ssl:// even with enableTls "0"/"" (ActiveMQ logged 29x
+"Frame size of 352 MB" = TLS ClientHello on the plain OpenWire connector).
+=> the broker now serves the OpenWire transport over TLS on 61616
+(activemq-ssl.xml: sslContext keyStore=activemq.p12 PKCS12 from the lab
+System CA, transportConnector ssl://0.0.0.0:61616; STOMP 61613 unchanged).
+E2E-12 probes tls.connect(61616) + WireFormatInfo.
 
 Org-tree keys of the same parser generation (FUN_180718860): departments/
 code/name/orgType/parentCode/deparmentsCount/modifyTime/device[{id,sort}]/
 channel[{id,sort}] and aliases; the hierarchy is built by parentCode, and
 isParent/deparmentsCount are now computed from the real child list (001 -> 1 child VIGILAB) so the org selector of the Add dialog
 shows VIGILAB.
+
+## 33. Tree node TYPES + GetOrganizations + fish-eye (E-087 follow-up, server-package javap + DPSDK Ghidra, 2026-11-04)
+
+- grade-device-tree response descriptor FUN_1806d33a0 (caller FUN_18029a5c0):
+  root keys sourceType/organizations[]/channels[]/devices[]/associateId/
+  orgName/orgCode/sourceId/domainId. Org node keys: sourceType, checked,
+  domainId, hasChild, pId (DAT_180c825c0), autoAuthorize, orgCode,
+  associateId, orgName, sourceId. Device node keys: sourceType, checked,
+  channels[], deviceCode, domainId, deviceIp, deviceName, pId, status,
+  sourceId, deviceModel, unlockModes, protocolType, associateId,
+  softwareVersion, deviceType, orgCode, addType, deviceCategory, capability.
+  Channel node keys: checked, capability, domainId, deviceType,
+  deviceCapability, pId, status, channelRemoteType, inputAlarmType,
+  channelName, streamType, channelType, unitType, channelSubtype, orgCode,
+  channelId, deviceCategory, cameraType.
+- CRITICAL TYPE: the real server VOs (v1s1 tree.vo OrgNodeVo/DeviceNodeVo,
+  javap of the V8.008 package) declare hasChild/checked/pId as
+  java.lang.String - the DPSDK parser binds STRING keys, so JSON booleans
+  never bind (org rendered as leaf, VIGILAB invisible in selectors). The
+  gateway now serves hasChild/checked/isParent as "1"/"0" strings.
+  hasChild semantics: sub-orgs OR owned devices => "1".
+- BRMS.Organization.GetOrganizations (DPSDK descriptor FUN_1806c97f0, GET,
+  xref 0x1806c996e) fills the native Management Sites tree
+  (PlatformConfigUI::CMenuTreeWidget, PluginFactory.dll; its failure toast
+  "Failed to get organizations or devices. Please double-click organization
+  node again." is at 0x19fc170). Server response VO GetOrganizationsVo =
+  {orgName, orgCode, parentOrgCode, sourceType, sourceId, associateId,
+  remark, authority} (all strings) - served by buildGetOrganizationsPayload
+  via the /admin/API/BRM/* dispatcher (GET+POST).
+- GET /admin/API/user/fish-eye-data (Express.User.GetFishEyeData, descriptor
+  FUN_1806d4b90 with query keys orgCode+hasChild): response VO FishEyeDataVo
+  = {results:[FishEyeXo{orgCode,fileData}]}; empty results is legitimate.
+- E-087 incident: the e2e suite cleanup filtered devices by NAME PREFIX
+  ("EBA*") and deleted the operator's own cameras (their adds were named
+  EBA1_ONVIF/EBAFALLONUEVAMENTE) -> registry emptied, camera invisible.
+  Cleanup now deletes ONLY the deviceCodes the suite itself created
+  (CREATED_CODES). Rule: never prefix-match operator-owned rows.
