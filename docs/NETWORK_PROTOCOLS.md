@@ -310,6 +310,7 @@ Handles: `OPTIONS`, `DESCRIBE` (SDP H.265), `SETUP`, `PLAY`, `TEARDOWN`.
   - 9100/TCP: RTSP Mock Server (OPTIONS/DESCRIBE/SETUP/PLAY/TEARDOWN)
   - 18800/UDP: Alarm Ingest Primary
   - 19800/UDP: Alarm Ingest Backup
+  - 1883/TCP: MQTT 3.1.1 notify broker (E-039, topics `brms.notify*`)
   - WebSocket: `wss://10.10.20.120:1443/brms/api/v1.0/event/ws`
 
 ### 20.2 Environment Variables
@@ -939,3 +940,53 @@ MONITOR VIEWS (E-033).  Contract from the package (ViewController / ViewTreeVo
 
 Served on both /brms/api/v1.1 and v1.0; persisted in data/views.json (E-032
 persistence rules apply).
+
+## 30. MQTT NOTIFY CHANNEL (E-039, EV-085, verified live 2026-11-04)
+
+The native client's device-change push channel is MQ, announced by
+`BRM.Config.GetMqConfig` (observed call: `POST /admin/API/BRM/Config/GetMqConfig`
+with `{clientType, clientMac, clientPushId, project:"PSDK", method:"BRM.Config.GetMqConfig"}`).
+
+GetMqConfig response contract (DPSDK.dll 0xc40450 parser keys):
+`TopicInfos` (entries `{Topic, IsAccUser}`), `MQConfig` (JSON string with
+inner keys `addr`, `enableTls`, `wss`), `MQUser`, `MQPwd`, `UserId`,
+`GroupId`, `SSLEnable`, `UnSSLPort`, `CertificatePath`, `ProtocolVersion`,
+`UseMqFlag`, `MQType` (`"stomp"|"amqp"|"mqtt"`, PROLogic.dll 0x62f7b0),
+`MQMessage`, `httpsMode`.
+
+Gateway (10.10.20.120) serves: `UseMqFlag:1`, `MQType:"mqtt"`,
+`MQConfig:{"addr":"mqtt://10.10.20.120:1883","enableTls":false,"wss":false}`,
+`UnSSLPort:1883`, `TopicInfos` = the 18 real topics below. `MQ_ENABLE=0`
+reverts to `UseMqFlag:0` (HTTP-only, the pre-E-039 behavior that caused the
+CDevAdd 30 s "Operation timed out").
+
+Real topics (identical pools in client DPSDK.dll 0xc71390-0xc745f0 and
+server PROLogic.dll 0x709d60-0x70d0f8):
+```
+brms.notifyAlarms  brms.notifyBatchAddDevices  brms.notifyChannelStatuses
+brms.notifyChannelCapabilities  brms.notifyDeviceSipStatus
+brms.notifyDeviceSleepRequest  brms.notifyFaceInfos  brms.notifyHumanInfos
+brms.notifyNonVehicleInfos  brms.notifyVehicleInfos
+brms.notifyPasswordOverDate  brms.notifyLicenseInvalid  brms.notifyAcsEvents
+brms.notifyLiftEvents  brms.notifyOutsideDatabaseErrorInfo
+brms.device.notifyDiscoverAndUpdateDeviceResult
+brms.device.batchDiscoverDevices  brms.batchAddDevices
+```
+The client connects with plain MQTT 3.1.1 over curl to `mqtt://<host>:1883`
+("meta:proto:mqtt:conn" in DPSDK.dll) and subscribes each TopicInfos entry.
+
+Broker: in-gateway minimal MQTT 3.1.1 (src/e039-mq-notify.js), TCP 1883,
+CONNECT/SUBSCRIBE/PUBLISH/PINGREQ/DISCONNECT, QoS 0/1, `+`/`#` wildcards.
+WARNING: the topics are SINGLE-LEVEL DOTTED names, so `brms/#` does NOT match
+them (MQTT levels are `/`-separated) - subscribe exact topics or `#`.
+
+Push on device mutations (add / RPC add / delete/batch / join/batch /
+init / ARS auto-register): the device VO JSON is PUBLISHed on
+`brms.notifyBatchAddDevices` and `brms.notifyChannelStatuses`, AND sent on
+the WS event stream `wss://.../brms/api/v1.0/event/ws` as both a flat
+`{type:"DEVICE_ADDED", deviceCode, ...}` frame and a
+`{type, eventType, data, timestamp}` envelope. Verified live: E2E-11
+subscribes on 1883, adds a lab device, and receives the PUBLISH with the new
+deviceCode on both topics (gateway log: `[MQTT] PUBLISH
+brms.notifyBatchAddDevices 756B -> 1 subscriber(s)` + `[E039-NOTIFY]
+DEVICE_ADDED <code>`).

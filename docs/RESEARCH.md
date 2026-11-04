@@ -1149,3 +1149,59 @@ DESCRIBE -> RTSP/1.0 200 OK, delete -> device AND MediaMTX path removed.
 Evidence: docs/evidence/E-034-mediapath-provisioning.md. Suites: unit 33/0
 (1 skip), e2e 10/10 (two consecutive runs), live-verify 15/15.
 
+## EV-085 - E-039: the real push channel is MQ, not HTTP polling (2026-11-03/04)
+
+Root cause of the native "Operation timed out" toast (CDevAdd 30 s timer,
+ResourceManagerUI::CDevAdd) on device add: the gateway answered
+`BRM.Config.GetMqConfig` with `UseMqFlag: 0`, so the client had NO push
+channel and had to wait for its ~3 min tree re-poll (observed 22:05:26,
+22:12:25, 22:15:35 in the operator window 22:07-22:08: add 200 in 13 ms at
+22:07:46, polls of discover/device/page already showed initStatus "1", but
+ZERO tree calls after the add until the toast at ~22:08:02).
+
+Real MQ contract, extracted from the string pools of the shipped binaries
+(not guessed):
+- DPSDK.dll 0xc40450 window: GetMqConfig response keys `TopicInfos`
+  (entries parsed with keys `Topic` + `IsAccUser`), `MQConfig`, `MQUser`,
+  `MQPwd`, `UserId`, `GroupId`, `SSLEnable`, `UnSSLPort`, `CertificatePath`,
+  `ProtocolVersion`, `UseMqFlag`, `MQType`, `MQMessage`, `httpsMode`.
+- PROLogic.dll 0x62f7b0 window: `MQType` in {"stomp","amqp","mqtt"} with
+  `MQConfig` inner keys `addr`, `enableTls`, `wss`.
+- Topic names identical in client DPSDK.dll (0xc71390-0xc745f0) and server
+  PROLogic.dll (0x709d60-0x70d0f8): 15x `brms.notify*` plus
+  `brms.device.notifyDiscoverAndUpdateDeviceResult`,
+  `brms.device.batchDiscoverDevices`, `brms.batchAddDevices`.
+- The client itself uses MQTT over curl ("meta:proto:mqtt:conn", "No MQTT
+  topic found...") => `MQConfig.addr` is an `mqtt://` URL and MQTT 3.1.1 is
+  the implementable wire protocol (no ActiveMQ needed).
+- The native client does NOT use event/subscription, event/query or the
+  server WS for device changes (the WS frames seen in traces belong to the
+  webview); with UseMqFlag 1 it subscribes the TopicInfos on the MQ broker.
+
+Fix (commit 002f972, deployed on 10.10.20.120):
+- New `src/e039-mq-notify.js`: minimal MQTT 3.1.1 broker on TCP 1883
+  (CONNECT/SUBSCRIBE/PUBLISH/PINGREQ/DISCONNECT, QoS 0/1, +/# wildcards) +
+  notify hub. GetMqConfig now serves `UseMqFlag:1`, `MQType:"mqtt"`,
+  `MQConfig:{"addr":"mqtt://10.10.20.120:1883","enableTls":false,"wss":false}`,
+  `UnSSLPort:1883` and the real `TopicInfos`. `MQ_ENABLE=0` reverts to the
+  old UseMqFlag 0. docker-compose exposes 1883.
+- Push is dual: WS `/brms/api/v1.0/event/ws` (flat DEVICE_ADDED frame +
+  {type,eventType,data,timestamp} envelope) AND MQTT PUBLISH of the device
+  VO on `brms.notifyBatchAddDevices` + `brms.notifyChannelStatuses`, fanned
+  out from every registry mutation (POST /device, BRM.Device.AddDevice,
+  delete/batch, discover join/batch, discover init, ARS auto-register).
+- Note on wildcards: the real topics are SINGLE-LEVEL DOTTED names
+  (`brms.notifyX`), so `brms/#` does NOT match them (MQTT levels are `/`);
+  the client subscribes each TopicInfos entry exactly.
+- Also fixed: grade-device-tree nodes (device/channel/org) now carry `id`
+  (live bug 22:08:20: devices:[null]).
+- Inbound WS frames are now logged ([WS-MSG]) for the next operator session.
+
+Suites (all live before commit): unit 39 pass / 0 fail / 1 skip (2 runs);
+e2e 11/11 x3 consecutive runs incl. new E2E-11 (GetMqConfig contract via
+POST /admin/API/BRM/Config/GetMqConfig + live MQTT subscribe on 1883 and
+notify PUBLISH with the new deviceCode on the real topics, lab auto-clean);
+live-verify 15/15 on 10.10.20.120; deploy verified blob-identical to HEAD
+(002f972); container restarted to clear the in-memory discover residual
+DSC-127.0.0.1:1 (discover rows: 0).
+
