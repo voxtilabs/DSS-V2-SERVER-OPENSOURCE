@@ -18,6 +18,11 @@ let token = '';
 // names their own lab cameras "EBA..." too, and a prefix cleanup deleted
 // the operator's camera from the registry (devices.json -> []).
 const CREATED_CODES = new Set();
+// Codes that ALREADY existed before this run (e.g. the operator's own camera
+// 192.168.0.238:8021). The add endpoint is idempotent per ip:port and returns
+// the EXISTING deviceCode in that case, so CREATED_CODES can pick up an
+// operator-owned code - after() must never delete those (E-087 incident #2).
+const PRE_EXISTING_CODES = new Set();
 
 // ─── Crypto helpers ──────────────────────────────────────────────────────
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
@@ -384,6 +389,16 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     const d2 = authBody.data || authBody;
     token = d2.token;
     assert.ok(token);
+
+    // Snapshot the registry BEFORE any test adds anything: after() only
+    // deletes CREATED_CODES minus these pre-existing codes, so an idempotent
+    // add that resolves to the operator's own device can never be wiped.
+    const page = await request(`${BASE}/brms/api/v1.1/device/page?page=1&pageSize=1000`, {
+      headers: { 'X-Subject-Token': token }
+    });
+    const pageJson = await page.json();
+    const rows = pageJson.data?.results || pageJson.data?.list || [];
+    for (const d of rows) if (d.deviceCode) PRE_EXISTING_CODES.add(String(d.deviceCode));
   });
 
   it('E2E-1 Auth handshake - keepalive & current user', async () => {
@@ -497,12 +512,19 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     }
 
     // Lab hygiene: remove this test's own device right away (device AND its
-    // MediaMTX path are dropped by the E-034 delete pipeline).
-    await request(`${BASE}/brms/api/v1.1/device/delete/batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
-      body: JSON.stringify({ deviceCodes: [streamCode] })
-    });
+    // MediaMTX path are dropped by the E-034 delete pipeline). NEVER delete a
+    // code that existed before this run: the add is idempotent per ip:port,
+    // so against the operator's real camera it returns THEIR deviceCode and
+    // deleting it would wipe their camera (E-087 incident #2, 23:03:37).
+    if (!PRE_EXISTING_CODES.has(streamCode)) {
+      await request(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+        body: JSON.stringify({ deviceCodes: [streamCode] })
+      });
+    } else {
+      console.log(`E2E-3: ${streamCode} pre-existed (operator device) - kept`);
+    }
   });
 
   it('E2E-4 UDP 18800 -> WebSocket event bridge', async () => {
@@ -714,7 +736,9 @@ Content-Length: 0\r
       
       const timeout = setTimeout(() => {
         if (!resolved) {
+          resolved = true;
           console.log('SIP timeout');
+          try { socket.close(); } catch { /* already closed */ }
           reject(new Error('SIP timeout'));
         }
       }, 10000);
@@ -762,13 +786,16 @@ Content-Length: 0\r
     assert.equal(cfg.SSLEnable, 0);
     // E-087 (Ghidra): the DPSDK response parser (FUN_180214d60, descriptor
     // FUN_1806755a0) binds STRING keys addr/userName/password/enableTls/mqtt;
-    // `addr` IS the MQ Config handed to MSG.exe (OpenWire 61616). mqtt ""
-    // keeps the pipe path (libcurl-MQTT only on a non-empty mqtt value).
+    // `addr` IS the MQ Config handed to MSG.exe (OpenWire 61616). mqtt is
+    // served NON-EMPTY "host:1883": lab evidence (22:14:49-22:15:56 session)
+    // shows MSG.exe never dialed 61616 with mqtt "" (0 broker connection
+    // events), so the libcurl-MQTT branch (mqtt://host:1883/<topic>) is the
+    // notify path that actually reaches the client on our dual-push broker.
     assert.equal(cfg.addr, '10.10.20.120:61616', 'DPSDK descriptor addr = MQ Config');
     assert.equal(cfg.userName, 'admin');
     assert.equal(cfg.password, 'admin');
     assert.equal(cfg.enableTls, '', 'empty enableTls (transport is MSG.exe-internal: ssl:// + disablePeerVerification)');
-    assert.equal(cfg.mqtt, '');
+    assert.equal(cfg.mqtt, '10.10.20.120:1883', 'non-empty mqtt => libcurl-MQTT branch on 1883');
     const topics = (cfg.TopicInfos || []).map((t) => t.Topic);
     assert.ok(topics.includes('brms.notifyBatchAddDevices'), 'real notify topic advertised');
     assert.ok(topics.includes('brms.notifyChannelStatuses'));
@@ -877,7 +904,7 @@ Content-Length: 0\r
   // (E-087 incident: devices.json went [] and the camera vanished).
   after(async () => {
     try {
-      const codes = [...CREATED_CODES];
+      const codes = [...CREATED_CODES].filter((c) => !PRE_EXISTING_CODES.has(c));
       if (!codes.length) return;
       await request(`${BASE}/brms/api/v1.1/device/delete/batch`, {
         method: 'POST',

@@ -139,13 +139,15 @@ describe('E-039/E-040 GetMqConfig payload (real TopicInfos, OpenWire MQConfig)',
     assert.equal(cfg.SSLEnable, 0, 'tcp:// not ssl:// (SSLEnable flag in MQInit)');
     // E-087 (Ghidra): DPSDK GetMQConfig (FUN_180214d60) binds STRING keys
     // password/addr/mqtt/enableTls/userName (descriptor FUN_1806755a0) -
-    // `addr` IS the MQ Config the client hands to MSG.exe; mqtt "" keeps the
-    // pipe/OpenWire path (libcurl-MQTT only on a non-empty mqtt value).
+    // `addr` IS the MQ Config the client hands to MSG.exe. mqtt non-empty
+    // ("host:1883") selects the libcurl-MQTT branch: the client subscribes
+    // directly on our 1883 broker (lab: MSG.exe never dialed 61616, so the
+    // pipe path left the client without notifies -> "Operation timed out").
     assert.equal(cfg.addr, '10.10.20.120:61616', 'DPSDK descriptor key addr = MQ Config');
     assert.equal(cfg.userName, 'admin');
     assert.equal(cfg.password, 'admin');
-    assert.equal(cfg.enableTls, '', 'empty enableTls => MSG.exe tcp:// (E-087 lab evidence)');
-    assert.equal(cfg.mqtt, '', 'empty mqtt => pipe path to MSG.exe (OpenWire)');
+    assert.equal(cfg.enableTls, '', 'empty enableTls (transport is MSG.exe-internal: ssl:// + disablePeerVerification)');
+    assert.equal(cfg.mqtt, '10.10.20.120:1883', 'non-empty mqtt => libcurl-MQTT branch on the dual-push broker');
     const topics = cfg.TopicInfos.map((t) => t.Topic);
     for (const t of MQ_TOPICS) assert.ok(topics.includes(t), `missing ${t}`);
     assert.ok(topics.includes(TOPIC_BATCH_ADD_DEVICES));

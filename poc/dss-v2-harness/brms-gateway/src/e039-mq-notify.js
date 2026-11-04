@@ -61,11 +61,17 @@ export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
 // printed by "GetMQConfig PSDKAPI_REQUEST is success, MQ Config is %s..." is
 // the `addr` field. The pipe->MSG.exe (OpenWire) path is taken when `mqtt`
 // is EMPTY; the libcurl-MQTT branch only on a non-empty mqtt value.
-// So BOTH key families are served: the legacy parser keys (MQConfig/MQType/
-// UseMqFlag/MQUser/MQPwd/SSLEnable/UnSSLPort/ProtocolVersion/TopicInfos) AND
-// the actual descriptor keys addr/userName/password/enableTls/mqtt.
-export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
+// E-087 lab evidence (2026-11-04 22:14:49-22:15:56 session): with mqtt ""
+// MSG.exe NEVER dialed 61616 (0 connection events in the broker log) =>
+// CDevAdd waits its notify on MQ and toasts "Operation timed out", and the
+// tree never refreshes (no HTTP re-fetch after join/batch). So we now serve
+// mqtt = "<host>:1883" (plain host:port, same shape as addr; DPSDK builds
+// mqtt://<mqtt>/<topic> via its "%s://%s" formatter) -> the client subscribes
+// DIRECTLY on our MQTT 1883 broker, where the gateway already dual-pushes
+// brms.notify*. addr/MQConfig stay 61616 (OpenWire ssl, MSG.exe fallback).
+export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1883, enabled }) {
   const mqAddr = `${publicHost}:${amqPort}`;
+  const mqttAddr = `${publicHost}:${mqttPort}`;
   return {
     method: 'BRM.Config.GetMqConfig',
     SessionId: '',
@@ -73,7 +79,8 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
     MQConfig: mqAddr,
     MQType: 'stomp',
     // DPSDK real descriptor keys (FUN_1806755a0): addr IS the MQ Config the
-    // client hands to MSG.exe; mqtt "" => pipe path (OpenWire 61616).
+    // client hands to MSG.exe; mqtt non-empty => libcurl-MQTT branch
+    // (mqtt://host:1883/<topic>) instead of the MSG.exe pipe.
     // E-087 lab+RE: MSG.exe (CMQSDKManager::MQInit) picks the transport
     // internally - even with enableTls "" it built failover:(ssl://%s)
     // (decaf.net.ssl.disablePeerVerification set), so the broker must serve
@@ -83,7 +90,7 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
     userName: 'admin',
     password: 'admin',
     enableTls: '',
-    mqtt: '',
+    mqtt: mqttAddr,
     // lab broker credentials (ActiveMQ image defaults, lab-only - the same
     // class of lab credentials already used by the gateway/e2e admin login)
     MQUser: 'admin',

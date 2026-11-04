@@ -804,12 +804,13 @@ async function brmRpcHandler(req) {
     // E-040/E-087: real contract - UseMqFlag=1 + MQConfig/addr "<host>:61616"
     // (MSG.exe builds failover:(ssl://<addr>...startupMaxReconnectAttempts=1)
     // verbatim; the broker serves OpenWire over TLS with the lab System CA
-    // keystore, MSG.exe sets decaf.net.ssl.disablePeerVerification) + mqtt ""
-    // (empty => pipe to MSG.exe -> OpenWire 61616 on our ActiveMQ; the libcurl
-    // branch only fires on a non-empty mqtt value) + the real brms.notify*
+    // keystore, MSG.exe sets decaf.net.ssl.disablePeerVerification) + mqtt
+    // "<host>:1883" (non-empty => DPSDK libcurl-MQTT branch subscribes
+    // directly on our dual-push broker; lab: MSG.exe never dialed 61616
+    // with mqtt "") + the real brms.notify*
     // topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0) + the DPSDK
     // descriptor keys password/addr/mqtt/enableTls/userName (FUN_1806755a0).
-    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, enabled: MQ_ENABLE });
+    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, mqttPort: MQTT_PORT, enabled: MQ_ENABLE });
     cfg.SessionId = String(b.clientPushId || cfg.SessionId);
     // dual-key: legacy envelope (info/data) AND root-level spread (the DPSDK
     // response parser may bind either layer).
