@@ -1020,3 +1020,37 @@ E-041: organizations are persisted in `data/orgs.json` (same volume as
 devices.json): root `001` + `VIGILAB` (parent 001). The native org tree
 (`DeviceOrgTreeVo.departments`) lists one OrgNodeVo per org; devices added
 with an empty orgCode default to `VIGILAB`.
+
+## 32. GetMqConfig REAL response keys (E-087, EV-087, Ghidra-confirmed 2026-11-04)
+
+Section 31 mapped the transport; this section fixes WHICH KEYS the
+native client actually binds from the GetMqConfig response - found by
+decompiling DPSDK.dll, not from string pools.
+
+- Response parser: Dpsdk::CRestLogicalImplPro::GetMQConfig (FUN_180214d60)
+  binds the response object with the descriptor of FUN_1806755a0
+  (DAT_180f76610): FIVE STRING keys = password(0), addr(8), mqtt(0x10),
+  enableTls(0x18), userName(0x20).
+- "MQ Config" (success log 0x180c95b60: "GetMQConfig PSDKAPI_REQUEST is
+  success, MQ Config is %s, MQ User Name is %s, PassWord is %s") is the
+  addr field - NOT the legacy MQConfig key of the pipe payload.
+- mqtt empty => the config is piped to MSG.exe (<tomsgpipe>) which builds  failover:(tcp://addr)?... (OpenWire 61616 per section 31). The libcurl-MQTT
+  branch only fires on a non-empty mqtt value.
+- Legacy pipe keys (FUN_180a488e0, caller FUN_180a406e0) method/SessionId/
+  UseMqFlag(+4)/MQConfig/MQUser/MQPwd/UserId/GroupId/SSLEnable(struct+0xe8)/
+  UnSSLPort(+0xec)/CertificatePath/ProtocolVersion(+0x118)/TopicInfos
+  [{Topic,IsAccUser}] are still served dual by the gateway.
+
+Gateway contract after E-087 (buildMqConfigPayload + root spread in the
+BRM.Config.GetMqConfig route): UseMqFlag=1, MQType:"stomp",
+MQConfig:"host:61616", addr:"host:61616" (same value), userName:"admin",
+password:"admin", enableTls:"0", mqtt:"", SSLEnable:0, UnSSLPort:61616,
+ProtocolVersion:"MQTT", httpsMode:0, plus the 18 TopicInfos. Removing addr
+is what broke attempt 3 (MQConfig empty in the client log, zero sockets to
+61616, notify PUBLISH with 0 subscribers, "Operation timed out" toast).
+
+Org-tree keys of the same parser generation (FUN_180718860): departments/
+code/name/orgType/parentCode/deparmentsCount/modifyTime/device[{id,sort}]/
+channel[{id,sort}] and aliases; the hierarchy is built by parentCode, and
+isParent/deparmentsCount are now computed from the real child list (001 -> 1 child VIGILAB) so the org selector of the Add dialog
+shows VIGILAB.

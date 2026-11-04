@@ -1269,3 +1269,43 @@ and /topic/brms.notifyChannelStatuses carrying the new deviceCode, lab
 auto-clean) and updated E2E-11 (GetMqConfig OpenWire contract + MQTT 1883
 dual push); live-verify 15/15 on 10.10.20.120 (device lands under VIGILAB);
 deploy verified blob-identical (sha256) local vs lab for all 9 changed files.
+
+[E-087] GetMqConfig REAL response descriptor (Ghidra RE of DPSDK.dll, confirmed) + native org tree hierarchy fix
+
+ROOT CAUSE (confirmed by Ghidra decompilation, not string pools):
+Dpsdk::CRestLogicalImplPro::GetMQConfig (FUN_180214d60) parses the response
+with the descriptor of FUN_1806755a0 (DAT_180f76610): FIVE STRING keys at
+offsets 0/8/0x10/0x18/0x20 = password, addr, mqtt, enableTls, userName.
+The MQ Config of the success log "GetMQConfig PSDKAPI_REQUEST is success,
+MQ Config is %s, MQ User Name is %s, PassWord is %s" (0x180c95b60) is the
+addr field. Attempt-3 logs: the client called GetMqConfig (HTTP 200), our
+payload lacked addr => MQConfig stayed EMPTY => the client never opened a
+single socket to 61616 (ss -tn observed zero) and the
+brms.notifyBatchAddDevices PUBLISH had 0 subscribers => the just-added ONVIF
+still hit "Operation timed out" on the next collector fetch.
+
+Fix shipped (commit 827855a, e039-mq-notify.js / index.js):
+- buildMqConfigPayload now serves BOTH key families: the legacy pipe keys
+  (MQConfig/MQType stomp/UseMqFlag/MQUser/MQPwd/SSLEnable/UnSSLPort/
+  ProtocolVersion/TopicInfos) AND the DPSDK descriptor keys
+  addr:"<PUBLIC_HOST>:61616", userName:"admin", password:"admin",
+  enableTls:"0", mqtt:"" (EMPTY mqtt = pipe path to MSG.exe/OpenWire;
+  the libcurl-MQTT branch only fires on a non-empty mqtt value).
+- The GetMqConfig RPC route spreads the payload at ROOT level too (the DPSDK
+  parser may bind either the envelope data/info or the root object).
+
+VIGILAB visibility fix (e037-native-tree.js):
+buildNativeOrgNodeVo now computes isParent/deparmentsCount from the REAL org
+hierarchy (children by parentCode in the DPSDK org-tree parser FUN_180718860)
+instead of hardcoding isParent:false/deparmentsCount:"0" - before, root 001
+rendered as a LEAF and VIGILAB never appeared in the client tree. After:
+001 -> isParent:true, deparmentsCount:"1"; VIGILAB -> leaf, devices whose add
+orgCode is empty land under it.
+
+Suites (all live before commit): unit 44 pass / 0 fail / 1 skip; e2e 12/12 x3
+(E2E-11 now asserts cfg.addr/userName/password/enableTls/mqtt on the LIVE
+gateway); live-verify 15/15 on 10.10.20.120 (tree/deviceOrg departments
+001,VIGILAB + device under VIGILAB); deployed to the lab via scp +
+docker compose up -d --build (container recreated). Pending operator
+validation: add the ONVIF camera from the native client and confirm no
+"Operation timed out" + VIGILAB visible in the org selector.
