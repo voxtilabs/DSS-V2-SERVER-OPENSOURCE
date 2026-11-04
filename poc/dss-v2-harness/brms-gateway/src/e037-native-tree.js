@@ -493,11 +493,14 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
     remark: '',
     authority: '',
     // --- aliases parsed by the native client ---
+    // E-087: the DPSDK org-node parser (pool 0x180cdbd80 area) also binds
+    // hasChild - keep it aligned with the real child count.
     id: org.code,
     orgCode: org.code,
     orgName: org.name,
     parentOrgCode: org.parentCode,
     isParent: childCount > 0,
+    hasChild: childCount > 0,
     parentName: parentOrg ? parentOrg.name : '',
     sort: 0,
     roleIds: []

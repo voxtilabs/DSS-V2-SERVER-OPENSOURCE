@@ -174,8 +174,10 @@ describe('E-041 persistent org store (VIGILAB)', () => {
       // VIGILAB is reachable in the native tree.
       assert.equal(root.deparmentsCount, '1', "root '001' reports its VIGILAB child");
       assert.ok(root.isParent, "root '001' is expandable");
+      assert.ok(root.hasChild, "root '001' carries hasChild (DPSDK tree parser key)");
       assert.equal(vig.deparmentsCount, '0', 'VIGILAB is a leaf');
       assert.ok(!vig.isParent, 'VIGILAB not expandable');
+      assert.ok(!vig.hasChild, 'VIGILAB hasChild=false');
     } finally {
       DEVICE_REGISTRY.delete(code); // in-memory only, no disk write
     }

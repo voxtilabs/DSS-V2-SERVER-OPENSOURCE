@@ -72,10 +72,15 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
     MQType: 'stomp',
     // DPSDK real descriptor keys (FUN_1806755a0): addr IS the MQ Config the
     // client hands to MSG.exe; mqtt "" => pipe path (OpenWire 61616).
+    // E-087 lab evidence: MSG.exe evaluated SSLEnable from the enableTls
+    // STRING's PRESENCE, not its value: enableTls "0" (non-empty) made
+    // MSG.exe go ssl:// and ActiveMQ rejected the TLS ClientHello on the
+    // plain OpenWire connector ("Frame size of 352 MB"). EMPTY string makes
+    // MSG.exe build failover:(tcp://<addr>) => plain OpenWire.
     addr: mqAddr,
     userName: 'admin',
     password: 'admin',
-    enableTls: '0',
+    enableTls: '',
     mqtt: '',
     // lab broker credentials (ActiveMQ image defaults, lab-only - the same
     // class of lab credentials already used by the gateway/e2e admin login)

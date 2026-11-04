@@ -1106,7 +1106,13 @@ app.get('/brms/api/v1.1/definition/channel-capability/list', capabilityHandler);
 app.get('/brms/api/v1.0/definition/channel-capability/list', capabilityHandler);
 
 const availableServerHandler = async () => {
-  const results = DAHUA_AVAILABLE_SERVERS;
+  // E-087 (real package, AvailableServerVo javap): the VO carries ONLY
+  // {serverCode, serverName} - the Server combo of the Add Device dialog
+  // shows the server by its `name`, which on a real DSS install is the
+  // server IP (adm_server gets seeded with the local IP). Our lab therefore
+  // serves serverName = PUBLIC_HOST while keeping the client's expected
+  // serverCode "video#local" (PROLogic string pool, E-024 evidence).
+  const results = DAHUA_AVAILABLE_SERVERS.map((s) => ({ ...s, serverName: PUBLIC_HOST }));
   return envelope({ results, list: results, serverList: results, total: results.length });
 };
 app.get('/brms/api/v1.1/server/available/list', availableServerHandler);

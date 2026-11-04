@@ -78,6 +78,9 @@ function deviceTreeNode(device, channels) {
     // so the raw VO fields survive and are available to the tree node filters.
     // E-039: `id` is mandatory - the live webview session (22:08:20) rendered
     // devices:[null] when the row carried no id (tree consumers read .id).
+    // E-087: tree nodes bind `hasChild` (DPSDK GetGradeDeviceTree parser
+    // pool) - a device without it renders as a leaf even with channels.
+    hasChild: chans.length > 0,
     id: device.deviceCode,
     deviceCode: device.deviceCode,
     deviceName: device.deviceName,
@@ -120,11 +123,18 @@ function channelTreeNode(channel) {
 function orgTreeNode(org, devices) {
   const orgCode = org.code;
   const list = devices.filter((d) => deviceOrgCode(d) === orgCode);
+  // E-087 (DPSDK.dll parser pool 0x180cdbc68-0x180cdbd90, BRMS.Tree.
+  // GetGradeDeviceTree node keys): every tree node binds `hasChild` (+ the
+  // selection flag `checked`); without hasChild the hierarchy renders the
+  // org as a LEAF and the Add Device Organization combo stays empty.
+  const hasChild = listOrgs().some((o) => o.parentCode === orgCode && o.code !== orgCode);
   return {
     id: orgCode,
     orgCode,
     orgName: org.name || orgCode,
     pId: org.parentCode || (orgCode === ROOT_ORG_CODE ? '0' : ROOT_ORG_CODE),
+    hasChild,
+    checked: false,
     status: DEVICE_ONLINE,
     deviceCount: list.length,
     onlineDeviceCount: list.filter((d) => d.online !== false).length

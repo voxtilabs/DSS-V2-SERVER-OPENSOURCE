@@ -753,7 +753,7 @@ Content-Length: 0\r
     assert.equal(cfg.addr, '10.10.20.120:61616', 'DPSDK descriptor addr = MQ Config');
     assert.equal(cfg.userName, 'admin');
     assert.equal(cfg.password, 'admin');
-    assert.equal(cfg.enableTls, '0');
+    assert.equal(cfg.enableTls, '', 'empty enableTls => MSG.exe tcp://');
     assert.equal(cfg.mqtt, '');
     const topics = (cfg.TopicInfos || []).map((t) => t.Topic);
     assert.ok(topics.includes('brms.notifyBatchAddDevices'), 'real notify topic advertised');
