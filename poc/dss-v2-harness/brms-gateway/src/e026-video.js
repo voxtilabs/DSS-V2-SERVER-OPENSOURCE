@@ -188,7 +188,10 @@ export const FALLBACK_ROUTES = {
   // E-033: monitor/view/view-tree is NOT a fallback any more - it is served by
   // the real ViewController contract (see e033-monitor-views.js).
   'GET /brms/api/v1.1/config/ai/privacy': { enable: 0, privacyMask: [], list: [] },
-  'GET /admin/API/user/fish-eye-data': { fishEyeData: [], list: [], total: 0 },
+  // E-087: real response VO (server package javap): FishEyeDataVo{
+  // results:[FishEyeXo{orgCode,fileData}] } - an empty fish-eye map is
+  // legitimate (no map configured), but the key must be `results`.
+  'GET /admin/API/user/fish-eye-data': { results: [], fishEyeData: [], list: [], total: 0 },
   // Face / AI
   'GET /brms/api/v1.1/face/application/control/repository/page': { list: [], total: 0 },
   'GET /brms/api/v1.1/face/application/control/repository/process/list': { list: [], total: 0 },

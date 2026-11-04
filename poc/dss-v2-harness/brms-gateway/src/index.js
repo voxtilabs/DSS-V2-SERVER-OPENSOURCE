@@ -19,7 +19,7 @@ import {
 // module header for the pcap + MSG.exe MQInit evidence).
 import { createStompPublisher } from './e040-amq-notify.js';
 // E-041: persistent org store (root '001' + 'VIGILAB' in data/orgs.json).
-import { loadOrgsFromDisk } from './e041-orgs.js';
+import { loadOrgsFromDisk, buildGetOrganizationsPayload } from './e041-orgs.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 // E-024: Dahua DSS v1.1 catalog contracts (device categories, access
@@ -785,6 +785,11 @@ function e024CatalogPayload(method, body) {
     const results = DAHUA_AVAILABLE_SERVERS;
     return { results, items: results, list: results, serverList: results, total: results.length };
   }
+  // E-087: BRMS.Organization.GetOrganizations - real GetOrganizationsVo list
+  // (server package javap) served in every list-shaped alias.
+  if (method === 'BRMS.Organization.GetOrganizations' || method === 'BRM.Organization.GetOrganizations' || method === 'BRMSOrganizationGetOrganizations') {
+    return buildGetOrganizationsPayload();
+  }
   return null;
 }
 
@@ -797,7 +802,9 @@ async function brmRpcHandler(req) {
 
   if (method === 'BRM.Config.GetMqConfig') {
     // E-040/E-087: real contract - UseMqFlag=1 + MQConfig/addr "<host>:61616"
-    // PLAIN (MSG.exe builds failover:(tcp://<MQConfig>) verbatim) + mqtt ""
+    // (MSG.exe builds failover:(ssl://<addr>...startupMaxReconnectAttempts=1)
+    // verbatim; the broker serves OpenWire over TLS with the lab System CA
+    // keystore, MSG.exe sets decaf.net.ssl.disablePeerVerification) + mqtt ""
     // (empty => pipe to MSG.exe -> OpenWire 61616 on our ActiveMQ; the libcurl
     // branch only fires on a non-empty mqtt value) + the real brms.notify*
     // topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0) + the DPSDK
@@ -943,6 +950,10 @@ async function brmRpcHandler(req) {
 
 app.post('/admin/API/BRM/:ns/:fn', brmRpcHandler);
 app.post('/admin/api/BRM/:ns/:fn', brmRpcHandler);
+// E-087: the DPSDK descriptor for BRMS.Organization.GetOrganizations
+// (FUN_1806c97f0) registers it as a GET - serve both verbs.
+app.get('/admin/API/BRM/:ns/:fn', brmRpcHandler);
+app.get('/admin/api/BRM/:ns/:fn', brmRpcHandler);
 // E-024: 3-segment BRMS RPC family (BRMS.Dictionary.GetDictionaries, ...).
 app.post('/admin/API/BRM/:ns/:cls/:fn', async (req) => {
   const b = req.body || {};

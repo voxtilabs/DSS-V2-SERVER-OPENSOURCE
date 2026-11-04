@@ -57,19 +57,28 @@ services:
   # E-040: REAL message bus of the DSS notify channel. The production client
   # (MSG.exe) connects OpenWire to <server>:61616 - see the production pcap
   # (TLS+OpenWire on 61616, zero traffic on 1883) and the desensambled
-  # CMQSDKManager::MQInit (failover:(tcp://<MQConfig>) with MQConfig verbatim).
+  # CMQSDKManager::MQInit (failover:(ssl://%s) with MQConfig verbatim +
   # GetMqConfig now serves MQConfig "<PUBLIC_HOST>:61616", MQType != "mqtt",
   # SSLEnable 0; the gateway pushes brms.notify* to /topic/... via STOMP.
   activemq:
     image: apache/activemq-classic:6.2.0
     ports:
-      - "61616:61616"  # OpenWire (MSG.exe connects here)
+      - "61616:61616"  # OpenWire over TLS (MSG.exe dials ssl:// here)
       - "61613:61613"  # STOMP (gateway publishes notify topics here)
     environment:
       # lab-only broker credentials (image defaults); GetMqConfig serves the
       # same MQUser/MQPwd to the client
       - ACTIVEMQ_ADMIN_LOGIN=admin
       - ACTIVEMQ_ADMIN_PASSWORD=admin
+    volumes:
+      # E-087: MSG.exe (CMQSDKManager::MQInit) always builds
+      # failover:(ssl://<addr>:61616) and sets
+      # decaf.net.ssl.disablePeerVerification -> serve the TLS OpenWire
+      # connector with the lab System CA certificate. The PKCS12 keystore
+      # lives outside the repo (~/certs/activemq.p12, built from
+      # certs/cert.pem+key.pem+ca-cert.pem). Lab-only keystore password.
+      - ../certs/activemq.p12:/opt/apache-activemq/ssl/activemq.p12:ro
+      - ./activemq-ssl.xml:/opt/apache-activemq/conf/activemq.xml:ro
     networks:
       - dss-network
     restart: unless-stopped

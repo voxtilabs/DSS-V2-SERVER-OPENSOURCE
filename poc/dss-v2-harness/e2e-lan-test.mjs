@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import https from 'node:https';
 import net from 'node:net';
+import tls from 'node:tls';
 import dgram from 'node:dgram';
 import WebSocket from 'ws';
 
@@ -12,6 +13,11 @@ const BASE_9443 = 'https://10.10.20.120:9443';
 const USER = 'admin';
 const PASS = 'admin123';
 let token = '';
+// E-087 fix: ONLY the deviceCodes this suite created in THIS run are
+// cleaned up in after(). Name-prefix filters are NOT safe: the operator
+// names their own lab cameras "EBA..." too, and a prefix cleanup deleted
+// the operator's camera from the registry (devices.json -> []).
+const CREATED_CODES = new Set();
 
 // ─── Crypto helpers ──────────────────────────────────────────────────────
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
@@ -458,6 +464,7 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     const addJson = await add.json();
     const streamCode = addJson.data?.deviceCode;
     assert.ok(streamCode, 'add must return a deviceCode');
+    CREATED_CODES.add(streamCode);
     await new Promise(r => setTimeout(r, 2500)); // ONVIF GetStreamUri + MTX path
 
     const r = await request(`${BASE}/brms/api/v1.0/MTS/Video/StartVideo`, {
@@ -552,6 +559,7 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     const arsList = arsJson.data?.devices || arsJson.data?.list || [];
     const registered = arsList.find((d) => String(d.deviceName || '').includes('EBA NVR 01') || String(d.deviceCode || '').includes('ARS-NNVR-01'));
     assert.ok(registered, 'auto-registered device must appear in ars/list');
+    if (registered.deviceCode) CREATED_CODES.add(String(registered.deviceCode));
     console.log('ARS registered:', JSON.stringify(registered));
 
     // the device must also be a normal device in the tree
@@ -577,6 +585,7 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.equal(add.status, 200);
     const addJson = await add.json();
     assert.ok(addJson.data?.deviceCode, 'add must return a deviceCode');
+    CREATED_CODES.add(addJson.data.deviceCode);
     assert.ok(Array.isArray(addJson.data.channels) && addJson.data.channels.length === 1);
     assert.ok(!add.text().includes('0123456789abcdef'), 'loginPass (md5 hash) must not be echoed');
 
@@ -628,6 +637,7 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.ok(elapsed < 2000, `Add device took ${elapsed}ms, must be < 2000ms`);
     const addJson = await add.json();
     assert.ok(addJson.data?.deviceCode, 'add must return a deviceCode');
+    CREATED_CODES.add(addJson.data.deviceCode);
     assert.ok(addJson.data.results?.[0]?.deviceCode, 'results[0] must have deviceCode');
     assert.ok(addJson.data.id === addJson.data.deviceCode || addJson.data.code === addJson.data.deviceCode, 'id/code/deviceCode must match');
     assert.ok(!JSON.stringify(addJson.data).includes('0123456789abcdef'), 'loginPass must not be echoed');
@@ -720,7 +730,7 @@ Content-Length: 0\r
   });
 
   // ===== E2E-11 (E-039/E-040): GetMqConfig advertises the OpenWire broker
-  // (UseMqFlag=1, MQConfig "<host>:61616" PLAIN, MQType != "mqtt", real
+  // (UseMqFlag=1, MQConfig "<host>:61616", MQType != "mqtt", real
   // brms.notify* TopicInfos) and a device add is still pushed live on the
   // MQTT 1883 dual-push broker =====
   it('E2E-11 GetMqConfig OpenWire contract + MQTT 1883 dual-push notify on brms.notifyBatchAddDevices', async () => {
@@ -738,10 +748,14 @@ Content-Length: 0\r
     assert.equal(rpcJson.code, 1000);
     const cfg = rpcJson.data || rpcJson.info;
     assert.equal(cfg.UseMqFlag, 1, 'UseMqFlag must be 1 (MQ channel enabled)');
-    // E-040: MQConfig is the plain OpenWire endpoint - MSG.exe builds
-    // failover:(tcp://<MQConfig>) verbatim, so no JSON/URL here (attempt-2
-    // failure mode). MQType must differ from "mqtt" so DPSDK pipes the
-    // config to MSG.exe instead of the libcurl-MQTT branch.
+    // E-040: MQConfig is the MQ endpoint - MSG.exe (CMQSDKManager::MQInit,
+    // E-087 RE) builds failover:(ssl://<MQConfig>...startupMaxReconnect-
+    // Attempts=1...) verbatim, so no JSON/URL here. The lab broker therefore
+    // serves the OpenWire transport over TLS on 61616 (sslContext with the
+    // lab System CA keystore; MSG.exe sets
+    // decaf.net.ssl.disablePeerVerification). MQType must differ from
+    // "mqtt" so DPSDK pipes the config to MSG.exe instead of the
+    // libcurl-MQTT branch.
     assert.equal(cfg.MQConfig, '10.10.20.120:61616');
     assert.notEqual(cfg.MQType, 'mqtt');
     assert.equal(cfg.UnSSLPort, 61616);
@@ -753,7 +767,7 @@ Content-Length: 0\r
     assert.equal(cfg.addr, '10.10.20.120:61616', 'DPSDK descriptor addr = MQ Config');
     assert.equal(cfg.userName, 'admin');
     assert.equal(cfg.password, 'admin');
-    assert.equal(cfg.enableTls, '', 'empty enableTls => MSG.exe tcp://');
+    assert.equal(cfg.enableTls, '', 'empty enableTls (transport is MSG.exe-internal: ssl:// + disablePeerVerification)');
     assert.equal(cfg.mqtt, '');
     const topics = (cfg.TopicInfos || []).map((t) => t.Topic);
     assert.ok(topics.includes('brms.notifyBatchAddDevices'), 'real notify topic advertised');
@@ -778,6 +792,7 @@ Content-Length: 0\r
       const addJson = await add.json();
       const code = addJson.data?.deviceCode;
       assert.ok(code, 'add must return a deviceCode');
+      CREATED_CODES.add(code);
 
       // 4) the notify must arrive on the MQTT topic within a few seconds
       const deadline = Date.now() + 8000;
@@ -796,15 +811,17 @@ Content-Length: 0\r
   });
 
   // ===== E2E-12 (E-040): the REAL notify bus - ActiveMQ Classic. Port 61616
-  // must speak OpenWire (the broker sends WireFormatInfo on connect - what
-  // MSG.exe's failover:(tcp://10.10.20.120:61616) expects) and a device add
-  // must arrive as a STOMP MESSAGE on /topic/brms.notifyBatchAddDevices =====
-  it('E2E-12 ActiveMQ - OpenWire 61616 answers + STOMP 61613 notify push on /topic/brms.notifyBatchAddDevices', async () => {
-    // 1) OpenWire probe: connect to 61616 and read the first bytes - a real
-    // ActiveMQ connector answers immediately with a WireFormatInfo frame.
+  // must speak OpenWire over TLS (MSG.exe's CMQSDKManager::MQInit always
+  // builds failover:(ssl://10.10.20.120:61616) and sets
+  // decaf.net.ssl.disablePeerVerification - the broker presents the lab
+  // System CA chain) and a device add must arrive as a STOMP MESSAGE on
+  // /topic/brms.notifyBatchAddDevices =====
+  it('E2E-12 ActiveMQ - OpenWire over TLS 61616 answers + STOMP 61613 notify push on /topic/brms.notifyBatchAddDevices', async () => {
+    // 1) OpenWire probe over TLS: a real ActiveMQ ssl:// connector answers
+    //    the handshake and immediately sends a WireFormatInfo frame.
     const wire = await new Promise((resolve, reject) => {
-      const sock = net.connect(61616, '10.10.20.120', () => {});
-      const to = setTimeout(() => { try { sock.destroy(); } catch { /* ignore */ } reject(new Error('61616 no answer (OpenWire WireFormatInfo timeout)')); }, 10000);
+      const sock = tls.connect(61616, '10.10.20.120', { rejectUnauthorized: false }, () => {});
+      const to = setTimeout(() => { try { sock.destroy(); } catch { /* ignore */ } reject(new Error('61616 no answer (TLS + OpenWire WireFormatInfo timeout)')); }, 10000);
       sock.on('data', (d) => {
         clearTimeout(to);
         try { sock.destroy(); } catch { /* ignore */ }
@@ -812,7 +829,7 @@ Content-Length: 0\r
       });
       sock.on('error', (err) => { clearTimeout(to); reject(err); });
     });
-    assert.ok(wire.length >= 8, '61616 sent a WireFormatInfo frame');
+    assert.ok(wire.length >= 8, 'ssl://61616 sent a WireFormatInfo frame after the handshake');
     // OpenWire frame: 4-byte big-endian size, then the tight-marshaled
     // WireFormatInfo (starts with the 'magic' byte array 0x01 0x01 ...).
     const size = wire.readUInt32BE(0);
@@ -835,6 +852,7 @@ Content-Length: 0\r
       const addJson = await add.json();
       const code = addJson.data?.deviceCode;
       assert.ok(code, 'add must return a deviceCode');
+      CREATED_CODES.add(code);
 
       // 4) the notify must arrive on the ActiveMQ topic within a few seconds
       const deadline = Date.now() + 10000;
@@ -852,33 +870,21 @@ Content-Length: 0\r
     }
   });
 
-  // Lab hygiene: this suite creates devices (loopback ONVIF probe + auto
-  // registered NVR). They must not stay in the operator's device list - only
-  // the real cameras (192.168.0.x) are kept.
+  // Lab hygiene: ONLY the devices this suite created in this run are
+  // removed (tracked by the deviceCode each add returned in CREATED_CODES).
+  // Never filter by name/IP prefix: the operator's own lab cameras may
+  // share names ("EBA*") and a prefix cleanup wiped them from the registry
+  // (E-087 incident: devices.json went [] and the camera vanished).
   after(async () => {
     try {
-      const page = await request(`${BASE}/brms/api/v1.1/device/page?pageSize=100`, {
-        headers: { 'X-Subject-Token': token }
-      });
-      const rows = (await page.json()).data?.results || [];
-      const lab = rows.filter((d) => {
-        const ip = String(d.deviceIp || '');
-        const name = String(d.deviceName || '');
-        if (ip.startsWith('127.')) return true;
-        if (ip === '10.10.20.120' && /NVR/i.test(name)) return true;
-        // EBA1_ONVIF is created by this suite against the REAL camera IP
-        // (192.168.0.238:8021) to exercise the ONVIF probe. It must not stay
-        // in the operator's device list - only their own camera may.
-        if (name.startsWith('EBA1')) return true;
-        return false;
-      });
-      if (!lab.length) return;
+      const codes = [...CREATED_CODES];
+      if (!codes.length) return;
       await request(`${BASE}/brms/api/v1.1/device/delete/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
-        body: JSON.stringify({ deviceCodes: lab.map((d) => d.deviceCode) })
+        body: JSON.stringify({ deviceCodes: codes })
       });
-      console.log(`E2E cleanup: removed ${lab.length} lab device(s)`);
+      console.log(`E2E cleanup: removed ${codes.length} suite-created device(s): ${codes.join(',')}`);
     } catch (err) {
       console.log('E2E cleanup skipped:', err.message);
     }

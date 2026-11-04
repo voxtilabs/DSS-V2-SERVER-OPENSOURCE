@@ -10,6 +10,7 @@ import {
   listOrgs,
   getOrg,
   deviceOrgCode,
+  buildGetOrganizationsPayload,
   DEFAULT_ORG_CODE,
   ROOT_ORG
 } from '../e041-orgs.js';
@@ -173,13 +174,35 @@ describe('E-041 persistent org store (VIGILAB)', () => {
       // by parentCode; isParent/deparmentsCount must mark '001' expandable so
       // VIGILAB is reachable in the native tree.
       assert.equal(root.deparmentsCount, '1', "root '001' reports its VIGILAB child");
-      assert.ok(root.isParent, "root '001' is expandable");
-      assert.ok(root.hasChild, "root '001' carries hasChild (DPSDK tree parser key)");
-      assert.equal(vig.deparmentsCount, '0', 'VIGILAB is a leaf');
-      assert.ok(!vig.isParent, 'VIGILAB not expandable');
-      assert.ok(!vig.hasChild, 'VIGILAB hasChild=false');
+      // E-087: isParent/hasChild are STRINGS "1"/"0" in the real VO - a JSON
+      // boolean never binds in the DPSDK string parser.
+      assert.equal(root.isParent, '1', "root '001' is expandable (string)");
+      assert.equal(root.hasChild, '1', "root '001' carries hasChild='1' (string)");
+      assert.equal(vig.deparmentsCount, '0', 'VIGILAB has no sub-orgs');
+      assert.equal(vig.isParent, '0', 'VIGILAB not expandable via sub-orgs (string)');
+      // VIGILAB owns the test device (orgCode "" -> default org), so
+      // hasChild="1": the node must be expandable to reveal the camera.
+      assert.equal(vig.hasChild, '1', "VIGILAB hasChild='1' while it owns devices (string)");
     } finally {
       DEVICE_REGISTRY.delete(code); // in-memory only, no disk write
     }
+  });
+
+  it('E-087 BRMS.Organization.GetOrganizations payload = real GetOrganizationsVo (string fields, VIGILAB present)', () => {
+    const p = buildGetOrganizationsPayload();
+    const vig = p.organizations.find((o) => o.orgCode === 'VIGILAB');
+    const root = p.organizations.find((o) => o.orgCode === '001');
+    assert.ok(vig && root, '001 + VIGILAB served');
+    assert.equal(vig.orgName, 'VIGILAB');
+    assert.equal(vig.parentOrgCode, '001');
+    assert.equal(root.hasChild, '1', 'hasChild is the STRING "1" (DPSDK string parser)');
+    assert.equal(typeof vig.hasChild, 'string');
+    for (const o of p.organizations) {
+      for (const k of ['orgCode', 'orgName', 'parentOrgCode', 'sourceType', 'sourceId', 'associateId', 'remark', 'authority']) {
+        assert.equal(typeof o[k], 'string', `GetOrganizationsVo.${k} must be a string`);
+      }
+    }
+    assert.equal(p.list, p.organizations, 'list alias');
+    assert.equal(p.total, p.organizations.length);
   });
 });

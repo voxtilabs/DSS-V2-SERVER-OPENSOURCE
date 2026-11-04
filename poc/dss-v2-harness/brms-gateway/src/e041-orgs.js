@@ -85,6 +85,43 @@ export function orgName(code) {
   return getOrg(code)?.name || String(code ?? '');
 }
 
+// E-087: BRMS.Organization.GetOrganizations (DPSDK.dll descriptor
+// FUN_1806c97f0, xref 0x1806c996e - the RPC that fills the native Management
+// Sites tree, CMenuTreeWidget). Real response VO (server package javap):
+// GetOrganizationsVo{orgName, orgCode, parentOrgCode, sourceType, sourceId,
+// associateId, remark, authority} - every field a STRING. The client parser
+// binds string keys, so hasChild is served as "1"/"0" (not a JSON boolean).
+export function buildGetOrganizationsPayload() {
+  const orgs = listOrgs().map((o) => {
+    const hasSub = listOrgs().some((x) => x.parentCode === o.code && x.code !== o.code);
+    return {
+      orgCode: o.code,
+      orgName: o.name,
+      parentOrgCode: o.parentCode || '0',
+      sourceType: '',
+      sourceId: '',
+      associateId: '',
+      remark: '',
+      authority: '',
+      // aliases the DPSDK tree parser also binds
+      id: o.code,
+      code: o.code,
+      name: o.name,
+      hasChild: hasSub ? '1' : '0',
+      checked: '0'
+    };
+  });
+  return {
+    organizations: orgs,
+    list: orgs,
+    results: orgs,
+    departments: orgs,
+    items: orgs,
+    total: orgs.length,
+    totalCount: orgs.length
+  };
+}
+
 export function addOrg({ code, name, parentCode, orgType = '1', domainId = '0' }) {
   const c = String(code ?? '').trim();
   if (!c) return { error: 'code is required' };

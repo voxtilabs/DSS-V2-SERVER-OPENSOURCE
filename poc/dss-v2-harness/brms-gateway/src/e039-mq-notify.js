@@ -50,8 +50,10 @@ export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
 // E-040 (production evidence): the real notify bus of the native client is
 // ActiveMQ OpenWire on 61616, NOT MQTT:
 // - pcap prod: client -> server:61616 TLS+OpenWire, zero traffic on 1883.
-// - MSG.exe MQInit builds failover:(tcp://<MQConfig>)?... with MQConfig
-//   VERBATIM (no port formatting) => MQConfig must be plain "host:port".
+// - MSG.exe MQInit builds failover:(ssl://%s)?... (E-087 RE: ssl format at
+//   0x1f6458, tcp fallback exists but the lab never saw tcp; MQConfig is
+//   consumed VERBATIM => must be plain "host:port") with
+//   decaf.net.ssl.disablePeerVerification => broker serves OpenWire over TLS.
 // E-087 (Ghidra RE, DPSDK.dll confirmed): Dpsdk::CRestLogicalImplPro::
 // GetMQConfig (FUN_180214d60) parses the response with the descriptor of
 // FUN_1806755a0 (DAT_180f76610) - five STRING keys at offsets 0/8/0x10/0x18/
@@ -72,11 +74,11 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
     MQType: 'stomp',
     // DPSDK real descriptor keys (FUN_1806755a0): addr IS the MQ Config the
     // client hands to MSG.exe; mqtt "" => pipe path (OpenWire 61616).
-    // E-087 lab evidence: MSG.exe evaluated SSLEnable from the enableTls
-    // STRING's PRESENCE, not its value: enableTls "0" (non-empty) made
-    // MSG.exe go ssl:// and ActiveMQ rejected the TLS ClientHello on the
-    // plain OpenWire connector ("Frame size of 352 MB"). EMPTY string makes
-    // MSG.exe build failover:(tcp://<addr>) => plain OpenWire.
+    // E-087 lab+RE: MSG.exe (CMQSDKManager::MQInit) picks the transport
+    // internally - even with enableTls "" it built failover:(ssl://%s)
+    // (decaf.net.ssl.disablePeerVerification set), so the broker must serve
+    // the OpenWire transport over TLS on 61616; this field stays EMPTY
+    // (tried "0"/"1" - no effect on the transport choice).
     addr: mqAddr,
     userName: 'admin',
     password: 'admin',

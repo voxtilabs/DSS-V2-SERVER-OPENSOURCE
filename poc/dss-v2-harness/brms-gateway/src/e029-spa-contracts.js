@@ -78,33 +78,53 @@ function deviceTreeNode(device, channels) {
     // so the raw VO fields survive and are available to the tree node filters.
     // E-039: `id` is mandatory - the live webview session (22:08:20) rendered
     // devices:[null] when the row carried no id (tree consumers read .id).
-    // E-087: tree nodes bind `hasChild` (DPSDK GetGradeDeviceTree parser
-    // pool) - a device without it renders as a leaf even with channels.
-    hasChild: chans.length > 0,
+    // E-087 (server package javap, v1s1 DeviceNodeVo + DPSDK descriptor
+    // FUN_1806d33a0): every tree key is a STRING - checked/hasChild as JSON
+    // booleans never bind in the client parser. Keys served here match the
+    // descriptor exactly: sourceType, checked, channels, deviceCode, domainId,
+    // deviceIp, deviceName, pId, status, sourceId, deviceModel, unlockModes,
+    // protocolType, associateId, softwareVersion, deviceType, orgCode,
+    // addType, deviceCategory, capability (+id alias).
     id: device.deviceCode,
+    pId: deviceOrgCode(device),
     deviceCode: device.deviceCode,
     deviceName: device.deviceName,
+    checked: '0',
+    deviceCategory: String(device.deviceCategory || '1'),
+    deviceType: String(device.deviceType || ''),
+    channels: chans.map(channelTreeNode),
     orgCode: deviceOrgCode(device),
+    status: device.online === false ? '0' : DEVICE_ONLINE,
+    domainId: '0',
+    deviceModel: device.model || '',
+    softwareVersion: device.firmwareVersion || '',
     deviceIp: device.deviceIp,
-    devicePort: device.devicePort,
-    deviceType: device.deviceType,
-    deviceCategory: device.deviceCategory,
-    protocolType: device.protocolType,
+    addType: '1',
+    capability: device.capability || '0',
+    sourceType: '',
+    sourceId: '',
+    associateId: '',
+    protocolType: String(device.protocolType || ''),
+    unlockModes: '',
+    // legacy/webview conveniences
     manufacturer: device.manufacturer || '',
     model: device.model || '',
     serialNumber: device.serialNumber || '',
     firmwareVersion: device.firmwareVersion || '',
     channelNum: device.channelNum || chans.length || 1,
-    capability: device.capability || '0',
-    status: device.online === false ? '0' : DEVICE_ONLINE,
     online: device.online === false ? 0 : 1,
     deviceStatus: device.online === false ? 'offline' : 'online',
     serverCode: device.serverCode || 'video#local',
-    channels: chans
+    hasChild: chans.length > 0 ? '1' : '0'
   };
 }
 
 function channelTreeNode(channel) {
+  // E-087: ChannelNodeVo keys from the DPSDK descriptor FUN_1806d33a0
+  // (all strings): checked, capability, domainId, deviceType,
+  // deviceCapability, pId, status, channelRemoteType, inputAlarmType,
+  // channelName, streamType, channelType, unitType, channelSubtype,
+  // orgCode, channelId, deviceCategory, cameraType.
   return {
     id: channel.channelId,
     channelId: channel.channelId,
@@ -113,9 +133,21 @@ function channelTreeNode(channel) {
     deviceCode: channel.deviceCode,
     deviceName: channel.deviceName,
     orgCode: deviceOrgCode(channel),
-    channelType: channel.channelType,
+    checked: '0',
     capability: channel.capability || '0',
+    domainId: '0',
+    deviceType: String(channel.deviceType || ''),
+    deviceCapability: '',
+    pId: channel.deviceCode,
     status: DEVICE_ONLINE,
+    channelRemoteType: String(channel.channelRemoteType || '0'),
+    inputAlarmType: '',
+    streamType: String(channel.streamType || '1'),
+    channelType: String(channel.channelType || '1'),
+    unitType: String(channel.unitType || '1'),
+    channelSubtype: '0',
+    deviceCategory: String(channel.deviceCategory || '1'),
+    cameraType: String(channel.cameraType || '1'),
     online: 1
   };
 }
@@ -123,29 +155,48 @@ function channelTreeNode(channel) {
 function orgTreeNode(org, devices) {
   const orgCode = org.code;
   const list = devices.filter((d) => deviceOrgCode(d) === orgCode);
-  // E-087 (DPSDK.dll parser pool 0x180cdbc68-0x180cdbd90, BRMS.Tree.
-  // GetGradeDeviceTree node keys): every tree node binds `hasChild` (+ the
-  // selection flag `checked`); without hasChild the hierarchy renders the
-  // org as a LEAF and the Add Device Organization combo stays empty.
-  const hasChild = listOrgs().some((o) => o.parentCode === orgCode && o.code !== orgCode);
+  // E-087 (server package javap, v1s1 OrgNodeVo): `hasChild` is a STRING
+  // ("1"/"0") in the real VO and in the DPSDK parser descriptor
+  // (FUN_1806d33a0 binds hasChild at org-node offset 0x18, type string).
+  // A JSON boolean never binds => the org rendered as a leaf and VIGILAB
+  // never showed as selectable/expandable. hasChild = has sub-orgs OR
+  // owns devices (server semantics: expandable node).
+  const hasSubOrgs = listOrgs().some((o) => o.parentCode === orgCode && o.code !== orgCode);
+  const hasChild = (hasSubOrgs || list.length > 0) ? '1' : '0';
   return {
     id: orgCode,
     orgCode,
     orgName: org.name || orgCode,
     pId: org.parentCode || (orgCode === ROOT_ORG_CODE ? '0' : ROOT_ORG_CODE),
     hasChild,
-    checked: false,
+    checked: '0',
+    // remaining descriptor keys (all strings)
+    sourceType: '',
+    domainId: org.domainId || '0',
+    autoAuthorize: '0',
+    associateId: '',
+    sourceId: '',
+    // legacy conveniences
     status: DEVICE_ONLINE,
     deviceCount: list.length,
     onlineDeviceCount: list.filter((d) => d.online !== false).length
   };
 }
 
-function treeResult(orgs, devices, channels) {
+function treeResult(orgs, devices, channels, requestedOrg) {
   return {
+    // E-087: root keys per the DPSDK descriptor FUN_1806d33a0 (all strings):
+    // sourceType, organizations[], channels[], devices[], associateId,
+    // orgName, orgCode, sourceId (+domainId).
+    sourceType: '',
     organizations: orgs,
-    devices,
     channels,
+    devices,
+    associateId: '',
+    orgName: requestedOrg || '',
+    orgCode: requestedOrg || '',
+    sourceId: '',
+    domainId: '0',
     // EXCEEDED_FLAG_ENUM: OVER "1", UNDER "0" - nothing is truncated here.
     organizationExceeded: '0',
     deviceExceeded: '0',
@@ -173,7 +224,7 @@ export function buildGradeDeviceTreePayload(body = {}) {
     .filter((d) => deviceOrgCode(d) === requestedOrg)
     .map((d) => deviceTreeNode(d, channels));
 
-  return treeResult(organizations, devices, channels);
+  return treeResult(organizations, devices, channels, requestedOrg);
 }
 
 export function buildGradeDeviceTreeSearchPayload(body = {}) {
