@@ -1036,6 +1036,17 @@ decompiling DPSDK.dll, not from string pools.
   addr field - NOT the legacy MQConfig key of the pipe payload.
 - mqtt empty => the config is piped to MSG.exe (<tomsgpipe>) which builds  failover:(tcp://addr)?... (OpenWire 61616 per section 31). The libcurl-MQTT
   branch only fires on a non-empty mqtt value.
+- E-087b (lab evidence 2026-11-04 22:14:49-22:15:56 + Ghidra): with mqtt ""
+  MSG.exe logged ZERO connection events on the broker - the client never
+  dialed 61616, so CDevAdd's notify wait expired ("Operation timed out") and
+  the tree never re-fetched over HTTP after join/batch (last request in the
+  session was the join/batch itself). The gateway now serves
+  mqtt = "<PUBLIC_HOST>:1883" (plain host:port, same shape as addr; DPSDK
+  builds mqtt://<mqtt>/<topic> with its "%s://%s" formatter) => the client
+  subscribes DIRECTLY on the gateway's MQTT 1883 broker, where the notify
+  hub already dual-pushes brms.notifyBatchAddDevices / brms.notifyChannel-
+  Statuses. addr/MQConfig stay "host:61616" (OpenWire ssl fallback via
+  MSG.exe), MQType stays != "mqtt" for the legacy parser keys.
 - Legacy pipe keys (FUN_180a488e0, caller FUN_180a406e0) method/SessionId/
   UseMqFlag(+4)/MQConfig/MQUser/MQPwd/UserId/GroupId/SSLEnable(struct+0xe8)/
   UnSSLPort(+0xec)/CertificatePath/ProtocolVersion(+0x118)/TopicInfos
@@ -1103,3 +1114,9 @@ shows VIGILAB.
   EBA1_ONVIF/EBAFALLONUEVAMENTE) -> registry emptied, camera invisible.
   Cleanup now deletes ONLY the deviceCodes the suite itself created
   (CREATED_CODES). Rule: never prefix-match operator-owned rows.
+- E-087 incident #2: the add endpoint is idempotent per ip:port, so the
+  suite's add against the operator's real camera (192.168.0.238:8021)
+  RETURNED THE OPERATOR'S deviceCode; both the after() cleanup and E2E-3's
+  inline delete then wiped it (log 23:03:37). Fix: before() snapshots
+  PRE_EXISTING_CODES from device/page and every delete (after() AND inline)
+  skips those codes. Live-verify's cleanup got the same guard.
