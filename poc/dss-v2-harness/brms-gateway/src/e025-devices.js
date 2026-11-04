@@ -61,6 +61,10 @@ import {
   dahuaRtspUri
 } from './e026-video.js';
 import { dirname } from 'node:path';
+// E-041: the default org of a new device is the persisted org VIGILAB (the
+// native add dialog sends orgCode "" - attempt-2 log - which must not stay
+// empty; an empty orgCode also made the org-filtered tree drop the device).
+import { DEFAULT_ORG_CODE, deviceOrgCode, orgName, getOrg } from './e041-orgs.js';
 
 // ---------------------------------------------------------------------------
 // 0) Tunables (no secrets, no hostnames from the lab config)
@@ -208,7 +212,7 @@ export function normalizeDeviceInput(body = {}) {
     deviceName: String(body.deviceName ?? body.name ?? '').trim() || 'Device',
     serverCode: String(body.serverCode ?? body.server ?? 'video#local'),
     manufacturer: String(body.manufacturer ?? '').trim(),
-    orgCode: String(body.orgCode ?? '001'),
+    orgCode: String(body.orgCode ?? '').trim() || DEFAULT_ORG_CODE,
     channelCount,
     userName: String(body.userName ?? body.loginName ?? body.username ?? '').trim(),
     devSequence: String(body.devSequence ?? body.sn ?? body.serialNumber ?? '').trim(),
@@ -938,9 +942,9 @@ export function buildDeviceOrganizationBatchPayload(body = {}) {
     rows.push({
       deviceCode: d.deviceCode,
       deviceName: d.deviceName,
-      orgCode: d.orgCode || '001',
-      orgName: 'Root Org',
-      pId: '0'
+      orgCode: deviceOrgCode(d),
+      orgName: orgName(deviceOrgCode(d)) || 'Root Org',
+      pId: getOrg(deviceOrgCode(d))?.parentCode || '0'
     });
   }
   return rows;

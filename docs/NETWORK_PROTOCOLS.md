@@ -990,3 +990,33 @@ subscribes on 1883, adds a lab device, and receives the PUBLISH with the new
 deviceCode on both topics (gateway log: `[MQTT] PUBLISH
 brms.notifyBatchAddDevices 756B -> 1 subscriber(s)` + `[E039-NOTIFY]
 DEVICE_ADDED <code>`).
+
+
+## 31. ACTIVEMQ OPENWIRE 61616 - the REAL notify bus of the native client (E-040, EV-086, verified live 2026-11-04)
+
+§30 was superseded by production evidence: the real DSS Client 8.006 does
+NOT use MQTT - it speaks **ActiveMQ OpenWire on TCP 61616** (pcap: client
+192.168.100.18 -> server 200.54.10.50:61616 TLS+OpenWire, zero traffic on
+1883/8883/61613/5672; the DSS server package ships ActiveMQ 6.2.0).
+
+MSG.exe `CMQSDKManager::MQInit` builds `failover:(tcp://<MQConfig>)?...`
+(or `ssl://` when SSLEnable=1) with **MQConfig verbatim** - no port
+formatting - so GetMqConfig must serve `MQConfig` as a PLAIN `host:port`.
+DPSDK.dll takes its libcurl-MQTT branch ONLY when `MQType == "mqtt"`; any
+other value pipes the config to MSG.exe (<tomsgpipe>) => OpenWire.
+
+Gateway (10.10.20.120) now serves: `UseMqFlag:1`, `MQType:"stomp"`,
+`MQConfig:"10.10.20.120:61616"`, `SSLEnable:0`, `UnSSLPort:61616`, the 18
+real TopicInfos of §30. Broker: `apache/activemq-classic:6.2.0` service
+(compose), host ports 61616 (OpenWire, MSG.exe connects here) and 61613
+(STOMP, the gateway publishes `/topic/brms.notify*` there via
+src/e040-amq-notify.js, a zero-dependency STOMP 1.2 client). The MQTT 1883
+broker of §30 stays up as a dual push. Verified live: 61616 answers an
+OpenWire WireFormatInfo frame; E2E-12 subscribes STOMP on 61613, adds a
+device and receives the MESSAGE with the new deviceCode on
+/topic/brms.notifyBatchAddDevices and /topic/brms.notifyChannelStatuses.
+
+E-041: organizations are persisted in `data/orgs.json` (same volume as
+devices.json): root `001` + `VIGILAB` (parent 001). The native org tree
+(`DeviceOrgTreeVo.departments`) lists one OrgNodeVo per org; devices added
+with an empty orgCode default to `VIGILAB`.

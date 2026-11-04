@@ -223,6 +223,10 @@ export function buildFunctionListPayload() {
 // NATIVE DEVICE / ORG TREE  (the tabs the operator reported as empty)
 // ===========================================================================
 import { DEVICE_REGISTRY, dssChannelCode, DSS_UNIT_TYPE_ENC } from './e025-devices.js';
+// E-041: persistent org store (data/orgs.json) - the native org tree lists
+// every persisted org (root '001' + 'VIGILAB') instead of a single hardcoded
+// root node, and devices with an empty orgCode fall under the default org.
+import { listOrgs, deviceOrgCode } from './e041-orgs.js';
 
 // UNIT_TYPE map of the production DSS web bundle (web-module/js/device-JBrSmGvP.js)
 export const DSS_UNIT_TYPE = {
@@ -375,7 +379,7 @@ export function buildNativeUnitVo(device) {
 // DeviceInfoVo - the device node of the native tree
 export function buildNativeDeviceInfoVo(d) {
   const units = [buildNativeUnitVo(d)];
-  const orgCode = str(d.orgCode || DSS_ROOT_ORG.code);
+  const orgCode = str(deviceOrgCode(d));
   const status = str(d.online ?? d.status ?? 1);
   return {
     // --- real DeviceInfoVo fields (server package) ---
@@ -452,8 +456,10 @@ export function buildNativeDeviceInfoVo(d) {
   };
 }
 
-// OrgNodeVo - the organization node of the native tree
-export function buildNativeOrgNodeVo(devices) {
+// OrgNodeVo - the organization node of the native tree. `org` comes from the
+// persistent org store (E-041); `devices` must already be filtered to that
+// org (empty orgCode falls under the default org VIGILAB).
+export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
   const device = [];
   const channel = [];
   let sort = 0;
@@ -466,13 +472,13 @@ export function buildNativeOrgNodeVo(devices) {
   }
   return {
     // --- real OrgNodeVo fields (server package) ---
-    code: DSS_ROOT_ORG.code,
-    parentCode: DSS_ROOT_ORG.parentCode,
-    name: DSS_ROOT_ORG.name,
-    orgType: DSS_ROOT_ORG.orgType,
+    code: org.code,
+    parentCode: org.parentCode,
+    name: org.name,
+    orgType: org.orgType,
     modifyTime: new Date().toISOString(),
     deparmentsCount: '0',
-    domainId: DSS_ROOT_ORG.domainId,
+    domainId: org.domainId,
     device,
     channel,
     sn: '',
@@ -482,10 +488,10 @@ export function buildNativeOrgNodeVo(devices) {
     remark: '',
     authority: '',
     // --- aliases parsed by the native client ---
-    id: DSS_ROOT_ORG.code,
-    orgCode: DSS_ROOT_ORG.code,
-    orgName: DSS_ROOT_ORG.name,
-    parentOrgCode: DSS_ROOT_ORG.parentCode,
+    id: org.code,
+    orgCode: org.code,
+    orgName: org.name,
+    parentOrgCode: org.parentCode,
     isParent: false,
     parentName: '',
     sort: 0,
@@ -508,7 +514,7 @@ export function filterNativeDevices(body = {}) {
   const sourceTypes = Array.isArray(body.sourceTypes) ? body.sourceTypes.map(String) : [];
   if (sourceTypes.length) list = list.filter((d) => sourceTypes.includes(dssAddType(d)));
   const orgCode = String(body.orgCode || '');
-  if (orgCode) list = list.filter((d) => String(d.orgCode || DSS_ROOT_ORG.code) === orgCode);
+  if (orgCode) list = list.filter((d) => deviceOrgCode(d) === orgCode);
   return list;
 }
 
@@ -530,9 +536,13 @@ export function buildNativeDeviceTreePayload(body = {}) {
 }
 
 // GET /admin/API/tree/deviceOrg  ->  DeviceOrgTreeVo{departments:[OrgNodeVo]}
+// E-041: one OrgNodeVo per PERSISTED org (root '001' + 'VIGILAB' + any org the
+// operator adds); each node carries only the devices whose orgCode is that
+// org (empty orgCode -> default org VIGILAB).
 export function buildNativeOrgTreePayload() {
   const devices = registryDevices();
-  const departments = [buildNativeOrgNodeVo(devices)];
+  const departments = listOrgs().map((o) =>
+    buildNativeOrgNodeVo(devices.filter((d) => deviceOrgCode(d) === o.code), o));
   const deviceList = devices.map(buildNativeDeviceInfoVo);
   const channelList = [];
   for (const d of devices) {

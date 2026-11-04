@@ -46,20 +46,31 @@ export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
 
 // GetMqConfig data payload. TopicInfos entries use the real parser keys
 // ("Topic", "IsAccUser"); dual-key strategy like the rest of the RPC layer.
-export function buildMqConfigPayload({ publicHost, mqttPort, enabled }) {
-  const addr = `mqtt://${publicHost}:${mqttPort}`;
+//
+// E-040 (production evidence): the real notify bus of the native client is
+// ActiveMQ OpenWire on 61616, NOT MQTT:
+// - pcap prod: client -> server:61616 TLS+OpenWire, zero traffic on 1883.
+// - MSG.exe MQInit builds failover:(tcp://<MQConfig>)?... with MQConfig
+//   VERBATIM (no port formatting) => MQConfig must be plain "host:port".
+// - DPSDK.dll takes its libcurl-MQTT branch ONLY when MQType === "mqtt";
+//   any other value pipes the config to MSG.exe -> OpenWire.
+// So: MQConfig = "<publicHost>:<amqPort>" (OpenWire), MQType != "mqtt"
+// (server pool values: stomp|amqp|mqtt), SSLEnable 0 => tcp:// not ssl://.
+export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
   return {
     method: 'BRM.Config.GetMqConfig',
     SessionId: '',
     UseMqFlag: enabled ? 1 : 0,
-    MQConfig: JSON.stringify({ addr, enableTls: false, wss: false }),
-    MQType: 'mqtt',
-    MQUser: '',
-    MQPwd: '',
+    MQConfig: `${publicHost}:${amqPort}`,
+    MQType: 'stomp',
+    // lab broker credentials (ActiveMQ image defaults, lab-only - the same
+    // class of lab credentials already used by the gateway/e2e admin login)
+    MQUser: 'admin',
+    MQPwd: 'admin',
     UserId: '1',
     GroupId: '',
     SSLEnable: 0,
-    UnSSLPort: mqttPort,
+    UnSSLPort: amqPort,
     CertificatePath: '',
     ProtocolVersion: 'MQTT',
     httpsMode: 0,
@@ -202,16 +213,24 @@ export function createMqttBroker() {
 // --- notify hub: WS event stream + MQTT topics -------------------------------
 // WS message keeps BOTH shapes seen in the wild: the flat DEVICE_ADDED frame
 // (E-025) and the {type, data, timestamp} event envelope (EV-029 §event).
-export function createNotifyHub({ wsClients, mqttPublish }) {
+export function createNotifyHub({ wsClients, mqttPublish, amqPublish }) {
   function deviceEvent(type, device) {
     if (!device) return;
     const d = typeof device === 'object' ? device : { deviceCode: String(device) };
     const timestamp = new Date().toISOString();
     const body = JSON.stringify(d);
-    // MQ: the real notify topics carry the device VO as the message body.
+    // MQTT: the real notify topics carry the device VO as the message body
+    // (kept as dual push - E-039 broker on 1883 stays up).
     if (mqttPublish) {
       mqttPublish(TOPIC_BATCH_ADD_DEVICES, body);
       mqttPublish(TOPIC_CHANNEL_STATUSES, body);
+    }
+    // E-040: the REAL client bus - ActiveMQ topic via STOMP publisher.
+    if (amqPublish) {
+      try {
+        amqPublish(TOPIC_BATCH_ADD_DEVICES, body);
+        amqPublish(TOPIC_CHANNEL_STATUSES, body);
+      } catch (err) { console.log('[E040-NOTIFY] amq publish failed:', err.message); }
     }
     // WS: dual-shape frame.
     if (wsClients) {

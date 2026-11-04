@@ -125,13 +125,18 @@ describe('E-039 MQTT notify broker', { timeout: 20000 }, () => {
   });
 });
 
-describe('E-039 GetMqConfig payload (real TopicInfos)', () => {
-  it('serves UseMqFlag=1, MQType mqtt, mqtt:// addr and every real brms.notify* topic', () => {
-    const cfg = buildMqConfigPayload({ publicHost: '10.10.20.120', mqttPort: 1883, enabled: true });
+describe('E-039/E-040 GetMqConfig payload (real TopicInfos, OpenWire MQConfig)', () => {
+  it('serves UseMqFlag=1, MQType != mqtt, PLAIN host:61616 MQConfig and every real brms.notify* topic', () => {
+    // E-040: MSG.exe builds failover:(tcp://<MQConfig>) with the string
+    // verbatim, so MQConfig must be plain "host:port" (OpenWire 61616), and
+    // MQType must NOT be "mqtt" (that selects the libcurl-MQTT branch in
+    // DPSDK.dll; anything else pipes the config to MSG.exe -> OpenWire).
+    const cfg = buildMqConfigPayload({ publicHost: '10.10.20.120', amqPort: 61616, enabled: true });
     assert.equal(cfg.UseMqFlag, 1);
-    assert.equal(cfg.MQType, 'mqtt');
-    assert.ok(JSON.parse(cfg.MQConfig).addr === 'mqtt://10.10.20.120:1883');
-    assert.equal(cfg.UnSSLPort, 1883);
+    assert.notEqual(cfg.MQType, 'mqtt');
+    assert.equal(cfg.MQConfig, '10.10.20.120:61616', 'MQConfig is plain host:port, not JSON/URL');
+    assert.equal(cfg.UnSSLPort, 61616);
+    assert.equal(cfg.SSLEnable, 0, 'tcp:// not ssl:// (SSLEnable flag in MQInit)');
     const topics = cfg.TopicInfos.map((t) => t.Topic);
     for (const t of MQ_TOPICS) assert.ok(topics.includes(t), `missing ${t}`);
     assert.ok(topics.includes(TOPIC_BATCH_ADD_DEVICES));
@@ -140,17 +145,22 @@ describe('E-039 GetMqConfig payload (real TopicInfos)', () => {
   });
 
   it('MQ_ENABLE=0 path returns UseMqFlag 0', () => {
-    const cfg = buildMqConfigPayload({ publicHost: 'h', mqttPort: 1883, enabled: false });
+    const cfg = buildMqConfigPayload({ publicHost: 'h', amqPort: 61616, enabled: false });
     assert.equal(cfg.UseMqFlag, 0);
   });
 });
 
-describe('E-039 notify hub fans out to WS + MQ topics', () => {
-  it('deviceEvent sends dual-shape WS frames and publishes to both notify topics', () => {
+describe('E-039/E-040 notify hub fans out to WS + MQTT + ActiveMQ topics', () => {
+  it('deviceEvent sends dual-shape WS frames and publishes to MQTT and STOMP topics', () => {
     const sent = [];
     const fakeWs = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
     const published = [];
-    const hub = createNotifyHub({ wsClients: new Set([fakeWs]), mqttPublish: (t, b) => published.push([t, b]) });
+    const amqPublished = [];
+    const hub = createNotifyHub({
+      wsClients: new Set([fakeWs]),
+      mqttPublish: (t, b) => published.push([t, b]),
+      amqPublish: (t, b) => amqPublished.push([t, b])
+    });
     hub.deviceEvent('DEVICE_ADDED', { deviceCode: 'HUB01', deviceName: 'hub lab' });
     assert.equal(sent.length, 2, 'flat + envelope WS frames');
     assert.equal(sent[0].type, 'DEVICE_ADDED');
@@ -159,6 +169,9 @@ describe('E-039 notify hub fans out to WS + MQ topics', () => {
     assert.equal(sent[1].data.deviceCode, 'HUB01');
     assert.deepEqual(published.map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
     assert.ok(JSON.parse(published[0][1]).deviceCode === 'HUB01');
+    // E-040: same two topics on the ActiveMQ bus (destination carries /topic/)
+    assert.deepEqual(amqPublished.map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
+    assert.ok(JSON.parse(amqPublished[0][1]).deviceCode === 'HUB01');
   });
 });
 
@@ -169,7 +182,7 @@ describe('E-039 grade-device-tree rows carry id (fix for devices:[null])', () =>
   it('device/channel/org nodes expose id equal to their code', () => {
     DEVICE_REGISTRY.set(code, {
       deviceCode: code, deviceId: code, deviceName: 'E039 lab', deviceIp: '127.0.0.9', devicePort: 9999,
-      deviceType: '1', deviceCategory: '1', protocolType: '99', orgCode: '', channelNum: 1, online: true
+      deviceType: '1', deviceCategory: '1', protocolType: '99', orgCode: '001', channelNum: 1, online: true
     });
     const payload = buildGradeDeviceTreePayload({ orgCode: '001', treeType: '2', domain: '1' });
     const dev = payload.devices.find((d) => d.deviceCode === code);

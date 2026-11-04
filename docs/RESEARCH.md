@@ -1205,3 +1205,67 @@ live-verify 15/15 on 10.10.20.120; deploy verified blob-identical to HEAD
 (002f972); container restarted to clear the in-memory discover residual
 DSC-127.0.0.1:1 (discover rows: 0).
 
+
+## EV-086 - E-040/E-041: the REAL notify bus is ActiveMQ OpenWire 61616 + persistent org VIGILAB (2026-11-04)
+
+Attempt 2 (E-039 as committed: MQType "mqtt" + MQTT broker on 1883) still left
+the native client silent after an add (operator 13:06:27 add D0238ROW0001,
+join/batch OK, 0 MQTT subscribers on 1883, 0 native tree calls post-add,
+toast ~30 s). Root cause found by RE on the production artifacts, not guessed:
+
+- pcap `CAPTURA FILTRADA DSS.pcapng`: the real client 192.168.100.18 opens
+  TLS to the DSS server 200.54.10.50:**61616** and speaks OpenWire inside it;
+  ZERO conversations to 1883/8883/61613/5672. The DSS server package ships the
+  full broker (activemq-broker-6.2.0.jar, activemq-mqtt/amqp/stomp,
+  MQConfiger.class, settings_mq.pyc) => 61616 = ActiveMQ Classic OpenWire.
+- MSG.exe `CMQSDKManager::MQInit` (manual disassembly, PE scanners
+  pe-xref/pe-decode/pe-hexdump): validates strUserId/pObserver/strMQConfig,
+  reads SSLEnable at this+0x140 and builds
+  `failover:(ssl://%s)?startupMaxReconnectAttempts=1&wireFormat.maxInactivityDuration=0&connection.connectResponseTimeout=5000`
+  or `failover:(tcp://%s)?...` with **%s = strMQConfig VERBATIM** (refs
+  va 0x1401aa4cb / 0x1401aa577 / 0x1401aa6cd; there is NO ":%d" format in the
+  function) => MQConfig must be a plain `host:port`, e.g. `10.10.20.120:61616`.
+  A JSON blob (attempt 2) yields `failover:(tcp://{"addr":...})` = invalid
+  URI = 0 connections.
+- DPSDK.dll: the libcurl-MQTT branch is taken ONLY when `MQType == "mqtt"`
+  (literal 0xcd5728 next to `BRM.Config.GetMqConfig`/`enableTls`); no
+  stomp/amqp/openwire literals exist in DPSDK (the `addr\0` hits are curl
+  contexts). Any other MQType forwards the config to MSG.exe over the
+  `<tomsgpipe>...###!@#END###` named pipe => OpenWire.
+- PROLogic.dll (server) 0x62f7b0 pool: MQType values `stomp|amqp|mqtt`,
+  MQConfig inner keys `addr|enableTls|wss`. MSG.exe pipe keys: SessionId,
+  UseMqFlag, MQUser, MQPwd, UserId, GroupId, SSLEnable, UnSSLPort,
+  CertificatePath, ProtocolVersion, TopicInfos{Topic,IsAccUser}, State.
+
+Fix (this commit, deployed on 10.10.20.120):
+- docker-compose: new service `activemq` = `apache/activemq-classic:6.2.0`
+  (same version the DSS package ships), host ports 61616 (OpenWire) +
+  61613 (STOMP), lab-only admin/admin (image defaults). Broker verified live:
+  `Connector openwire started`, first bytes on 61616 = OpenWire
+  WireFormatInfo (`00 00 01 51 01 01 41 63 74 69 76 65 4d...` "ActiveM").
+- New `src/e040-amq-notify.js`: minimal STOMP 1.2 client (CONNECT with
+  receipt, SEND with content-length, bounded queue + reconnect) - no new
+  dependencies. The gateway publishes every device-change notify to
+  `/topic/brms.notify*` on ActiveMQ (env AMQ_HOST/AMQ_STOMP_PORT, AMQ_ENABLE).
+- `buildMqConfigPayload` (E-039 module) now serves the REAL contract:
+  `MQConfig: "<PUBLIC_HOST>:61616"` (plain host:port), `MQType: "stomp"`
+  (!= "mqtt" => MSG.exe OpenWire path), `SSLEnable: 0` (tcp:// not ssl://),
+  `UnSSLPort: 61616`, `UseMqFlag: 1`, real TopicInfos. MQTT 1883 broker stays
+  up as dual push (E2E-11 still green).
+- New `src/e041-orgs.js`: persistent org store `data/orgs.json` (same
+  bind-mounted volume as devices.json, gitignored runtime data). Seeds root
+  `001` (sys_organization row 1 of the server package) + `VIGILAB`
+  (parentCode 001). Native org tree (`DeviceOrgTreeVo.departments`), SPA
+  grade-device-tree and device orgCode all read it; a device whose add body
+  carries orgCode "" (observed live in attempt 2) now defaults to VIGILAB
+  instead of staying empty (deviceOrg live: `001(root) devices=0 |
+  VIGILAB(VIGILAB) devices=1` with the operator's device).
+
+Suites (all live before commit): unit 44 pass / 0 fail / 1 skip (incl. new
+E-040 STOMP publisher tests + E-041 org-store tests); e2e 12/12 x3
+consecutive runs incl. E2E-12 (OpenWire 61616 answers WireFormatInfo +
+STOMP 61613 subscribe + add -> MESSAGE on /topic/brms.notifyBatchAddDevices
+and /topic/brms.notifyChannelStatuses carrying the new deviceCode, lab
+auto-clean) and updated E2E-11 (GetMqConfig OpenWire contract + MQTT 1883
+dual push); live-verify 15/15 on 10.10.20.120 (device lands under VIGILAB);
+deploy verified blob-identical (sha256) local vs lab for all 9 changed files.

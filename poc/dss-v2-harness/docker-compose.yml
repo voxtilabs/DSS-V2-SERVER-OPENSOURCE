@@ -11,7 +11,7 @@ services:
       - "19800:19800/udp"
       - "5080:5080/udp"
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
-      - "1883:1883"  # E-039: MQTT notify broker (brms.notify* topics, GetMqConfig MQType "mqtt")
+      - "1883:1883"  # E-039: MQTT notify broker (dual push, brms.notify* topics)
     volumes:
       - ../certs:/certs:ro
       # E-032: the device registry (data/devices.json) MUST survive a container
@@ -38,11 +38,41 @@ services:
       - MEDIAMTX_CAMERA_PATH=cam1
       - MQTT_PORT=1883
       - MQ_ENABLE=1
+      # E-040: ActiveMQ Classic (same version the DSS server package ships).
+      # OpenWire 61616 is what the native client's MSG.exe really dials
+      # (production pcap); the gateway publishes notify via STOMP 61613.
+      - AMQ_HOST=activemq
+      - AMQ_PORT=61616
+      - AMQ_STOMP_PORT=61613
+      - AMQ_ENABLE=1
+      - AMQ_LOGIN=admin
+      - AMQ_PASSWORD=admin
     networks:
       - dss-network
     restart: unless-stopped
     depends_on:
       - mediamtx
+      - activemq
+
+  # E-040: REAL message bus of the DSS notify channel. The production client
+  # (MSG.exe) connects OpenWire to <server>:61616 - see the production pcap
+  # (TLS+OpenWire on 61616, zero traffic on 1883) and the desensambled
+  # CMQSDKManager::MQInit (failover:(tcp://<MQConfig>) with MQConfig verbatim).
+  # GetMqConfig now serves MQConfig "<PUBLIC_HOST>:61616", MQType != "mqtt",
+  # SSLEnable 0; the gateway pushes brms.notify* to /topic/... via STOMP.
+  activemq:
+    image: apache/activemq-classic:6.2.0
+    ports:
+      - "61616:61616"  # OpenWire (MSG.exe connects here)
+      - "61613:61613"  # STOMP (gateway publishes notify topics here)
+    environment:
+      # lab-only broker credentials (image defaults); GetMqConfig serves the
+      # same MQUser/MQPwd to the client
+      - ACTIVEMQ_ADMIN_LOGIN=admin
+      - ACTIVEMQ_ADMIN_PASSWORD=admin
+    networks:
+      - dss-network
+    restart: unless-stopped
 
   mediamtx:
     build:

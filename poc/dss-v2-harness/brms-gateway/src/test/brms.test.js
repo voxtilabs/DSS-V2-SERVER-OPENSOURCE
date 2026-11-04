@@ -635,15 +635,21 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(orgTree.data.departments) && orgTree.data.departments.length > 0,
       'departments is the real native key');
     const dept = orgTree.data.departments[0];
-    // OrgNodeVo real fields.
+    // OrgNodeVo real fields. E-041: departments carries one node per persisted
+    // org (root '001' first, then 'VIGILAB').
     assert.equal(dept.code, '001');
+    assert.ok(orgTree.data.departments.some((d) => d.code === 'VIGILAB'), 'VIGILAB org node present');
     assert.ok(dept.name && dept.parentCode !== undefined && dept.orgType !== undefined);
     assert.ok(Array.isArray(dept.device), 'OrgNodeVo.device carries {id,sort} rows');
-    assert.ok(dept.device.some((d) => d.id === code), 'registered device listed in the org node');
+    // The add body carried no orgCode -> the device lands under the default
+    // org VIGILAB (empty orgCode was the attempt-2 bug).
+    const devDept = orgTree.data.departments.find((d) => d.device.some((x) => x.id === code));
+    assert.ok(devDept, 'registered device listed in an org node');
+    assert.equal(devDept.code, 'VIGILAB', 'default org of a new device is VIGILAB');
 
     const devTree = await (await fetch(`${BASE}/admin/API/tree/devices`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
-      body: JSON.stringify({ orgCode: '001', containVirtualDevice: '1', categories: [], deviceCodes: [] })
+      body: JSON.stringify({ orgCode: 'VIGILAB', containVirtualDevice: '1', categories: [], deviceCodes: [] })
     })).json();
     assert.equal(devTree.code, 1000);
     // REAL contract: DeviceTreeVo{devices:[DeviceInfoVo]}.

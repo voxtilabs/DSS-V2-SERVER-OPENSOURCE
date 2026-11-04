@@ -14,6 +14,12 @@ import {
   createNotifyHub,
   buildMqConfigPayload
 } from './e039-mq-notify.js';
+// E-040: STOMP publisher to the REAL ActiveMQ Classic broker (OpenWire
+// 61616 is what the native client's MSG.exe actually connects to - see the
+// module header for the pcap + MSG.exe MQInit evidence).
+import { createStompPublisher } from './e040-amq-notify.js';
+// E-041: persistent org store (root '001' + 'VIGILAB' in data/orgs.json).
+import { loadOrgsFromDisk } from './e041-orgs.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 // E-024: Dahua DSS v1.1 catalog contracts (device categories, access
@@ -73,6 +79,8 @@ import {
 // E-026: load persisted devices from disk so they survive restarts and
 // appear in device/page, tree/*, statistics immediately.
 loadDevicesFromDisk();
+// E-041: load (or seed) the persistent org store so VIGILAB is always served.
+loadOrgsFromDisk();
 // E-026: ONVIF -> MediaMTX video bridge + missing FALLBACK routes
 import {
   discoverOnvifStreamUri,
@@ -222,6 +230,13 @@ const SIP_PORT = parseInt(process.env.SIP_PORT || '5080', 10);
 // MQ_ENABLE=0 reverts GetMqConfig to UseMqFlag:0 (HTTP-only event path).
 const MQTT_PORT = parseInt(process.env.MQTT_PORT || '1883', 10);
 const MQ_ENABLE = (process.env.MQ_ENABLE || '1') !== '0';
+// E-040: ActiveMQ Classic service (OpenWire 61616 = the port the native
+// client really dials per the production pcap; STOMP 61613 = the port this
+// gateway publishes the brms.notify* topics through).
+const AMQ_HOST = process.env.AMQ_HOST || '127.0.0.1';
+const AMQ_PORT = parseInt(process.env.AMQ_PORT || '61616', 10);
+const AMQ_STOMP_PORT = parseInt(process.env.AMQ_STOMP_PORT || '61613', 10);
+const AMQ_ENABLE = (process.env.AMQ_ENABLE || '1') !== '0';
 const PUBLIC_HOST = process.env.PUBLIC_HOST || '127.0.0.1';
 const MEDIAMTX_URL = process.env.MEDIAMTX_URL || 'rtsp://mediamtx:8554';
 const SSL_KEY = process.env.SSL_KEY || '/certs/key.pem';
@@ -241,7 +256,21 @@ const WS_CLIENTS = new Set();
 // brms.notifyChannelStatuses) so the native client refreshes its tree without
 // a relogin instead of hitting the CDevAdd 30 s "Operation timed out" timer.
 const MQTT = createMqttBroker();
-const NOTIFY = createNotifyHub({ wsClients: WS_CLIENTS, mqttPublish: (topic, body) => MQTT.publish(topic, body) });
+// E-040: STOMP publisher to ActiveMQ. AMQ_ENABLE=0 disables only the AMQ
+// push (MQTT 1883 dual push + WS stay up).
+const AMQ = AMQ_ENABLE
+  ? createStompPublisher({
+      host: AMQ_HOST,
+      port: AMQ_STOMP_PORT,
+      login: process.env.AMQ_LOGIN || 'admin',
+      passcode: process.env.AMQ_PASSWORD || 'admin'
+    })
+  : null;
+const NOTIFY = createNotifyHub({
+  wsClients: WS_CLIENTS,
+  mqttPublish: (topic, body) => MQTT.publish(topic, body),
+  amqPublish: AMQ ? (topic, body) => AMQ.publish(`/topic/${topic}`, body) : null
+});
 
 // ===== ARS TCP Binary Protocol (DVRIP/DHIP) =====
 // Dahua Auto Register Service - TCP 9500 (VMS_ARCMS.exe)
@@ -763,12 +792,12 @@ async function brmRpcHandler(req) {
   if (catalog) return rpcEnvelope(method, catalog);
 
   if (method === 'BRM.Config.GetMqConfig') {
-    // E-039: real contract - UseMqFlag=1 + MQType "mqtt" + the real
-    // brms.notify* topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0
-    // string pools) so the client subscribes to device-change notifications
-    // on our in-gateway MQTT broker instead of staying on the HTTP-only path
-    // (which left the native tree static per session).
-    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, mqttPort: MQTT_PORT, enabled: MQ_ENABLE });
+    // E-040: real contract - UseMqFlag=1 + MQConfig "<host>:61616" PLAIN
+    // (MSG.exe builds failover:(tcp://<MQConfig>) verbatim) + MQType != "mqtt"
+    // (DPSDK only takes the libcurl-MQTT branch on "mqtt"; otherwise it pipes
+    // the config to MSG.exe -> OpenWire 61616 on our ActiveMQ) + the real
+    // brms.notify* topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0).
+    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, enabled: MQ_ENABLE });
     return rpcEnvelope(method, { ...cfg, SessionId: String(b.clientPushId || cfg.SessionId) });
   }
 
@@ -2294,6 +2323,13 @@ async function start() {
     MQTT.listen(MQTT_PORT, '0.0.0.0')
       .then((addr) => console.log(`[MQTT] Notify broker listening on 0.0.0.0:${addr.port} (topics brms.notify*)`))
       .catch((err) => console.log('[MQTT] broker start failed:', err.message));
+
+    // E-040: STOMP publisher to ActiveMQ Classic (OpenWire 61616 is served by
+    // the activemq service; this gateway only publishes via STOMP 61613).
+    if (AMQ) {
+      AMQ.start();
+      console.log(`[E040-AMQ] STOMP publisher targeting ${AMQ_HOST}:${AMQ_STOMP_PORT} (OpenWire advertised on ${PUBLIC_HOST}:${AMQ_PORT})`);
+    }
 
     // SIP UDP 5080 Server (DSS Client intercom/voice registration)
     const sipUdp = dgram.createSocket('udp4');

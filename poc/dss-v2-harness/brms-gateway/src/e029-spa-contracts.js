@@ -59,6 +59,9 @@
 
 import { DEVICE_REGISTRY, allChannels } from './e025-devices.js';
 import { listChannelPlans, STORAGE_POSITION_NAMES } from './e027-storage.js';
+// E-041: org list/names come from the persistent org store (root '001' +
+// 'VIGILAB'), and a device with an empty orgCode belongs to the default org.
+import { listOrgs, getOrg, deviceOrgCode } from './e041-orgs.js';
 
 // DSS site constants (production bundle): root org code and online status.
 const ROOT_ORG_CODE = '001';
@@ -78,7 +81,7 @@ function deviceTreeNode(device, channels) {
     id: device.deviceCode,
     deviceCode: device.deviceCode,
     deviceName: device.deviceName,
-    orgCode: device.orgCode || ROOT_ORG_CODE,
+    orgCode: deviceOrgCode(device),
     deviceIp: device.deviceIp,
     devicePort: device.devicePort,
     deviceType: device.deviceType,
@@ -106,7 +109,7 @@ function channelTreeNode(channel) {
     channelNo: channel.channelNo,
     deviceCode: channel.deviceCode,
     deviceName: channel.deviceName,
-    orgCode: channel.orgCode || ROOT_ORG_CODE,
+    orgCode: deviceOrgCode(channel),
     channelType: channel.channelType,
     capability: channel.capability || '0',
     status: DEVICE_ONLINE,
@@ -114,13 +117,14 @@ function channelTreeNode(channel) {
   };
 }
 
-function orgTreeNode(orgCode, orgName, devices) {
-  const list = devices.filter((d) => (d.orgCode || ROOT_ORG_CODE) === orgCode);
+function orgTreeNode(org, devices) {
+  const orgCode = org.code;
+  const list = devices.filter((d) => deviceOrgCode(d) === orgCode);
   return {
     id: orgCode,
     orgCode,
-    orgName,
-    pId: orgCode === ROOT_ORG_CODE ? '0' : orgCode.slice(0, -3) || ROOT_ORG_CODE,
+    orgName: org.name || orgCode,
+    pId: org.parentCode || (orgCode === ROOT_ORG_CODE ? '0' : ROOT_ORG_CODE),
     status: DEVICE_ONLINE,
     deviceCount: list.length,
     onlineDeviceCount: list.filter((d) => d.online !== false).length
@@ -144,18 +148,19 @@ export function buildGradeDeviceTreePayload(body = {}) {
   const registry = [...DEVICE_REGISTRY.values()];
   const channels = allChannels().map(channelTreeNode);
 
-  // Sub-organizations: this deployment runs a single site ("001"), so the root
-  // has no child orgs. Deeper org codes would be their own 3-char groups.
-  const orgCodes = new Set(registry.map((d) => d.orgCode || ROOT_ORG_CODE));
+  // Sub-organizations come from the PERSISTENT org store (E-041: root '001'
+  // + 'VIGILAB') plus every orgCode present in the registry.
+  const orgCodes = new Set(registry.map((d) => deviceOrgCode(d)));
+  for (const o of listOrgs()) orgCodes.add(o.code);
   orgCodes.add(ROOT_ORG_CODE);
   const organizations = [...orgCodes]
     .filter((code) => code !== requestedOrg)
-    .map((code) => orgTreeNode(code, code === ROOT_ORG_CODE ? 'Current Site' : `Organization ${code}`, registry));
+    .map((code) => orgTreeNode(getOrg(code) || { code, name: code === ROOT_ORG_CODE ? 'Current Site' : `Organization ${code}`, parentCode: ROOT_ORG_CODE }, registry));
 
   // Devices directly under the requested org. When the client asks for a sub
   // org we never invented, the list is legitimately empty.
   const devices = registry
-    .filter((d) => (d.orgCode || ROOT_ORG_CODE) === requestedOrg)
+    .filter((d) => deviceOrgCode(d) === requestedOrg)
     .map((d) => deviceTreeNode(d, channels));
 
   return treeResult(organizations, devices, channels);

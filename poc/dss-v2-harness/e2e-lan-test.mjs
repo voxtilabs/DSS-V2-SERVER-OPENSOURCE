@@ -301,6 +301,53 @@ function mqttSubscribe(host, port, filters, clientId) {
   });
 }
 
+// ─── Minimal STOMP 1.2 client (E-040): subscribe to an ActiveMQ topic on
+// 61613. Frames are NULL-terminated; body length comes from content-length.
+function stompSubscribe(host, port, destinations, clientId) {
+  return new Promise((resolve, reject) => {
+    const messages = [];
+    const sock = net.connect(port, host, () => {
+      const conn = `CONNECT\naccept-version:1.2\nhost:${host}\nlogin:admin\npasscode:admin\nheart-beat:0,0\n\n\0`;
+      sock.write(conn);
+      let sid = 0;
+      for (const d of destinations) {
+        sid += 1;
+        sock.write(`SUBSCRIBE\nid:sub-${sid}\ndestination:${d}\nack:auto\nreceipt:r-${sid}\n\n\0`);
+      }
+    });
+    let buf = Buffer.alloc(0);
+    let receipts = 0;
+    const wanted = destinations.length;
+    const timer = setTimeout(() => { try { sock.destroy(); } catch { /* ignore */ } reject(new Error('STOMP handshake timeout')); }, 15000);
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        const end = buf.indexOf(0);
+        if (end === -1) break;
+        let raw = buf.subarray(0, end).toString('utf8');
+        buf = buf.subarray(end + 1);
+        while (raw.startsWith('\n') || raw.startsWith('\r')) raw = raw.slice(1);
+        if (!raw) continue;
+        const nl = raw.indexOf('\n');
+        const cmd = raw.slice(0, nl);
+        const hend = raw.indexOf('\n\n', nl);
+        if (hend === -1) continue;
+        const headers = {};
+        for (const line of raw.slice(nl + 1, hend).split('\n')) {
+          const c = line.indexOf(':');
+          if (c > 0) headers[line.slice(0, c)] = line.slice(c + 1);
+        }
+        const body = raw.slice(hend + 2);
+        if (cmd === 'CONNECTED') { /* ok */ }
+        else if (cmd === 'RECEIPT') { receipts++; if (receipts === wanted) { clearTimeout(timer); resolve({ sock, messages }); } }
+        else if (cmd === 'MESSAGE') { messages.push({ destination: headers.destination, body }); }
+        else if (cmd === 'ERROR') { clearTimeout(timer); reject(new Error('STOMP ERROR: ' + body.slice(0, 200))); }
+      }
+    });
+    sock.on('error', (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
 // ─── Test Suite ──────────────────────────────────────────────────────────
 describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
   before(async () => {
@@ -672,10 +719,11 @@ Content-Length: 0\r
     });
   });
 
-  // ===== E2E-11 (E-039): GetMqConfig advertises the in-gateway MQTT broker
-  // (UseMqFlag=1, MQType "mqtt", real brms.notify* TopicInfos) and a device
-  // add is pushed live on the real notify topics over MQTT 1883 =====
-  it('E2E-11 MQTT 1883 - GetMqConfig contract + notify push on brms.notifyBatchAddDevices', async () => {
+  // ===== E2E-11 (E-039/E-040): GetMqConfig advertises the OpenWire broker
+  // (UseMqFlag=1, MQConfig "<host>:61616" PLAIN, MQType != "mqtt", real
+  // brms.notify* TopicInfos) and a device add is still pushed live on the
+  // MQTT 1883 dual-push broker =====
+  it('E2E-11 GetMqConfig OpenWire contract + MQTT 1883 dual-push notify on brms.notifyBatchAddDevices', async () => {
     // 1) the real RPC call exactly as the native client issues it
     const rpc = await request(`${BASE}/admin/API/BRM/Config/GetMqConfig`, {
       method: 'POST',
@@ -690,10 +738,14 @@ Content-Length: 0\r
     assert.equal(rpcJson.code, 1000);
     const cfg = rpcJson.data || rpcJson.info;
     assert.equal(cfg.UseMqFlag, 1, 'UseMqFlag must be 1 (MQ channel enabled)');
-    assert.equal(cfg.MQType, 'mqtt');
-    const mq = JSON.parse(cfg.MQConfig);
-    assert.equal(mq.addr, 'mqtt://10.10.20.120:1883');
-    assert.equal(cfg.UnSSLPort, 1883);
+    // E-040: MQConfig is the plain OpenWire endpoint - MSG.exe builds
+    // failover:(tcp://<MQConfig>) verbatim, so no JSON/URL here (attempt-2
+    // failure mode). MQType must differ from "mqtt" so DPSDK pipes the
+    // config to MSG.exe instead of the libcurl-MQTT branch.
+    assert.equal(cfg.MQConfig, '10.10.20.120:61616');
+    assert.notEqual(cfg.MQType, 'mqtt');
+    assert.equal(cfg.UnSSLPort, 61616);
+    assert.equal(cfg.SSLEnable, 0);
     const topics = (cfg.TopicInfos || []).map((t) => t.Topic);
     assert.ok(topics.includes('brms.notifyBatchAddDevices'), 'real notify topic advertised');
     assert.ok(topics.includes('brms.notifyChannelStatuses'));
@@ -729,6 +781,63 @@ Content-Length: 0\r
       assert.equal(JSON.parse(hit.payload).deviceCode, code, 'notify body is the device VO');
       const chanHit = sub.publishes.find((p) => p.topic === 'brms.notifyChannelStatuses' && p.payload.includes(code));
       assert.ok(chanHit, 'PUBLISH on brms.notifyChannelStatuses too');
+    } finally {
+      try { sub.sock.destroy(); } catch { /* ignore */ }
+    }
+  });
+
+  // ===== E2E-12 (E-040): the REAL notify bus - ActiveMQ Classic. Port 61616
+  // must speak OpenWire (the broker sends WireFormatInfo on connect - what
+  // MSG.exe's failover:(tcp://10.10.20.120:61616) expects) and a device add
+  // must arrive as a STOMP MESSAGE on /topic/brms.notifyBatchAddDevices =====
+  it('E2E-12 ActiveMQ - OpenWire 61616 answers + STOMP 61613 notify push on /topic/brms.notifyBatchAddDevices', async () => {
+    // 1) OpenWire probe: connect to 61616 and read the first bytes - a real
+    // ActiveMQ connector answers immediately with a WireFormatInfo frame.
+    const wire = await new Promise((resolve, reject) => {
+      const sock = net.connect(61616, '10.10.20.120', () => {});
+      const to = setTimeout(() => { try { sock.destroy(); } catch { /* ignore */ } reject(new Error('61616 no answer (OpenWire WireFormatInfo timeout)')); }, 10000);
+      sock.on('data', (d) => {
+        clearTimeout(to);
+        try { sock.destroy(); } catch { /* ignore */ }
+        resolve(d);
+      });
+      sock.on('error', (err) => { clearTimeout(to); reject(err); });
+    });
+    assert.ok(wire.length >= 8, '61616 sent a WireFormatInfo frame');
+    // OpenWire frame: 4-byte big-endian size, then the tight-marshaled
+    // WireFormatInfo (starts with the 'magic' byte array 0x01 0x01 ...).
+    const size = wire.readUInt32BE(0);
+    assert.ok(size > 0 && size <= wire.length - 4, `plausible OpenWire frame size ${size} (got ${wire.length - 4} payload bytes)`);
+
+    // 2) subscribe on the STOMP connector to the real notify topic
+    const sub = await stompSubscribe('10.10.20.120', 61613,
+      ['/topic/brms.notifyBatchAddDevices', '/topic/brms.notifyChannelStatuses'], 'e2e12-sub');
+    try {
+      // 3) add a lab device (127.x rows are auto-removed by the after() cleanup)
+      const body = JSON.stringify({
+        deviceIp: '127.0.0.1', devicePort: 1, protocolType: '99', deviceCategory: '1',
+        deviceType: '6', deviceName: 'E2E12AMQ', serverCode: 'video#local',
+        encoderChannelCount: 1, loginPass: '0123456789abcdef0123456789abcdef'
+      });
+      const add = await request(`${BASE}/brms/api/v1.1/device`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body
+      });
+      assert.equal(add.status, 200);
+      const addJson = await add.json();
+      const code = addJson.data?.deviceCode;
+      assert.ok(code, 'add must return a deviceCode');
+
+      // 4) the notify must arrive on the ActiveMQ topic within a few seconds
+      const deadline = Date.now() + 10000;
+      let hit = null;
+      while (Date.now() < deadline && !hit) {
+        hit = sub.messages.find((m) => m.destination === '/topic/brms.notifyBatchAddDevices' && m.body.includes(code));
+        if (!hit) await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.ok(hit, 'STOMP MESSAGE on /topic/brms.notifyBatchAddDevices carrying the new deviceCode');
+      assert.equal(JSON.parse(hit.body).deviceCode, code, 'notify body is the device VO');
+      const chanHit = sub.messages.find((m) => m.destination === '/topic/brms.notifyChannelStatuses' && m.body.includes(code));
+      assert.ok(chanHit, 'STOMP MESSAGE on /topic/brms.notifyChannelStatuses too');
     } finally {
       try { sub.sock.destroy(); } catch { /* ignore */ }
     }
