@@ -470,6 +470,11 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
       channel.push({ id: dssChannelCode(d.deviceCode, seq), sort: channel.length });
     }
   }
+  // E-087: isParent/deparmentsCount must reflect the REAL org hierarchy
+  // (built by parentCode in the DPSDK parser FUN_180718860) or the native
+  // client renders '001' as a leaf and VIGILAB never appears in the tree.
+  const childCount = listOrgs().filter((o) => o.parentCode === org.code && o.code !== org.code).length;
+  const parentOrg = listOrgs().find((o) => o.code === org.parentCode);
   return {
     // --- real OrgNodeVo fields (server package) ---
     code: org.code,
@@ -477,7 +482,7 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
     name: org.name,
     orgType: org.orgType,
     modifyTime: new Date().toISOString(),
-    deparmentsCount: '0',
+    deparmentsCount: String(childCount),
     domainId: org.domainId,
     device,
     channel,
@@ -492,8 +497,8 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
     orgCode: org.code,
     orgName: org.name,
     parentOrgCode: org.parentCode,
-    isParent: false,
-    parentName: '',
+    isParent: childCount > 0,
+    parentName: parentOrg ? parentOrg.name : '',
     sort: 0,
     roleIds: []
   };

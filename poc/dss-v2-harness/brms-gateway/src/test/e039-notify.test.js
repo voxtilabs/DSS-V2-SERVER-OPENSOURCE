@@ -137,6 +137,15 @@ describe('E-039/E-040 GetMqConfig payload (real TopicInfos, OpenWire MQConfig)',
     assert.equal(cfg.MQConfig, '10.10.20.120:61616', 'MQConfig is plain host:port, not JSON/URL');
     assert.equal(cfg.UnSSLPort, 61616);
     assert.equal(cfg.SSLEnable, 0, 'tcp:// not ssl:// (SSLEnable flag in MQInit)');
+    // E-087 (Ghidra): DPSDK GetMQConfig (FUN_180214d60) binds STRING keys
+    // password/addr/mqtt/enableTls/userName (descriptor FUN_1806755a0) -
+    // `addr` IS the MQ Config the client hands to MSG.exe; mqtt "" keeps the
+    // pipe/OpenWire path (libcurl-MQTT only on a non-empty mqtt value).
+    assert.equal(cfg.addr, '10.10.20.120:61616', 'DPSDK descriptor key addr = MQ Config');
+    assert.equal(cfg.userName, 'admin');
+    assert.equal(cfg.password, 'admin');
+    assert.equal(cfg.enableTls, '0');
+    assert.equal(cfg.mqtt, '', 'empty mqtt => pipe path to MSG.exe (OpenWire)');
     const topics = cfg.TopicInfos.map((t) => t.Topic);
     for (const t of MQ_TOPICS) assert.ok(topics.includes(t), `missing ${t}`);
     assert.ok(topics.includes(TOPIC_BATCH_ADD_DEVICES));

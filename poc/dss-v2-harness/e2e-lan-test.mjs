@@ -746,6 +746,15 @@ Content-Length: 0\r
     assert.notEqual(cfg.MQType, 'mqtt');
     assert.equal(cfg.UnSSLPort, 61616);
     assert.equal(cfg.SSLEnable, 0);
+    // E-087 (Ghidra): the DPSDK response parser (FUN_180214d60, descriptor
+    // FUN_1806755a0) binds STRING keys addr/userName/password/enableTls/mqtt;
+    // `addr` IS the MQ Config handed to MSG.exe (OpenWire 61616). mqtt ""
+    // keeps the pipe path (libcurl-MQTT only on a non-empty mqtt value).
+    assert.equal(cfg.addr, '10.10.20.120:61616', 'DPSDK descriptor addr = MQ Config');
+    assert.equal(cfg.userName, 'admin');
+    assert.equal(cfg.password, 'admin');
+    assert.equal(cfg.enableTls, '0');
+    assert.equal(cfg.mqtt, '');
     const topics = (cfg.TopicInfos || []).map((t) => t.Topic);
     assert.ok(topics.includes('brms.notifyBatchAddDevices'), 'real notify topic advertised');
     assert.ok(topics.includes('brms.notifyChannelStatuses'));

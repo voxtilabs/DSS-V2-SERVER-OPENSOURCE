@@ -52,17 +52,31 @@ export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
 // - pcap prod: client -> server:61616 TLS+OpenWire, zero traffic on 1883.
 // - MSG.exe MQInit builds failover:(tcp://<MQConfig>)?... with MQConfig
 //   VERBATIM (no port formatting) => MQConfig must be plain "host:port".
-// - DPSDK.dll takes its libcurl-MQTT branch ONLY when MQType === "mqtt";
-//   any other value pipes the config to MSG.exe -> OpenWire.
-// So: MQConfig = "<publicHost>:<amqPort>" (OpenWire), MQType != "mqtt"
-// (server pool values: stomp|amqp|mqtt), SSLEnable 0 => tcp:// not ssl://.
+// E-087 (Ghidra RE, DPSDK.dll confirmed): Dpsdk::CRestLogicalImplPro::
+// GetMQConfig (FUN_180214d60) parses the response with the descriptor of
+// FUN_1806755a0 (DAT_180f76610) - five STRING keys at offsets 0/8/0x10/0x18/
+// 0x20 = "password", "addr", "mqtt", "enableTls", "userName". The "MQ Config"
+// printed by "GetMQConfig PSDKAPI_REQUEST is success, MQ Config is %s..." is
+// the `addr` field. The pipe->MSG.exe (OpenWire) path is taken when `mqtt`
+// is EMPTY; the libcurl-MQTT branch only on a non-empty mqtt value.
+// So BOTH key families are served: the legacy parser keys (MQConfig/MQType/
+// UseMqFlag/MQUser/MQPwd/SSLEnable/UnSSLPort/ProtocolVersion/TopicInfos) AND
+// the actual descriptor keys addr/userName/password/enableTls/mqtt.
 export function buildMqConfigPayload({ publicHost, amqPort = 61616, enabled }) {
+  const mqAddr = `${publicHost}:${amqPort}`;
   return {
     method: 'BRM.Config.GetMqConfig',
     SessionId: '',
     UseMqFlag: enabled ? 1 : 0,
-    MQConfig: `${publicHost}:${amqPort}`,
+    MQConfig: mqAddr,
     MQType: 'stomp',
+    // DPSDK real descriptor keys (FUN_1806755a0): addr IS the MQ Config the
+    // client hands to MSG.exe; mqtt "" => pipe path (OpenWire 61616).
+    addr: mqAddr,
+    userName: 'admin',
+    password: 'admin',
+    enableTls: '0',
+    mqtt: '',
     // lab broker credentials (ActiveMQ image defaults, lab-only - the same
     // class of lab credentials already used by the gateway/e2e admin login)
     MQUser: 'admin',

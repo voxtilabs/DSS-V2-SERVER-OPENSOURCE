@@ -737,14 +737,18 @@ for (const p of INIT_PATHS) {
 //   POST /admin/API/BRM/Config/GetMqConfig
 //   {clientType, clientMac, clientPushId, project:"PSDK",
 //    method:"BRM.Config.GetMqConfig", data:{optional:""}}
-// The DPSDK parser of the response (0x180a488e0) exposes the exact keys:
+// The DPSDK pipe writer of the response (0x180a488e0) exposes the legacy keys:
 //   method, SessionId, UseMqFlag, MQConfig, MQUser, MQPwd, UserId, GroupId,
 //   SSLEnable, UnSSLPort, CertificatePath, ProtocolVersion, TopicInfos.
-// E-039: the gateway now RUNS the MQTT broker the client expects, so
-// UseMqFlag=1 + MQType "mqtt" + the real TopicInfos are served (see
+// E-087 (Ghidra RE): the ACTUAL GetMqConfig response parser (FUN_180214d60,
+// descriptor FUN_1806755a0/DAT_180f76610) reads STRING keys password/addr/
+// mqtt/enableTls/userName - `addr` IS the "MQ Config" handed to MSG.exe.
+// E-040: the gateway now RUNS the notify bus the client expects
+// (ActiveMQ OpenWire 61616 via MSG.exe), so UseMqFlag=1 + addr
+// "<host>:61616" + mqtt "" (empty mqtt => pipe path) are served (see
 // buildMqConfigPayload). MQ_ENABLE=0 restores the old UseMqFlag=0 HTTP-only
-// behavior. `info` is the observed wrapper key; we return it both at root
-// level and inside data (dual-key strategy).
+// behavior. `info` and `data` are the observed wrapper keys; the GetMqConfig
+// route additionally spreads the payload at root level (dual-key strategy).
 function rpcEnvelope(method, data) {
   return { code: 1000, desc: 'Success', method, info: data, data };
 }
@@ -792,13 +796,17 @@ async function brmRpcHandler(req) {
   if (catalog) return rpcEnvelope(method, catalog);
 
   if (method === 'BRM.Config.GetMqConfig') {
-    // E-040: real contract - UseMqFlag=1 + MQConfig "<host>:61616" PLAIN
-    // (MSG.exe builds failover:(tcp://<MQConfig>) verbatim) + MQType != "mqtt"
-    // (DPSDK only takes the libcurl-MQTT branch on "mqtt"; otherwise it pipes
-    // the config to MSG.exe -> OpenWire 61616 on our ActiveMQ) + the real
-    // brms.notify* topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0).
+    // E-040/E-087: real contract - UseMqFlag=1 + MQConfig/addr "<host>:61616"
+    // PLAIN (MSG.exe builds failover:(tcp://<MQConfig>) verbatim) + mqtt ""
+    // (empty => pipe to MSG.exe -> OpenWire 61616 on our ActiveMQ; the libcurl
+    // branch only fires on a non-empty mqtt value) + the real brms.notify*
+    // topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0) + the DPSDK
+    // descriptor keys password/addr/mqtt/enableTls/userName (FUN_1806755a0).
     const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, enabled: MQ_ENABLE });
-    return rpcEnvelope(method, { ...cfg, SessionId: String(b.clientPushId || cfg.SessionId) });
+    cfg.SessionId = String(b.clientPushId || cfg.SessionId);
+    // dual-key: legacy envelope (info/data) AND root-level spread (the DPSDK
+    // response parser may bind either layer).
+    return { ...rpcEnvelope(method, cfg), ...cfg };
   }
 
   // ===== E-021: RPC shapes (parsers contracted via REA/DPSDK + live trace) =====

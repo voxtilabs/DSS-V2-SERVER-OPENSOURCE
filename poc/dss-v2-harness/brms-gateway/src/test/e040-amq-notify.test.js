@@ -169,6 +169,13 @@ describe('E-041 persistent org store (VIGILAB)', () => {
       assert.ok(vig.channel.some((c) => c.id === `${code}$1$0$0`), 'channel ids under VIGILAB too');
       const root = payload.departments.find((d) => d.code === '001');
       assert.ok(root, 'root node still present');
+      // E-087: the DPSDK org-tree parser (FUN_180718860) builds the hierarchy
+      // by parentCode; isParent/deparmentsCount must mark '001' expandable so
+      // VIGILAB is reachable in the native tree.
+      assert.equal(root.deparmentsCount, '1', "root '001' reports its VIGILAB child");
+      assert.ok(root.isParent, "root '001' is expandable");
+      assert.equal(vig.deparmentsCount, '0', 'VIGILAB is a leaf');
+      assert.ok(!vig.isParent, 'VIGILAB not expandable');
     } finally {
       DEVICE_REGISTRY.delete(code); // in-memory only, no disk write
     }
