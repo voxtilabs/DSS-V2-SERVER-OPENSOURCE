@@ -237,6 +237,70 @@ async function waitForWsEvent(token, timeoutMs = 30000) {
   });
 }
 
+// ─── Minimal MQTT 3.1.1 client (E-039): the native client talks MQTT to the
+// gateway broker advertised by GetMqConfig (MQType "mqtt", mqtt://host:1883).
+function mqttPacket(type, flags, body) {
+  const out = [Buffer.from([(type << 4) | flags])];
+  let len = body.length;
+  do { let b = len % 128; len = Math.floor(len / 128); if (len > 0) b |= 0x80; out.push(Buffer.from([b])); } while (len > 0);
+  out.push(body);
+  return Buffer.concat(out);
+}
+function mqttString(s) {
+  const b = Buffer.from(s, 'utf8');
+  const head = Buffer.alloc(2);
+  head.writeUInt16BE(b.length, 0);
+  return Buffer.concat([head, b]);
+}
+function readMqttPacket(buf) {
+  const type = buf[0] >> 4, flags = buf[0] & 0x0f;
+  let mult = 1, len = 0, i = 1;
+  for (;;) { const byte = buf[i++]; len += (byte & 0x7f) * mult; mult *= 128; if (!(byte & 0x80)) break; }
+  return { type, flags, body: buf.subarray(i, i + len), rest: buf.subarray(i + len) };
+}
+// Connect + subscribe; resolves with {sock, publishes:[]} where every inbound
+// PUBLISH is pushed as {topic, payload}.
+function mqttSubscribe(host, port, filters, clientId) {
+  return new Promise((resolve, reject) => {
+    const publishes = [];
+    const sock = net.connect(port, host, () => {
+      const body = Buffer.concat([
+        mqttString('MQTT'), Buffer.from([4, 0x02]), Buffer.from([0, 60]), mqttString(clientId)
+      ]);
+      sock.write(mqttPacket(1, 0, body));
+      // The broker processes packets in stream order, so the SUBSCRIBEs can
+      // go out right after the CONNECT.
+      let pid = 1;
+      for (const f of filters) {
+        sock.write(mqttPacket(8, 2, Buffer.concat([Buffer.from([0, pid++]), mqttString(f), Buffer.from([0])])));
+      }
+    });
+    let buf = Buffer.alloc(0);
+    let subacks = 0;
+    const wanted = filters.length;
+    const timer = setTimeout(() => { try { sock.destroy(); } catch { /* ignore */ } reject(new Error('MQTT handshake timeout')); }, 10000);
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        if (buf.length < 2) return;
+        let mult = 1, len = 0, i = 1;
+        let complete = true;
+        for (;;) { if (i >= buf.length) { complete = false; break; } const byte = buf[i++]; len += (byte & 0x7f) * mult; mult *= 128; if (!(byte & 0x80)) break; }
+        if (!complete || buf.length < i + len) return;
+        const p = readMqttPacket(buf);
+        buf = p.rest;
+        if (p.type === 2) { /* CONNACK */ }
+        else if (p.type === 9) { subacks++; if (subacks === wanted) { clearTimeout(timer); resolve({ sock, publishes }); } }
+        else if (p.type === 3) {
+          const tlen = p.body.readUInt16BE(0);
+          publishes.push({ topic: p.body.toString('utf8', 2, 2 + tlen), payload: p.body.subarray(2 + tlen).toString('utf8') });
+        }
+      }
+    });
+    sock.on('error', (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
 // ─── Test Suite ──────────────────────────────────────────────────────────
 describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
   before(async () => {
@@ -606,6 +670,68 @@ Content-Length: 0\r
         if (err) reject(err);
       });
     });
+  });
+
+  // ===== E2E-11 (E-039): GetMqConfig advertises the in-gateway MQTT broker
+  // (UseMqFlag=1, MQType "mqtt", real brms.notify* TopicInfos) and a device
+  // add is pushed live on the real notify topics over MQTT 1883 =====
+  it('E2E-11 MQTT 1883 - GetMqConfig contract + notify push on brms.notifyBatchAddDevices', async () => {
+    // 1) the real RPC call exactly as the native client issues it
+    const rpc = await request(`${BASE}/admin/API/BRM/Config/GetMqConfig`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({
+        clientType: 'WINPC_V2', clientMac: 'E2E:11', clientPushId: 'e2e11',
+        project: 'PSDK', method: 'BRM.Config.GetMqConfig', data: { optional: '' }
+      })
+    });
+    assert.equal(rpc.status, 200);
+    const rpcJson = await rpc.json();
+    assert.equal(rpcJson.code, 1000);
+    const cfg = rpcJson.data || rpcJson.info;
+    assert.equal(cfg.UseMqFlag, 1, 'UseMqFlag must be 1 (MQ channel enabled)');
+    assert.equal(cfg.MQType, 'mqtt');
+    const mq = JSON.parse(cfg.MQConfig);
+    assert.equal(mq.addr, 'mqtt://10.10.20.120:1883');
+    assert.equal(cfg.UnSSLPort, 1883);
+    const topics = (cfg.TopicInfos || []).map((t) => t.Topic);
+    assert.ok(topics.includes('brms.notifyBatchAddDevices'), 'real notify topic advertised');
+    assert.ok(topics.includes('brms.notifyChannelStatuses'));
+    assert.ok((cfg.TopicInfos || []).every((t) => 'IsAccUser' in t), 'TopicInfos entries carry IsAccUser');
+
+    // 2) subscribe on the real broker. NOTE: the real topics are single-level
+    // dotted names (brms.notifyX), so "brms/#" does NOT match them in MQTT
+    // semantics - the native client subscribes each TopicInfos entry exactly.
+    const sub = await mqttSubscribe('10.10.20.120', 1883, ['brms.notifyBatchAddDevices', 'brms.notifyChannelStatuses', '#'], 'e2e11-sub');
+    try {
+      // 3) add a lab device (127.x rows are auto-removed by the after() cleanup)
+      const body = JSON.stringify({
+        deviceIp: '127.0.0.1', devicePort: 1, protocolType: '99', deviceCategory: '1',
+        deviceType: '6', deviceName: 'E2E11MQTT', serverCode: 'video#local',
+        encoderChannelCount: 1, loginPass: '0123456789abcdef0123456789abcdef'
+      });
+      const add = await request(`${BASE}/brms/api/v1.1/device`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body
+      });
+      assert.equal(add.status, 200);
+      const addJson = await add.json();
+      const code = addJson.data?.deviceCode;
+      assert.ok(code, 'add must return a deviceCode');
+
+      // 4) the notify must arrive on the MQTT topic within a few seconds
+      const deadline = Date.now() + 8000;
+      let hit = null;
+      while (Date.now() < deadline && !hit) {
+        hit = sub.publishes.find((p) => p.topic === 'brms.notifyBatchAddDevices' && p.payload.includes(code));
+        if (!hit) await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.ok(hit, 'PUBLISH on brms.notifyBatchAddDevices carrying the new deviceCode');
+      assert.equal(JSON.parse(hit.payload).deviceCode, code, 'notify body is the device VO');
+      const chanHit = sub.publishes.find((p) => p.topic === 'brms.notifyChannelStatuses' && p.payload.includes(code));
+      assert.ok(chanHit, 'PUBLISH on brms.notifyChannelStatuses too');
+    } finally {
+      try { sub.sock.destroy(); } catch { /* ignore */ }
+    }
   });
 
   // Lab hygiene: this suite creates devices (loopback ONVIF probe + auto

@@ -73,6 +73,9 @@ function deviceTreeNode(device, channels) {
   return {
     // pass-through: optimizeDevice/optimizeChannel spread the source object,
     // so the raw VO fields survive and are available to the tree node filters.
+    // E-039: `id` is mandatory - the live webview session (22:08:20) rendered
+    // devices:[null] when the row carried no id (tree consumers read .id).
+    id: device.deviceCode,
     deviceCode: device.deviceCode,
     deviceName: device.deviceName,
     orgCode: device.orgCode || ROOT_ORG_CODE,
@@ -97,6 +100,7 @@ function deviceTreeNode(device, channels) {
 
 function channelTreeNode(channel) {
   return {
+    id: channel.channelId,
     channelId: channel.channelId,
     channelName: channel.channelName,
     channelNo: channel.channelNo,
@@ -113,6 +117,7 @@ function channelTreeNode(channel) {
 function orgTreeNode(orgCode, orgName, devices) {
   const list = devices.filter((d) => (d.orgCode || ROOT_ORG_CODE) === orgCode);
   return {
+    id: orgCode,
     orgCode,
     orgName,
     pId: orgCode === ROOT_ORG_CODE ? '0' : orgCode.slice(0, -3) || ROOT_ORG_CODE,

@@ -11,6 +11,7 @@ services:
       - "19800:19800/udp"
       - "5080:5080/udp"
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
+      - "1883:1883"  # E-039: MQTT notify broker (brms.notify* topics, GetMqConfig MQType "mqtt")
     volumes:
       - ../certs:/certs:ro
       # E-032: the device registry (data/devices.json) MUST survive a container
@@ -35,6 +36,8 @@ services:
       - MEDIAMTX_URL=rtsp://mediamtx:8554
       - MEDIAMTX_API_URL=http://mediamtx:9997
       - MEDIAMTX_CAMERA_PATH=cam1
+      - MQTT_PORT=1883
+      - MQ_ENABLE=1
     networks:
       - dss-network
     restart: unless-stopped

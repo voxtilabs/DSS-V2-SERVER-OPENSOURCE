@@ -7,6 +7,13 @@ import https from 'node:https';
 import path from 'node:path';
 import net from 'node:net';
 import { WebSocketServer } from 'ws';
+// E-039: MQTT notify broker + device-change hub (real topics from the
+// DPSDK.dll / PROLogic.dll string pools - see the module header).
+import {
+  createMqttBroker,
+  createNotifyHub,
+  buildMqConfigPayload
+} from './e039-mq-notify.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 // E-024: Dahua DSS v1.1 catalog contracts (device categories, access
@@ -210,6 +217,11 @@ const HTTPS_PORT_2 = parseInt(process.env.HTTPS_PORT_2 || '9443', 10);
 const RTSP_PORT = parseInt(process.env.RTSP_PORT || '9100', 10);
 const ARS_PORT = parseInt(process.env.ARS_PORT || '9500', 10);
 const SIP_PORT = parseInt(process.env.SIP_PORT || '5080', 10);
+
+// E-039: MQTT notify broker (real brms.notify* topics, MQType "mqtt").
+// MQ_ENABLE=0 reverts GetMqConfig to UseMqFlag:0 (HTTP-only event path).
+const MQTT_PORT = parseInt(process.env.MQTT_PORT || '1883', 10);
+const MQ_ENABLE = (process.env.MQ_ENABLE || '1') !== '0';
 const PUBLIC_HOST = process.env.PUBLIC_HOST || '127.0.0.1';
 const MEDIAMTX_URL = process.env.MEDIAMTX_URL || 'rtsp://mediamtx:8554';
 const SSL_KEY = process.env.SSL_KEY || '/certs/key.pem';
@@ -224,6 +236,12 @@ const PENDING = new Map();
 // RTSP session management
 const RTSP_SESSIONS = new Map();
 const WS_CLIENTS = new Set();
+// E-039: device-change push hub - fans every registry mutation out to the
+// WS event stream AND the real MQ notify topics (brms.notifyBatchAddDevices,
+// brms.notifyChannelStatuses) so the native client refreshes its tree without
+// a relogin instead of hitting the CDevAdd 30 s "Operation timed out" timer.
+const MQTT = createMqttBroker();
+const NOTIFY = createNotifyHub({ wsClients: WS_CLIENTS, mqttPublish: (topic, body) => MQTT.publish(topic, body) });
 
 // ===== ARS TCP Binary Protocol (DVRIP/DHIP) =====
 // Dahua Auto Register Service - TCP 9500 (VMS_ARCMS.exe)
@@ -693,9 +711,11 @@ for (const p of INIT_PATHS) {
 // The DPSDK parser of the response (0x180a488e0) exposes the exact keys:
 //   method, SessionId, UseMqFlag, MQConfig, MQUser, MQPwd, UserId, GroupId,
 //   SSLEnable, UnSSLPort, CertificatePath, ProtocolVersion, TopicInfos.
-// UseMqFlag=0 keeps the client on its HTTP event path instead of connecting to
-// an MQTT broker we do not run yet. `info` is the observed wrapper key; we
-// return it both at root level and inside data (dual-key strategy).
+// E-039: the gateway now RUNS the MQTT broker the client expects, so
+// UseMqFlag=1 + MQType "mqtt" + the real TopicInfos are served (see
+// buildMqConfigPayload). MQ_ENABLE=0 restores the old UseMqFlag=0 HTTP-only
+// behavior. `info` is the observed wrapper key; we return it both at root
+// level and inside data (dual-key strategy).
 function rpcEnvelope(method, data) {
   return { code: 1000, desc: 'Success', method, info: data, data };
 }
@@ -743,21 +763,13 @@ async function brmRpcHandler(req) {
   if (catalog) return rpcEnvelope(method, catalog);
 
   if (method === 'BRM.Config.GetMqConfig') {
-    return rpcEnvelope(method, {
-      method,
-      SessionId: String(b.clientPushId || ''),
-      UseMqFlag: 0,
-      MQConfig: '',
-      MQUser: '',
-      MQPwd: '',
-      UserId: '1',
-      GroupId: '',
-      SSLEnable: 0,
-      UnSSLPort: 0,
-      CertificatePath: '',
-      ProtocolVersion: 0,
-      TopicInfos: []
-    });
+    // E-039: real contract - UseMqFlag=1 + MQType "mqtt" + the real
+    // brms.notify* topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0
+    // string pools) so the client subscribes to device-change notifications
+    // on our in-gateway MQTT broker instead of staying on the HTTP-only path
+    // (which left the native tree static per session).
+    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, mqttPort: MQTT_PORT, enabled: MQ_ENABLE });
+    return rpcEnvelope(method, { ...cfg, SessionId: String(b.clientPushId || cfg.SessionId) });
   }
 
   // ===== E-021: RPC shapes (parsers contracted via REA/DPSDK + live trace) =====
@@ -873,6 +885,8 @@ async function brmRpcHandler(req) {
     const result = buildDeviceAddPayload(data, identity, PUBLIC_HOST, RTSP_PORT);
     const created = result.device || result.results?.[0];
     persistDevice(created);
+    // E-039: RPC add also pushes the notify event (WS + MQ topics).
+    try { NOTIFY.deviceEvent('DEVICE_ADDED', created); } catch { /* best effort */ }
     // E-034: the RPC path provisions the same per-device RTSP path.
     scheduleStreamProvisioning(created);
     return rpcEnvelope(method, {
@@ -1186,28 +1200,13 @@ const addDeviceHandler = async (req) => {
   const created = result.device || result.results?.[0];
   // Persist to disk so the device survives restarts and appears in all views.
   persistDevice(created);
-  // E-025: broadcast a device-added event over WS so the client doesn't time out
-  // waiting for a confirmation that never arrives over plain HTTP.
+  // E-025/E-039: push a device-added notification over WS AND the real MQ
+  // notify topics so the native client refreshes its tree immediately instead
+  // of expiring on the CDevAdd 30 s "Operation timed out" timer.
   try {
-    const wsMsg = JSON.stringify({
-      type: 'DEVICE_ADDED',
-      deviceCode: created?.deviceCode,
-      deviceId: created?.deviceId || created?.deviceCode,
-      deviceName: created?.deviceName,
-      deviceIp: created?.deviceIp,
-      devicePort: created?.devicePort,
-      protocolType: created?.protocolType,
-      deviceCategory: created?.deviceCategory,
-      deviceType: created?.deviceType,
-      channelNum: created?.channelNum,
-      online: created?.online,
-      timestamp: Date.now()
-    });
-    for (const ws of WS_CLIENTS) {
-      if (ws.readyState === 1) { ws.send(wsMsg); }
-    }
+    NOTIFY.deviceEvent('DEVICE_ADDED', created);
   } catch (err) {
-    console.log('[E025-ADD] WS broadcast failed:', err.message);
+    console.log('[E025-ADD] notify broadcast failed:', err.message);
   }
 
   // E-034: per-device RTSP path. The path name is already known (it only
@@ -1230,7 +1229,15 @@ app.post('/brms/api/v1.0/device/add', addDeviceHandler);
 app.post('/admin/API/device', addDeviceHandler);
 app.post('/brms/api/v1.1/device/add/batch', async (req) => envelope(buildDeviceAddBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/check/exist', async (req) => envelope(buildDeviceCheckExistPayload(req.body)));
-app.post('/brms/api/v1.1/device/delete/batch', async (req) => envelope(buildDeviceDeleteBatchPayload(req.body)));
+app.post('/brms/api/v1.1/device/delete/batch', async (req) => {
+  const codes = [].concat(req.body?.deviceCodes || req.body?.codes || req.body?.list || []).filter(Boolean);
+  const payload = buildDeviceDeleteBatchPayload(req.body);
+  // E-039: deleted devices are pushed too (tree must drop them without relogin).
+  for (const code of codes) {
+    try { NOTIFY.deviceEvent('DEVICE_DELETED', { deviceCode: String(code), deviceId: String(code) }); } catch { /* best effort */ }
+  }
+  return envelope(payload);
+});
 app.post('/brms/api/v1.1/device/move/batch', async (req) => envelope(buildDeviceMoveBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/password/change/batch', async (req) => envelope(buildDevicePasswordChangeBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/timezone/update/batch', async (req) => envelope(buildDeviceTimezoneUpdateBatchPayload(req.body)));
@@ -1323,12 +1330,20 @@ function scheduleStreamProvisioning(devices) {
 }
 app.post('/brms/api/v1.1/discover/device/join/batch', async (req) => {
   const payload = buildDiscoverJoinBatchPayload(req.body);
-  scheduleStreamProvisioning(payload.list || payload.deviceList || []);
+  const created = payload.list || payload.deviceList || [];
+  scheduleStreamProvisioning(created);
+  // E-039: the native CDevAdd dialog issues join/batch - notify every created
+  // device on the real topics so the dialog completes before its 30 s timer.
+  for (const d of created) {
+    try { NOTIFY.deviceEvent('DEVICE_ADDED', d); } catch { /* best effort */ }
+  }
   return envelope(payload);
 });
 app.post('/brms/api/v1.1/discover/device/init', async (req) => {
   const payload = buildDiscoverDeviceInitPayload(req.body);
-  scheduleStreamProvisioning(payload.device || payload.deviceVo || []);
+  const dev = payload.device || payload.deviceVo;
+  scheduleStreamProvisioning(dev ? [dev] : []);
+  try { NOTIFY.deviceEvent('DEVICE_INITIALIZED', dev); } catch { /* best effort */ }
   return envelope(payload);
 });
 
@@ -2031,6 +2046,11 @@ function createWebSocketServer(httpsServer) {
     WS_CLIENTS.add(ws);
     ws.on('close', () => { WS_CLIENTS.delete(ws); console.log('[WS] Client disconnected'); });
     ws.on('error', (err) => { console.log('[WS] Error:', err.message); WS_CLIENTS.delete(ws); });
+    // E-039: log every inbound frame - the next operator session must show
+    // exactly what the client subscribes to / expects on this socket.
+    ws.on('message', (data, isBinary) => {
+      console.log('[WS-MSG]', isBinary ? `<binary ${data.length}B>` : data.toString('utf8').slice(0, 500));
+    });
     ws.send(JSON.stringify({ type: 'WELCOME', message: 'Event WebSocket connected' }));
   });
   console.log('WebSocket Server listening on wss://0.0.0.0:' + HTTPS_PORT + '/brms/api/v1.0/event/ws');
@@ -2114,6 +2134,8 @@ function createARSTCPServer() {
             try {
               const registered = registerArsDevice(deviceInfo);
               scheduleStreamProvisioning(registered);
+              // E-039: auto-registered devices push the notify event too.
+              try { NOTIFY.deviceEvent('DEVICE_ADDED', registered); } catch { /* best effort */ }
             } catch (err) {
               console.log('[ARS TCP] registerArsDevice failed:', err.message);
             }
@@ -2266,6 +2288,12 @@ async function start() {
     console.log('[DEBUG] Starting ARS TCP Server on port', ARS_PORT);
     createARSTCPServer();
     console.log('[DEBUG] ARS TCP Server creation returned');
+
+    // E-039: MQTT notify broker for the real brms.notify* topics advertised
+    // by GetMqConfig (MQType "mqtt"). Device add/delete publish here.
+    MQTT.listen(MQTT_PORT, '0.0.0.0')
+      .then((addr) => console.log(`[MQTT] Notify broker listening on 0.0.0.0:${addr.port} (topics brms.notify*)`))
+      .catch((err) => console.log('[MQTT] broker start failed:', err.message));
 
     // SIP UDP 5080 Server (DSS Client intercom/voice registration)
     const sipUdp = dgram.createSocket('udp4');
