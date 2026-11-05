@@ -87,6 +87,10 @@ describe('E-040 STOMP publisher (ActiveMQ notify bus)', { timeout: 20000 }, () =
       assert.equal(send.headers.destination, '/topic/brms.notifyBatchAddDevices');
       assert.equal(send.headers['content-type'], 'application/json');
       assert.equal(Number(send.headers['content-length']), Buffer.byteLength(body));
+      // E-089: amq-msg-type=text makes ActiveMQ build an ActiveMQTextMessage
+      // (content-length alone would map the SEND to BytesMessage, which
+      // MSG.exe silently discards - Jolokia browse evidence).
+      assert.equal(send.headers['amq-msg-type'], 'text');
       assert.equal(send.body, body);
     } finally {
       pub.close();

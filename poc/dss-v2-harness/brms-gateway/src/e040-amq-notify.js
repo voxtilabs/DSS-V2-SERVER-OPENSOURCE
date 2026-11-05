@@ -138,6 +138,14 @@ export function createStompPublisher({
     const frame = stompFrame('SEND', {
       destination,
       'content-type': 'application/json',
+      // E-089: ActiveMQ Classic maps a STOMP SEND to BytesMessage whenever
+      // content-length is present (LegacyFrameTranslator.convertFrame) and to
+      // TextMessage only when it is absent - UNLESS amq-msg-type overrides.
+      // MSG.exe (decaf OpenWire consumer) expects a TextMessage and silently
+      // discards BytesMessage (browse evidence: only with amq-msg-type=text
+      // the message shows a "Text" field). content-length stays for framing;
+      // amq-msg-type wins over it (checked first in convertFrame).
+      'amq-msg-type': 'text',
       'content-length': bodyBuf.length,
       'persistent': 'false'
     }, bodyBuf);
