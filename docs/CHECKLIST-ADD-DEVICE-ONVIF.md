@@ -108,6 +108,15 @@
    VIGILAB) **sobrevive** a las 3 corridas e2e y aparece en deviceOrg
    (`hasChild:"1"`, `device:[{id}]`), tree/devices, grade-device-tree y RTSP
    DESCRIBE 200.
+6. **E-093**: `GET /ipms/api/v1.1/organization/list` ya NO va vacío — sirve
+   el store persistente **001 root + VIGILAB** con doble clave
+   `list`/`results` + `total`/`count` y claves de org según
+   RE-SCHEMA-DPSDK.md §5.2 (`orgCode, orgName, id, parentCode, sort, domainId,
+   modifyTime, channels, deparmentsCount` [sic]) + descriptor GetOrganizationsVo
+   (E-087) + alias de árbol `hasChild`/`checked` como "1"/"0" (commit
+   `5461508`; alias BRMS `/brms/api/v1.{1.0,1.1}/organization/list` también).
+   Verificado en vivo: 200 con `list=2 results=2 total=2 count=2`. ⇒ el combo
+   Organization de CDevAdd (`cmbGroupName`) ya lista VIGILAB.
 
 ## ❌ Abierto / bloqueante actual
 
@@ -258,4 +267,33 @@
   VACÍO** (index.js:1047) — principal sospechoso del combo vacío; el
   join/batch salió con `orgCode:""` (03:32:01) ⇒ el join no amarra a VIGILAB.
   Pendiente: contrato exacto que lee cmbGroupName (RE) antes de tocar
-  endpoints de org.
+  endpoints de org. **RESUELTO por E-093 (checkpoint abajo, commit
+  `5461508`)**: el endpoint ahora sirve 001+VIGILAB con doble clave
+  list/results + total/count; el contrato que alimenta el combo es DPSDK
+  `CRestLogical::GetOrgList` (FUN_1802af3d0 → `v1.1/organization/list`,
+  parser `FUN_1804c5f00`).
+- **Checkpoint 2026-11-05 ~14:20 UTC — quinta causa raíz (E-093), fix
+  desplegado y verificado en vivo (`5461508`)**: el combo Organization de
+  CDevAdd (`cmbGroupName`) se alimenta de `GET /ipms/api/v1.1/organization/list`
+  (DPSDK `CRestLogical::GetOrgList` FUN_1802af3d0, parser
+  `CDpsdkManager::GetOrgList` FUN_1804c5f00) y el gateway lo servía vacío
+  (`{list:[],total:0}`, cl=59) ⇒ combo vacío y join/batch con `orgCode:""`.
+  Fix: `buildOrganizationListPayload()` en `e041-orgs.js` sirve el store
+  persistente (001 root + VIGILAB) con doble clave `list`/`results` +
+  `total`/`count`; claves de cada org según RE-SCHEMA-DPSDK.md §5.2
+  (`orgCode, orgName, id, parentCode, sort, domainId, modifyTime, channels,
+  deparmentsCount` [sic]) + descriptor GetOrganizationsVo (E-087) + alias de
+  árbol (`hasChild`/`checked` como "1"/"0"). Rutas: `/ipms/api/v1.1/
+  organization/list` (GET+POST) y alias BRMS `/brms/api/v1.{1.0,1.1}/
+  organization/list`, registrados antes del fallback `/ipms/api/*`.
+  Tests: unit **47 pass / 0 fail / 1 skip** (incluye test E-093), e2e
+  **12/12 ×3** pre-deploy contra el lab (baseline verde). Deploy: scp de
+  `brms-gateway/src/` a `bruno@10.10.20.120:~/dss-v2-harness/brms-gateway/`
+  + `docker compose up -d --build brms-gateway` (container Up). Post-deploy:
+  live-verify **15/15** (cleanup saltado: D0238JDG3016 pre-existente) y
+  `GET /ipms/api/v1.1/organization/list` → **200 `list=2 results=2 total=2
+  count=2`** con `001/root (hasChild="1")` y `VIGILAB/VIGILAB
+  (parentCode="001")` — verificado dentro del contenedor (127.0.0.1:11443) y
+  desde fuera por `https://10.10.20.120:1443`. **Cámara del operador
+  D0238JDG3016 intacta** (device/page 1 row, orgCode VIGILAB, RTSP
+  `cam_D0238JDG3016` DESCRIBE 200). Logs: `%TEMP%\opencode\e093-*.log`.
