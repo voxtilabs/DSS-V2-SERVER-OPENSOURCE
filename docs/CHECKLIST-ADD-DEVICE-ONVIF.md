@@ -15,8 +15,10 @@
   DSS-V2-LAB), HTTP interno 11443, RTSP 9100, **OpenWire ssl://61616**,
   STOMP 61613, **MQTT 1883** (broker del gateway, dual-push `brms.notify*`).
   Broker keystore fuera del repo (`~/certs/activemq.p12`). PC cliente:
-  **10.10.20.1** (WINPC_V2) — NO alcanzable por red (445/22/5985 cerrados);
-  sus logs hay que pedírselos al operador a mano.
+  **ESTA MÁQUINA** (WINPC_V2, `DSS Client` PID 25900 + `MSG.exe` PID 15864,
+  install `C:\DSS\DSS Client`, logs locales en `sdk_log\sdk_log.log`); el
+  servidor la ve como **10.10.20.1** (pfSense 10.10.20.1 con Tailscale comparte
+  la subnet — el origen real es 100.72.31.17).
 - **Repo**: `poc/dss-v2-harness/` (gateway `brms-gateway/src`, e2e
   `e2e-lan-test.mjs`, compose, `activemq-ssl.xml`). Docs de contratos:
   `docs/NETWORK_PROTOCOLS.md` §31-§33.
@@ -28,7 +30,9 @@
 | 2026-11-04 22:14:49–22:15:51 | gw4.log | GetMqConfig 200 (4026B) ×2; `tree/deviceOrg?orgCode=` 200 (1724B, 001+VIGILAB); `tree/devices` 200 (154B = vacío, el e2e había borrado el registro); `fish-eye-data` 200 (89B); add 22:15:51 → 200 (5543B) **persistió** (D0238E885012, orgCode VIGILAB); join/batch 22:15:56 → 200 con `ids:[D0238E885012], orgCode:""`. **Cero requests HTTP después del join/batch.** |
 | 2026-11-04 22:14–22:16 | amq4.log | Broker: sólo startup, **0 eventos de conexión** (MSG.exe nunca marcó 61616). |
 | 2026-11-04 23:28:25–23:29:07 | gw6.log | Sesión con el payload NUEVO (mqtt="10.10.20.120:1883" desplegado desde 22:56): GetMqConfig 200 ×2; add 23:29:01.832 → 200 (6036B, body ONVIF completo `deviceName:EBAVOLVIO...`); `device/page` 23:29:01.893 → 200 (3401B, con la cámara); join/batch 23:29:06.802 `ids:[D0238JDG3016], orgCode:""` → 200 (2552B); **sí** re-fetch `discover/device/page` 23:29:06.849 y `device/page` 23:29:07.495, pero **nunca** `tree/deviceOrg`/`tree/devices` después del join. |
-| 2026-11-04 23:0x–23:3x | gw6.log `[MQTT]` | Todos los `PUBLISH brms.notify* -> 0 subscriber(s)`. El único cliente MQTT que conectó fue `e2e11-sub` (mi e2e). **El cliente nativo no abrió NINGÚN socket MQ: ni 1883 ni 61616.** |
+| 2026-11-04 23:0x–23:3x | gw6.log `[MQTT]` | Todos los `PUBLISH brms.notify* -> 0 subscriber(s)`. El único cliente MQTT que conectó fue `e2e11-sub` (mi e2e). El cliente nativo no abrió 1883. |
+| 2026-11-04 ~21:55 UTC (sesión viva) | netstat local + `docker exec activemq cat /proc/net/tcp` + Jolokia 8161 | **REFUTADO "0 conexiones a 61616"**: MSG.exe (PID 15864) tiene `100.72.31.17:58816 -> 10.10.20.120:61616 ESTABLISHED`; dentro del contenedor hay ESTABLISHED en 61616 desde 10.10.20.1; Jolokia: `CurrentConnectionsCount=2`. ActiveMQ 6.2 NO loguea conexiones exitosas a INFO (log de 41 líneas = sólo startup) — la ausencia de logs no prueba ausencia de conexión. |
+| 2026-11-04 ~21:57 UTC | Jolokia topics | **MSG.exe SÍ está suscripto, pero a los topics `mq.*`**: `ConsumerCount=1` en `mq.common.msg.topic`, `mq.vehicle.msg.topic`, `mq.alarm.msg.group.topic.`, `mq.event.msg.topic.1`, `mq.alarm.msg.topic.1`, `mq.carsurvey.alarm.msg.topic.1` (todas con `EnqueueCount=0` — nadie publicó nunca ahí). En `brms.notifyBatchAddDevices`/`brms.notifyChannelStatuses`: `ConsumerCount=0`, `EnqueueCount=152`, `DequeueCount=17` ( ésos son los publish del gateway por STOMP 61613 + consumidores del e2e). **Conclusión: el gateway publica notify a `brms.notify*` pero el cliente escucha sólo `mq.*` ⇒ el notify nunca llega.** |
 
 ## Contratos RE-verificados (Ghidra/javap, no adivinar)
 
@@ -52,6 +56,34 @@
 - DPSDK lanza MSG.exe vía `MSGLogic::CProcessLogic::CreateMsgProcess`
   (string "MSG.exe" xref 0x180bda2d4) y escribe el pipe `<tomsgpipe>`
   (xref 0x180a48457, builder `FUN_180a488e0`, caller `FUN_180a406e0`).
+- **MSG.exe (RE 2026-11-04 ~21:45)**: strings `failover:(ssl://%s)?startupMaxReconnectAttempts=1&wireFormat.maxInactivityDuration=0&connection.connectResponseTimeout=5000`
+  y variante `failover:(tcp://%s)?...`; setea `decaf.net.ssl.disablePeerVerification`
+  ⇒ ssl:// a 61616 con cert auto-firmado OK (coincide con la conexión viva).
+  Pool de topics hardcodeado: `mq.alarm.msg.queue`, `mq.alarm.msg.topic.`,
+  `mq.alarm.msg.group.topic.`, `mq.event.msg.group.topic.`, `mq.event.msg.topic.`,
+  `mq.common.msg.topic`, `mq.carsurvey.alarm.msg.topic.`, `mq.vehicle.msg.topic`
+  + formatter `%s.%s` (sufijo = UserId/GroupId del pipe) ⇒ las suscripciones
+  `mq.*.msg.topic[.1]` vistas en el broker. Claves del pipe: `process, method,
+  id, name, normalpipe, frequentpipe, tomsgpipe` y config `SessionId, UseMqFlag,
+  MQUser, MQPwd, UserId, GroupId, SSLEnable, UnSSLPort, CertificatePath,
+  ProtocolVersion, TopicInfos{Topic,IsAccUser}, MQConfig, SetMQTopic,
+  SendMQMessage, StartRelogin, MQConnState, LocalCfg, DestroyMQ, WebsocketPort,
+  StartWebsocketServer, ChangeMQTopic`.
+- **activemq.dll (cliente)**: tabla de esquemas `openwire|stomp|tcp|ssl|nio|nio+ssl|mock|failover`
+  y default `failover:(tcp://localhost:61616)`.
+- **DPSDK pool de métodos MQ** (file 0xc71000+, ej. `brms.batchAddDevices`
+  xref lea 0x180bbd094): `vms.addDev`, `brms.batchAddDevices`, `vms.notifyDeviceStatus`,
+  `brms.notifyChannelStatuses`, `erms.organization.addOrganization`,
+  `vms.LogicOrg`, … `Dpsdk::CDpsdkCore::ParseMQMsg` ("begin parese len=%d,strMsg=%s")
+  y `HandleFrquentMQMsg` con claves `info`, `devices`, `addChannels`, `deleteChannels`.
+- **PluginFactory.dll**: los 5 thunks de "Operation timed out." (0x1808f31d0,
+  0x18094cf90, 0x180a66650, 0x180ab9430, 0x180ac9c50) son sólo toasts
+  (`DSMessageNotify::AddTextNotification/AddErrorNotification`); sus llamadores
+  (quién espera qué) en 0x1808fd03f, 0x180a46aae, 0x180aad18d, 0x180aedbf2,
+  0x180aee237 — decomp en curso (gh-run-pf2). `FUN_180a33ca0` = handler del
+  resultado de Add Device: lista vacía ⇒ toast "Successfully added the devices."
+  + refresh; por ítem: código 0 ⇒ detalle "Add Device: <name>", 0x1aeb6 ⇒
+  región, 0x1ae21 ⇒ no soportado, otro ⇒ "Failed to add device".
 
 ## ✅ Arreglado y verificado (NO tocar)
 
@@ -79,27 +111,32 @@
 
 ## ❌ Abierto / bloqueante actual
 
-- **El cliente nativo no abre ningún socket MQ** (0 conexiones a 61616 en el
-  broker; 0 subscribers en 1883 salvo el e2e) aunque recibe GetMqConfig con
-  `mqtt:"10.10.20.120:1883"` y `UseMqFlag=1`. Consecuencia: CDevAdd expira su
-  timer esperando el notify ("Operation timed out") y el árbol izquierdo no se
-  re-pide solo tras join/batch (sólo re-pide `device/page` y
-  `discover/device/page`).
-- Falta el **log del cliente** (10.10.20.1 no es alcanzable por red): pedir al
-  operador los logs del DSS Client (carpeta `log/` del install, p.ej.
-  `Dpsdk.log`/`MSG.log`) — la línea clave es
-  `GetMQConfig PSDKAPI_REQUEST is success, MQ Config is %s, MQ User Name is %s, PassWord is %s`
-  y si aparece `CreateMsgProcess` / errores de pipe / de libcurl-MQTT.
-- Ghidra run 5 en curso: gate de `CMSGProcess::Init` / `CreateMsgProcess`
-  (0x180bda2d4), pipe `<tomsgpipe>` (0x180a48457), caller `FUN_180a406e0` —
-  para ver qué condición decide pipe-vs-libcurl-MQTT y por qué no se abre nada.
+- **El notify no llega al cliente nativo**: MSG.exe está conectado a
+  ssl://61616 y suscripto a los 6 topics `mq.*.msg.topic[.1]`, pero el gateway
+  publica los notify sólo a `brms.notify*` (STOMP 61613 → ActiveMQ y MQTT 1883
+  del gateway) donde hay `ConsumerCount=0`. Ningún mensaje llegó nunca a
+  `mq.*` (`EnqueueCount=0`). Consecuencia: CDevAdd expira su timer esperando
+  el notify `brms.batchAddDevices` ("Operation timed out") y el árbol no se
+  refresca solo tras join/batch.
+- Fix en evaluación (RE en curso, gh-run-pf2 / gh-run-dpsdk4): (a) publicar el
+  notify con `method:"brms.batchAddDevices"` a los topics `mq.*` que el cliente
+  escucha (p.ej. `mq.common.msg.topic`), y/o (b) hacer que el cliente se
+  suscriba a `brms.notify*` vía `TopicInfos` con `IsAccUser=1` (semántica RE
+  pendiente en el parser DPSDK 0x180a496ec).
+- Logs del cliente ya son accesibles localmente (`C:\DSS\DSS Client\sdk_log\sdk_log.log`,
+  sólo componente Netsdk; falta hallar el log DPSDK/MSG con "MQ Config is %s" /
+  "CreateMsgProcess").
 
 ## 🚫 NO repetir (ya descartado con evidencia)
 
 - Servir OpenWire plano en 61616: MSG.exe siempre hace ssl:// (disablePeerVerification).
 - `hasChild`/`checked`/`pId` como booleanos JSON: el parser liga strings.
 - Quitar `addr` del GetMqConfig: era el "MQConfig vacío" del intento 3.
-- `mqtt:""` con la expectativa de que MSG.exe marque 61616: pasó (0 conexiones).
+- `mqtt:""` con la expectativa de que MSG.exe marque 61616: pasó (0 conexiones
+  *en el log*, pero la conexión SÍ existe — ver evidencia Jolokia de ~21:55;
+  el log del broker no sirve como prueba negativa).
+- "0 eventos de conexión en el log de ActiveMQ ⇒ el cliente no conecta":
+  falso en ActiveMQ 6.2 (las conexiones exitosas no se loguean a INFO).
 - Cleanup del e2e por prefijo de nombre ("EBA*") o por ip: borra la cámara del
   operador. Sólo códigos creados en la corrida y no pre-existentes.
 - `enableTls:"0"/"1"`: no cambia el transporte (lo elige MSG.exe internamente).
@@ -112,7 +149,23 @@
   cleanup seguro) y `bec3a63` (docs), pusheados a origin/main. Desplegado en el
   lab y verificado: unit 45/0/1, e2e 12/12 ×3, live-verify 15/15, registro del
   operador intacto.**
-- **Siguiente paso**: (1) log del cliente desde 10.10.20.1 (línea "MQ Config is
-  %s" + CreateMsgProcess), (2) leer Ghidra run 5 del gate de MSG/MQTT, (3) según
-  eso conmutar el contrato correcto (pipe MSG.exe a 61616 ssl, o libcurl-MQTT a
-  1883) y re-verificar con sesión real del operador.
+- **Checkpoint 2026-11-04 ~22:05 UTC — evidencia viva (este commit, docs):
+  el cliente corre EN ESTA MÁQUINA; MSG.exe (PID 15864) está ESTABLISHED a
+  ssl://10.10.20.120:61616 (verificado en host y dentro del contenedor + Jolokia
+  `CurrentConnectionsCount=2`) y suscripto a 6 topics `mq.*.msg.topic[.1]`
+  (`ConsumerCount=1`, `EnqueueCount=0`). Los `brms.notify*` que publica el
+  gateway tienen `ConsumerCount=0`. ⇒ **la causa raíz del "Operation timed
+  out" es de transporte de notify: el cliente escucha `mq.*`, el gateway
+  publica `brms.notify*`.** RE nuevo: MSG.exe `failover:(ssl://%s)…` +
+  `disablePeerVerification` + pool `mq.*.msg.topic`; DPSDK pool de métodos con
+  `brms.batchAddDevices` (dispatch 0x180bbd094) y `ParseMQMsg`/`HandleFrquentMQMsg`
+  (`devices`/`addChannels`/`deleteChannels`); PluginFactory: 5 toasts de
+  "Operation timed out." con llamadores en 0x1808fd03f/0x180a46aae/0x180aad18d/
+  0x180aedbf2/0x180aee237 (decomp pf2 en curso) y `FUN_180a33ca0` = handler del
+  resultado de add.**
+- **Siguiente paso**: (1) terminar decomp pf2 (quién dispara cada "Operation
+  timed out.") y dpsdk4 (parser TopicInfos/IsAccUser 0x180a496ec), (2) publicar
+  el notify `brms.batchAddDevices` a los topics `mq.*` (STOMP 61613) y/o servir
+  TopicInfos con IsAccUser=1, (3) unit + e2e ×3 + live-verify, (4) deploy y
+  pedir retest al operador (cerrar/reabrir cliente, relogin, Add Device ONVIF,
+  Discover join, Organization VIGILAB, Management→Sites).
