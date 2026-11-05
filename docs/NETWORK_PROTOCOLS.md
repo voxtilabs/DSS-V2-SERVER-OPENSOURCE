@@ -1091,6 +1091,30 @@ payload keys (FUN_180054e30, FUN_180363e30). Verified end-to-end: after the
 E-088 deploy, mq.common.msg.topic went EnqueueCount=34/DequeueCount=34
 (MSG.exe consumed every publish).
 
+E-089 + E-091 (verified live 2026-11-05, Ghidra RE + Jolokia + STOMP capture):
+- E-089: ActiveMQ Classic maps a STOMP SEND **with `content-length` to
+  BytesMessage**; MSG.exe (decaf) expects TextMessage. Every SEND from
+  e040-amq-notify.js now carries `amq-msg-type: text` (overrides
+  content-length; verified via Jolokia browse: only then the message shows a
+  "Text" field).
+- E-091 (schema, Ghidra decomp-DPSDKdll.txt): `Dpsdk::CDpsdkCore::ParseMQMsg`
+  (FUN_1800306b0) BAILS unless the body ROOT has BOTH `"info"`
+  (DAT_180c76d40 = string "info" @ VA 0x180c76d40) and `"method"`.
+  FUN_1800309c0/FUN_180030ed0 then pass **root["info"]** to the registered
+  method handler (FUN_180bbd090 → LAB_180bdb2f0 → FUN_1800328b0 →
+  FUN_180363e30), which reads from THAT object: `operation` (int; 1=add,
+  2=delete, 3=deleteOrg; must be 0<op<4), `addOrgCode`/`deleteOrgCode`
+  (string), `addChannels`/`deleteChannels` (array of CHANNEL code strings
+  `<deviceCode>$1$0$<seq>` - E-038 layout, NOT the device code), and
+  FUN_1803bdc60 also reads `timeCell` (int) and `devices`. So the envelope is
+  now `{"method": m, "info": {method, operation, addOrgCode, deleteOrgCode,
+  addChannels, deleteChannels, timeCell, devices:[VO+channels]},
+  "params": <same>, ...flat}`. Live capture on /topic/mq.common.msg.topic
+  during a real add shows exactly
+  `{"method":"brms.batchAddDevices","info":{"operation":1,"addOrgCode":"VIGILAB","addChannels":["D0238JDG3016$1$0$0"],...}}`.
+  NOTE for STOMP parsers: ActiveMQ 6.2 emits EOLs between frames - strip
+  leading \r?\n before reading the frame command.
+
 Org-tree keys of the same parser generation (FUN_180718860): departments/
 code/name/orgType/parentCode/deparmentsCount/modifyTime/device[{id,sort}]/
 channel[{id,sort}] and aliases; the hierarchy is built by parentCode, and
