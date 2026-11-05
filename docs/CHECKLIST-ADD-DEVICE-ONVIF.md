@@ -231,3 +231,31 @@
   `docker logs dss-v2-harness-brms-gateway-1` ([E039-NOTIFY]) y Jolokia
   Enqueue/Dequeue en mq.common.msg.topic[.1] con ConsumerCount=1 mientras el
   cliente está logueado.
+- **Checkpoint 2026-11-05 ~04:00 UTC — cuarta causa raíz (E-092), fix
+  desplegado (`0ab903d`)**: RE-SCHEMA-DPSDK.md (Ghidra dpsdk7–11) probó que
+  `brms.batchAddDevices` es SÓLO el ACK de resultado
+  (`info={session,successfulCount,failedCount}` → callback UI 0x5e) y **no
+  lleva devices/channels** — el método que mete el dispositivo+canales en el
+  árbol es `vms.LogicOrgChannel` `info={operation:1..3, addOrgCode,
+  addChannels:["<dev>$1$0$<seq>"], deleteOrgCode, deleteChannels}` (parser
+  FUN_180363e30, handler FUN_1800328b0); `vms.addDev` mete el nodo dispositivo
+  completo (parser FUN_180364830/FUN_1803649a0, callback 0xd). Nuevo
+  `buildClientNotifyEnvelopes(type, device)` en e039-mq-notify.js devuelve los
+  3 sobres (add: vms.LogicOrgChannel op=1 + vms.addDev + ACK
+  brms.batchAddDevices{session:'',successfulCount:1,failedCount:0};
+  delete: op=3 + vms.deleteDev{devices:[...]}) y `createNotifyHub` publica
+  CADA sobre a TODOS los `clientMqTopics(userId)` (bare + sufijo). Tests:
+  unit 46/0/1, e2e 12/12 ×3, live-verify 15/15; desplegado
+  (scp + `docker compose up -d --build brms-gateway`, container Up).
+- **Checkpoint 2026-11-05 ~04:05 UTC — evidencia UI (RE PluginFactory.dll en
+  curso, run-ghidra-pf.bat)**: el diálogo CDevAdd vive en PluginFactory.dll
+  (string "CDevAdd" @ VA 0x1819a9828); su combo de organización es el widget
+  **`cmbGroupName`** (label `lblGroup` @ 0x1819a9d78), llenado por código en
+  0x180a9ea25 (setup findChild en 0x18095d3ff). En la sesión operador
+  03:31–03:37 el cliente llamó `GET /admin/API/tree/deviceOrg?orgCode=`
+  (200, 6028B, con VIGILAB), `POST /admin/API/tree/devices` (200, 12330B) y
+  **`GET /ipms/api/v1.1/organization/list` → 200 cl=59 = `{list:[],total:0}`
+  VACÍO** (index.js:1047) — principal sospechoso del combo vacío; el
+  join/batch salió con `orgCode:""` (03:32:01) ⇒ el join no amarra a VIGILAB.
+  Pendiente: contrato exacto que lee cmbGroupName (RE) antes de tocar
+  endpoints de org.
