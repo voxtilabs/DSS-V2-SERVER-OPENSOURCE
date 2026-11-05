@@ -687,15 +687,43 @@ export function buildDevicePagePayload(query = {}) {
   const page = Math.max(1, Number(query.pageNo ?? query.page ?? 1) || 1);
   const size = Math.max(1, Number(query.pageSize ?? query.page) || 20);
   const keyword = String(query.keyword ?? '').trim();
+  const orgFilter = String(query.orgCode ?? '').trim();
   let list = [...DEVICE_REGISTRY.values()];
+  if (orgFilter) {
+    // containChild=1 (the Device page always sends it): an org matches when it
+    // IS the selected org or a descendant of it.
+    const isDescendant = (code) => {
+      let cur = code, guard = 0;
+      while (cur && guard++ < 16) { if (cur === orgFilter) return true; cur = getOrg(cur)?.parentCode || ''; }
+      return false;
+    };
+    list = list.filter((d) => isDescendant(deviceOrgCode(d)));
+  }
   if (keyword) list = list.filter((d) => d.deviceName.includes(keyword) || d.deviceIp.includes(keyword));
   const start = (page - 1) * size;
   const slice = list.slice(start, start + size);
+  // E-094: the web SPA device table (deviceTable in index-yv7-szZK.js of the
+  // REAL bundle) reads data.pageData + data.totalCount; every row needs
+  // orgName/deviceTypeName/onlineStatus aliases for the table columns
+  // (Organization / Device Type / Online Status / Offline Reason).
+  const rows = slice.map((d) => ({
+    ...d,
+    id: d.deviceCode,
+    orgCode: deviceOrgCode(d),
+    orgName: orgName(deviceOrgCode(d)),
+    deviceTypeName: d.deviceTypeName || d.deviceType || '',
+    deviceCategoryName: d.deviceCategoryName || d.deviceCategory || '',
+    onlineStatus: d.online === false ? '0' : '1',
+    status: d.online === false ? 0 : 1,
+    offlineReason: d.online === false ? (d.errorMsg || 'offline') : '',
+    errorCode: d.online === false ? 1 : 0
+  }));
   return {
-    list: slice,
-    results: slice,
-    deviceList: slice,
-    items: slice,
+    list: rows,
+    results: rows,
+    deviceList: rows,
+    items: rows,
+    pageData: rows,
     pageNo: page,
     pageSize: size,
     total: list.length,

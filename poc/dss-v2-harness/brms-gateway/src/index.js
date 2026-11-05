@@ -1375,6 +1375,27 @@ app.get('/brms/api/v1.1/device/channel/page', async () => {
   const list = allChannels();
   return envelope({ list, results: list, channelList: list, items: list, total: list.length, pageNo: 1, pageSize: list.length || 20 });
 });
+
+// E-094: the REAL web bundle's Device page (deviceTable, useDeviceApi
+// getPageDevices) calls the OMMS namespace - GET /omms/api/v1.1/device/page
+// with query params and reads data.pageData + data.totalCount. Without these
+// routes the table fell into the empty fallback and showed "Total 0 record(s)"
+// even though the device was registered (live evidence 2026-11-05 15:55 UTC:
+// toast "Successfully added the devices" + discover row Initialized + table 0).
+app.get('/omms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
+app.post('/omms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload({ ...req.query, ...(req.body || {}) })));
+app.get('/omms/api/v1.1/device/statistics/group-by-device-category/list', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), req.query)));
+app.post('/omms/api/v1.1/device/statistics/group-by-device-category/list', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), { ...req.query, ...(req.body || {}) })));
+app.get('/omms/api/v1.1/device/statistics', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), req.query)));
+app.get('/omms/api/v1.1/device/export', async (req) => envelope(buildDevicePagePayload(req.query)));
+app.get('/omms/api/v1.1/channel/page', async () => {
+  const list = allChannels();
+  return envelope({ list, results: list, channelList: list, items: list, pageData: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: list.length || 20 });
+});
+app.get('/omms/api/v1.1/device/channel/page', async () => {
+  const list = allChannels();
+  return envelope({ list, results: list, channelList: list, items: list, pageData: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: list.length || 20 });
+});
 // E-025b: RTSP URL lookup so the client can stream via our MediaMTX proxy
 // instead of dialing the camera's RTSP port directly (which may be closed).
 app.get('/brms/api/v1.1/device/rtsp-url', async (req, reply) => {

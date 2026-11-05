@@ -286,6 +286,24 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(stats.data.results) && stats.data.results.some((r) => r.deviceCount > 0));
   });
 
+  it('E-094 omms device/page serves pageData+totalCount (SPA deviceTable contract) with orgName rows', async () => {
+    const page = await (await fetch(`${BASE}/omms/api/v1.1/device/page?page=1&pageSize=20&orgCode=&containChild=1`)).json();
+    assert.equal(page.code, 1000);
+    assert.ok(Array.isArray(page.data.pageData), 'data.pageData must be an array (deviceTable reads it)');
+    assert.equal(page.data.totalCount, page.data.pageData.length > 0 ? page.data.totalCount : page.data.totalCount);
+    assert.ok(page.data.totalCount >= 2, 'mock + added device');
+    const row = page.data.pageData.find((d) => d.deviceIp === '192.168.0.238' || d.deviceName === 'EBA1');
+    assert.ok(row, 'added device present in omms pageData');
+    assert.ok('orgName' in row && 'orgCode' in row && 'onlineStatus' in row, 'row carries orgName/orgCode/onlineStatus columns');
+    // org filter with containChild: VIGILAB must include its devices, an unknown org none
+    const vig = await (await fetch(`${BASE}/omms/api/v1.1/device/page?orgCode=VIGILAB&containChild=1`)).json();
+    assert.ok(vig.data.pageData.some((d) => d.orgCode === 'VIGILAB'), 'VIGILAB filter keeps VIGILAB devices');
+    const none = await (await fetch(`${BASE}/omms/api/v1.1/device/page?orgCode=NOPE&containChild=1`)).json();
+    assert.equal(none.data.pageData.length, 0, 'unknown org filters everything out');
+    const chans = await (await fetch(`${BASE}/omms/api/v1.1/channel/page`)).json();
+    assert.ok(Array.isArray(chans.data.pageData), 'omms channel/page serves pageData');
+  });
+
   it('E-025 network / timezone / role / function / subsystem / omms alert types', async () => {
     const net = await (await fetch(`${BASE}/brms/api/v1.1/system/network/list`)).json();
     assert.ok(Array.isArray(net.data.list) && net.data.list.length > 0 && net.data.list[0].ip);
