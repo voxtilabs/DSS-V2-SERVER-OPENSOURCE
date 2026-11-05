@@ -74,26 +74,59 @@ export function clientMqTopics(userId = '1') {
   return out;
 }
 
-// E-088: envelope the native client parses (DPSDK ParseMQMsg dispatches on the
-// `method` string from the pool at DPSDK file 0xc71000+, e.g.
-// "brms.batchAddDevices"; payload keys read by the handlers:
-// operation/addOrgCode/deleteOrgCode/addChannels/deleteChannels/devices).
-// Keys are sent BOTH flat and under `params` - the DPSDK handlers were seen
-// reading both shapes (FUN_180054e30, FUN_180363e30).
+// E-088/E-091: envelope the native client parses. RE evidence (DPSDK.dll,
+// decomp-DPSDKdll.txt):
+// - FUN_1800306b0 (Dpsdk::CDpsdkCore::ParseMQMsg) parses the MQ body and BAILS
+//   unless the ROOT has BOTH keys "info" (DAT_180c76d40, confirmed string
+//   "info" at VA 0x180c76d40) and "method" - then it reads root["method"] and
+//   dispatches.
+// - FUN_1800309c0 reads method from the root, takes root["info"] and passes
+//   THAT object to the method handlers; FUN_180363e30 (the
+//   brms.batchAddDevices param parser) reads operation (int),
+//   addOrgCode/deleteOrgCode (string), addChannels/deleteChannels (array of
+//   strings), and FUN_1803bdc60 additionally reads "timeCell" (int) and
+//   "devices" from the same object.
+// So the payload MUST live under root["info"]. Keys are ALSO sent flat at the
+// root and under "params" (dual/triple-key strategy - other parsers were seen
+// reading the flat shape).
+// - addChannels/deleteChannels carry CHANNEL codes, not the device code: the
+//   DSS channel id layout "<deviceCode>$<unitType=1>$0$<channelSeq>" is proven
+//   (E-038: production web bundle + server UnitType). The tree is
+//   channel-based, so a bare device code never matches a node.
+export function dssChannelCodes(deviceCode, channelNum) {
+  const n = Math.max(1, Number(channelNum) || 1);
+  const out = [];
+  for (let i = 1; i <= n; i++) out.push(`${deviceCode}$1$0$${i - 1}`);
+  return out;
+}
+
 export function buildClientNotifyEnvelope(type, device) {
   const d = typeof device === 'object' ? device : { deviceCode: String(device) };
   const code = d.deviceCode || '';
   const deleting = type === 'DEVICE_DELETED';
   const method = deleting ? 'vms.deleteDev' : 'brms.batchAddDevices';
+  const channelNum = Number(d.channelNum || d.encoderChannelCount || d.channelCount) || 1;
+  const channelCodes = code ? dssChannelCodes(code, channelNum) : [];
+  const channels = Array.isArray(d.channels) && d.channels.length
+    ? d.channels
+    : channelCodes.map((channelCode, idx) => ({
+        channelCode, channelId: channelCode, channelSeq: idx, channelNo: idx + 1,
+        deviceCode: code, deviceName: d.deviceName || '', orgCode: d.orgCode || ''
+      }));
   const payload = {
+    method,
     operation: deleting ? 2 : 1,
     addOrgCode: deleting ? '' : (d.orgCode || ''),
     deleteOrgCode: deleting ? (d.orgCode || '') : '',
-    addChannels: deleting || !code ? [] : [code],
-    deleteChannels: deleting && code ? [code] : [],
-    devices: [d]
+    addChannels: deleting ? [] : channelCodes,
+    deleteChannels: deleting ? channelCodes : [],
+    timeCell: Date.now(),
+    devices: [{ ...d, channels, channelList: channels }]
   };
-  return JSON.stringify({ method, params: payload, ...payload });
+  // E-091: root must carry "method" AND "info" (ParseMQMsg gate); the handlers
+  // receive root["info"], so the payload goes there - plus flat and "params"
+  // copies for the other reader shapes.
+  return JSON.stringify({ method, info: payload, params: payload, ...payload });
 }
 
 // GetMqConfig data payload. TopicInfos entries use the real parser keys

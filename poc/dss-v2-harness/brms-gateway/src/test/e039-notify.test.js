@@ -193,18 +193,27 @@ describe('E-039/E-040 notify hub fans out to WS + MQTT + ActiveMQ topics', () =>
     for (const [, b] of mqPubs) {
       const env = JSON.parse(b);
       assert.equal(env.method, 'brms.batchAddDevices');
-      assert.deepEqual(env.params.addChannels, ['HUB01']);
-      assert.equal(env.params.operation, 1);
-      assert.equal(env.addChannels[0], 'HUB01', 'flat copy for handlers reading top-level keys');
+      // E-091: ParseMQMsg (FUN_1800306b0) requires root keys "method" AND
+      // "info"; the handlers receive root["info"] (FUN_1800309c0).
+      assert.ok(env.info && typeof env.info === 'object', 'root.info object required by ParseMQMsg gate');
+      assert.equal(env.info.method, 'brms.batchAddDevices');
+      assert.deepEqual(env.info.addChannels, ['HUB01$1$0$0'], 'addChannels carries CHANNEL codes (<code>$1$0$<seq>)');
+      assert.equal(env.info.operation, 1);
+      assert.equal(typeof env.info.timeCell, 'number');
+      assert.equal(env.params.operation, 1, 'params copy kept');
+      assert.deepEqual(env.addChannels, ['HUB01$1$0$0'], 'flat copy for handlers reading top-level keys');
+      assert.equal(env.info.devices[0].channels[0].channelCode, 'HUB01$1$0$0');
     }
   });
 
-  it('E-088 envelope: DEVICE_DELETED maps to vms.deleteDev with deleteChannels', () => {
-    const env = JSON.parse(buildClientNotifyEnvelope('DEVICE_DELETED', { deviceCode: 'X1', orgCode: 'VIGILAB' }));
+  it('E-088/E-091 envelope: DEVICE_DELETED maps to vms.deleteDev with deleteChannels', () => {
+    const env = JSON.parse(buildClientNotifyEnvelope('DEVICE_DELETED', { deviceCode: 'X1', orgCode: 'VIGILAB', channelNum: 2 }));
     assert.equal(env.method, 'vms.deleteDev');
-    assert.equal(env.params.operation, 2);
-    assert.deepEqual(env.params.deleteChannels, ['X1']);
-    assert.equal(env.params.deleteOrgCode, 'VIGILAB');
+    assert.equal(env.info.operation, 2);
+    assert.deepEqual(env.info.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
+    assert.equal(env.info.deleteOrgCode, 'VIGILAB');
+    assert.deepEqual(env.params.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
+    assert.deepEqual(env.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
   });
 });
 
