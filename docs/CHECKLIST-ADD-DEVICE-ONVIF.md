@@ -163,9 +163,19 @@
   "Operation timed out." con llamadores en 0x1808fd03f/0x180a46aae/0x180aad18d/
   0x180aedbf2/0x180aee237 (decomp pf2 en curso) y `FUN_180a33ca0` = handler del
   resultado de add.**
-- **Siguiente paso**: (1) terminar decomp pf2 (quién dispara cada "Operation
-  timed out.") y dpsdk4 (parser TopicInfos/IsAccUser 0x180a496ec), (2) publicar
-  el notify `brms.batchAddDevices` a los topics `mq.*` (STOMP 61613) y/o servir
-  TopicInfos con IsAccUser=1, (3) unit + e2e ×3 + live-verify, (4) deploy y
-  pedir retest al operador (cerrar/reabrir cliente, relogin, Add Device ONVIF,
-  Discover join, Organization VIGILAB, Management→Sites).
+- **Checkpoint 2026-11-04 ~22:40 UTC — FIX E-088 desplegado y verificado:
+  el notify ahora se publica TAMBIÉN a los topics `mq.*.msg.topic[.1]` que
+  MSG.exe escucha (STOMP 61613), con envelope
+  `{"method":"brms.batchAddDevices"/"vms.deleteDev", params:{operation,
+  addOrgCode, deleteOrgCode, addChannels, deleteChannels, devices}, ...flat}`
+  (`buildClientNotifyEnvelope`/`clientMqTopics` en e039-mq-notify.js).
+  Verificación en vivo: Jolokia muestra `mq.common.msg.topic`
+  EnqueueCount=34/**DequeueCount=34** (MSG.exe consumió todos tras el deploy)
+  y ConsumerCount=1 en los 6 topics mq.*. Tests: unit 46/0/1, e2e 12/12 ×3
+  (una corrida con flake SIP UDP E2E-7 tras el rebuild, luego 3 limpias),
+  live-verify 15/15, cámara del operador D0238JDG3016 intacta.**
+- **Siguiente paso**: retest del operador — cerrar/reabrir el cliente,
+  relogin, Add Device ONVIF 192.168.0.238:8021, Discover join, combo
+  Organization (VIGILAB), Management→Sites. Observar en el gateway si tras el
+  join/batch el cliente re-pide `tree/deviceOrg`/`tree/devices` (antes no lo
+  hacía porque nunca recibía el notify).

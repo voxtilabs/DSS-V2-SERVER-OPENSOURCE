@@ -1072,6 +1072,25 @@ lab client went ssl:// even with enableTls "0"/"" (ActiveMQ logged 29x
 System CA, transportConnector ssl://0.0.0.0:61616; STOMP 61613 unchanged).
 E2E-12 probes tls.connect(61616) + WireFormatInfo.
 
+E-088 (verified live 2026-11-04 ~22:00 UTC, Jolokia on the broker):
+ActiveMQ 6.2 does NOT INFO-log successful connections - "0 connection events
+in the log" is NOT proof the client never dialed. Live: MSG.exe (PID on the
+client PC) holds ESTABLISHED to ssl://10.10.20.120:61616
+(CurrentConnectionsCount=2 incl. the gateway STOMP publisher) and is
+subscribed (ConsumerCount=1) ONLY to its hardcoded pool `mq.alarm.msg.topic.`,
+`mq.alarm.msg.group.topic.`, `mq.event.msg.group.topic.`, `mq.event.msg.topic.`,
+`mq.common.msg.topic`, `mq.carsurvey.alarm.msg.topic.`, `mq.vehicle.msg.topic`
+(per-user variants get the UserId suffix: mq.event.msg.topic.1 with
+UserId "1"). Every `brms.notify*` topic had ConsumerCount=0. So the notify
+envelope is published BOTH to brms.notify* AND to the mq.* topics
+(clientMqTopics(), STOMP 61613), with body
+{"method":"brms.batchAddDevices"|"vms.deleteDev", params:{operation,
+addOrgCode, deleteOrgCode, addChannels, deleteChannels, devices}, ...flat} -
+the DPSDK pool at file 0xc71000+ dispatches on `method`, handlers read those
+payload keys (FUN_180054e30, FUN_180363e30). Verified end-to-end: after the
+E-088 deploy, mq.common.msg.topic went EnqueueCount=34/DequeueCount=34
+(MSG.exe consumed every publish).
+
 Org-tree keys of the same parser generation (FUN_180718860): departments/
 code/name/orgType/parentCode/deparmentsCount/modifyTime/device[{id,sort}]/
 channel[{id,sort}] and aliases; the hierarchy is built by parentCode, and
