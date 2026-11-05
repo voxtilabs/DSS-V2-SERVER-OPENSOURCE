@@ -297,3 +297,31 @@
   desde fuera por `https://10.10.20.120:1443`. **Cámara del operador
   D0238JDG3016 intacta** (device/page 1 row, orgCode VIGILAB, RTSP
   `cam_D0238JDG3016` DESCRIBE 200). Logs: `%TEMP%\opencode\e093-*.log`.
+
+- **Checkpoint 2026-11-05 ~16:10 UTC — sexta causa raíz (E-094), fix
+  desplegado y verificado en vivo (`18cbedf`)**: sesión operador 15:55 UTC
+  mostró toast **"Successfully added the devices."** (¡el "Operation timed
+  out" ya no aparece!) y Discover con la cámara **Initialized**, pero la
+  tabla Device Config mostraba **"Total 0 record(s)"**. Causa raíz hallada en
+  el bundle web REAL servido por el gateway (`web-module/js/index-yv7-szZK.js`,
+  componente `deviceTable`): la tabla llama **GET `/omms/api/v1.1/device/page`**
+  (`useDeviceApi-CXeZa_J4.js` `getPageDevices`) y lee **`data.pageData` +
+  `data.totalCount`**; esa ruta no estaba registrada (caía al fallback vacío)
+  y `buildDevicePagePayload` no incluía `pageData`. El árbol de la izquierda
+  usa `getOrg` → `/ipms/api/v1.1/organization/list` leyendo `data.results`
+  con `orgCode/orgName/parentOrgCode` (ya cubierto por E-093).
+  Fix: `pageData` + filas con `orgName/orgCode/onlineStatus/deviceTypeName`
+  y filtro `orgCode` con `containChild` (descendientes incluidos) en
+  `buildDevicePagePayload` (e025-devices.js); rutas registradas en index.js:
+  `GET/POST /omms/api/v1.1/device/page`, `/omms/api/v1.1/channel/page`,
+  `/omms/api/v1.1/device/channel/page` (todos con pageData+totalCount),
+  `/omms/api/v1.1/device/statistics[/group-by-device-category/list]` y
+  `/omms/api/v1.1/device/export`. Tests: unit **48 pass / 0 fail** (test
+  E-094 incluido), e2e **12/12 ×3**. Deploy: scp + `docker compose up -d
+  --build brms-gateway` (Up). Post-deploy: live-verify **15/15** y en vivo
+  `GET /omms/api/v1.1/device/page?orgCode=&containChild=1` → **200
+  code=1000 pageData=1 totalCount=1**, fila `D0238JDG3016 192.168.0.238:8021
+  org=VIGILAB/VIGILAB onlineStatus=1`; `orgCode=VIGILAB` → 1 fila;
+  `orgCode=NOPE` → 0; `omms channel/page` → pageData=1. D0238JDG3016 intacto.
+  Logs: `%TEMP%\opencode\unit-e094.log`, `e2e-e094-{1,2,3}.log`,
+  `live-verify-e094.log`.
