@@ -174,8 +174,60 @@
   y ConsumerCount=1 en los 6 topics mq.*. Tests: unit 46/0/1, e2e 12/12 ×3
   (una corrida con flake SIP UDP E2E-7 tras el rebuild, luego 3 limpias),
   live-verify 15/15, cámara del operador D0238JDG3016 intacta.**
-- **Siguiente paso**: retest del operador — cerrar/reabrir el cliente,
-  relogin, Add Device ONVIF 192.168.0.238:8021, Discover join, combo
-  Organization (VIGILAB), Management→Sites. Observar en el gateway si tras el
-  join/batch el cliente re-pide `tree/deviceOrg`/`tree/devices` (antes no lo
-  hacía porque nunca recibía el notify).
+- **Checkpoint 2026-11-05 ~02:10 UTC — segunda causa raíz (E-089), fix
+  desplegado (`e5d6b9c`)**: aunque el notify llegaba al broker
+  (Enqueue=Dequeue en mq.*), el cliente lo descartaba porque ActiveMQ
+  Classic mapea un STOMP SEND **con `content-length` a `ActiveMQBytesMessage`**
+  (LegacyFrameTranslator.convertFrame) y MSG.exe (decaf OpenWire) espera
+  **TextMessage**. Evidencia Jolokia browse: mensaje a `/queue/e088probe`
+  (sólo content-length) => `BodyPreview` bytes, sin campo `Text`;
+  `/queue/e088probe2` con `amq-msg-type:text` => campo `"Text"` con el JSON.
+  Fix: `e040-amq-notify.js` ahora envía `amq-msg-type: text` en cada SEND
+  (content-length se conserva para framing; amq-msg-type tiene prioridad).
+  Verificado en vivo: MESSAGE entregado a `/topic/mq.common.msg.topic` con
+  `amq-msg-type:text`. Tests: unit 46/0/1, e2e 12/12 ×3 (1 flake SIP/UDP E2E-7
+  intermitente), live-verify 15/15 post-deploy. Sesión del operador
+  2026-11-05 01:38:29 add → 01:38:34 join/batch → 01:39:03 logout SIN re-fetch
+  de árbol (cliente ya corría con el fix E-088 pero sin E-089; además al
+  logout MSG.exe cerró la suscripción — ConsumerCount=0 hasta el próximo
+  login).**
+- **Checkpoint 2026-11-05 ~03:10 UTC — tercera causa raíz (E-091), fix
+  desplegado y verificado en vivo (`16f7e0f`)**: el envelope llegaba al broker
+  y MSG.exe lo consumía, pero `Dpsdk::CDpsdkCore::ParseMQMsg`
+  (FUN_1800306b0) **hace bail si el root del body NO tiene las claves
+  `"info"` (DAT_180c76d40, string "info" @ VA 0x180c76d40) y `"method"`**;
+  luego FUN_1800309c0/FUN_180030ed0 toman `root["info"]` y se lo pasan al
+  handler registrado para el método (FUN_180bbd090 → LAB_180bdb2f0 →
+  FUN_1800328b0 → FUN_180363e30), que lee de ESE objeto: `operation` (int,
+  1=add/2=del/3=delOrg, return 0<op<4), `addOrgCode`/`deleteOrgCode`
+  (string), `addChannels`/`deleteChannels` (array de strings), y
+  FUN_1803bdc60 lee además `timeCell` (int) y `devices`. El envelope viejo
+  usaba `params` y claves flat → ParseMQMsg descartaba el mensaje antes de
+  despachar. Además `addChannels` debe llevar **channel codes**
+  `<deviceCode>$1$0$<seq>` (layout E-038), no el deviceCode.
+  Fix en `buildClientNotifyEnvelope`: root = `{method, info: payload,
+  params: payload, ...payload}`; `info` incluye method/operation/addOrgCode/
+  addChannels(channel codes)/deleteChannels/timeCell/devices[VO completo con
+  channels]. Verificado EN VIVO con suscriptor STOMP a
+  `/topic/mq.common.msg.topic` durante un add real: el MESSAGE entregado es
+  exactamente `{"method":"brms.batchAddDevices","info":{"operation":1,
+  "addOrgCode":"VIGILAB","addChannels":["D0238JDG3016$1$0$0"],...}}`.
+  Ojo parser: ActiveMQ 6.2 emite EOLs entre frames STOMP (un `\n` antes de
+  cada frame) — hay que strippearlos antes de leer el comando.
+  Estado servidor OK (state-probe): device/page 1 row D0238JDG3016
+  orgCode=VIGILAB online; tree/orgs VIGILAB bajo 001 con device+channel;
+  tree/devices, tree/channels, grade-device-tree y admin tree/deviceOrg
+  todos incluyen D0238JDG3016 / D0238JDG3016$1$0$0. Tests post-fix: unit
+  46/0/1, e2e 12/12 ×3 limpias, live-verify 15/15 post-deploy.
+  Sesión operador 02:10:57 add (200) + re-fetch tree/devices 48506B — el
+  server ya era consistente; el gap era 100% el descarte en ParseMQMsg.**
+- **Siguiente paso**: retest del operador con el cliente CERRADO y reabierto
+  (MSG.exe reconecta ssl://61616 y re-suscribe mq.* en el login): relogin,
+  Add Device ONVIF 192.168.0.238:8021, Discover join, combo Organization
+  (VIGILAB), Management→Sites. Con E-088 (topics mq.*) + E-089
+  (amq-msg-type:text → TextMessage) + E-091 (envelope method+info con channel
+  codes) el notify debe despachar en DPSDK y el cliente re-pedir
+  tree/deviceOrg+tree/devices sin "Operation timed out". Monitorear:
+  `docker logs dss-v2-harness-brms-gateway-1` ([E039-NOTIFY]) y Jolokia
+  Enqueue/Dequeue en mq.common.msg.topic[.1] con ConsumerCount=1 mientras el
+  cliente está logueado.
