@@ -10,6 +10,8 @@ import {
   createMqttBroker,
   createNotifyHub,
   buildMqConfigPayload,
+  buildClientNotifyEnvelope,
+  clientMqTopics,
   MQ_TOPICS,
   TOPIC_BATCH_ADD_DEVICES,
   TOPIC_CHANNEL_STATUSES
@@ -181,8 +183,28 @@ describe('E-039/E-040 notify hub fans out to WS + MQTT + ActiveMQ topics', () =>
     assert.deepEqual(published.map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
     assert.ok(JSON.parse(published[0][1]).deviceCode === 'HUB01');
     // E-040: same two topics on the ActiveMQ bus (destination carries /topic/)
-    assert.deepEqual(amqPublished.map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
+    assert.deepEqual(amqPublished.slice(0, 2).map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
     assert.ok(JSON.parse(amqPublished[0][1]).deviceCode === 'HUB01');
+    // E-088: the native client (MSG.exe) listens on the mq.*.msg.topic pool,
+    // NOT on brms.notify* (ConsumerCount=0 there, live Jolokia evidence) - the
+    // method envelope must also go to every mq.* topic (bare + UserId).
+    const mqPubs = amqPublished.slice(2);
+    assert.deepEqual(mqPubs.map((p) => p[0]), clientMqTopics('1'));
+    for (const [, b] of mqPubs) {
+      const env = JSON.parse(b);
+      assert.equal(env.method, 'brms.batchAddDevices');
+      assert.deepEqual(env.params.addChannels, ['HUB01']);
+      assert.equal(env.params.operation, 1);
+      assert.equal(env.addChannels[0], 'HUB01', 'flat copy for handlers reading top-level keys');
+    }
+  });
+
+  it('E-088 envelope: DEVICE_DELETED maps to vms.deleteDev with deleteChannels', () => {
+    const env = JSON.parse(buildClientNotifyEnvelope('DEVICE_DELETED', { deviceCode: 'X1', orgCode: 'VIGILAB' }));
+    assert.equal(env.method, 'vms.deleteDev');
+    assert.equal(env.params.operation, 2);
+    assert.deepEqual(env.params.deleteChannels, ['X1']);
+    assert.equal(env.params.deleteOrgCode, 'VIGILAB');
   });
 });
 

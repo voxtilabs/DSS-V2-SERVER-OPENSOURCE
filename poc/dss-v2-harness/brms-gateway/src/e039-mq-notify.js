@@ -44,6 +44,58 @@ export const MQ_TOPICS = [
 export const TOPIC_BATCH_ADD_DEVICES = 'brms.notifyBatchAddDevices';
 export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
 
+// E-088 (lab evidence 2026-11-04 ~22:00 UTC, Jolokia on the live broker):
+// MSG.exe connects OpenWire ssl://61616 and subscribes ONLY to its hardcoded
+// mq.*.msg.topic pool (ConsumerCount=1 on mq.common.msg.topic,
+// mq.vehicle.msg.topic, mq.alarm.msg.group.topic., mq.event.msg.topic.1,
+// mq.alarm.msg.topic.1, mq.carsurvey.alarm.msg.topic.1; ConsumerCount=0 on
+// every brms.notify* topic). Pool prefixes from MSG.exe (file 0x1f6250):
+// per-user topics are "<prefix><UserId>" (observed ".1" = UserId '1' served
+// by GetMqConfig), global ones are subscribed bare. So the notify envelope is
+// ALSO published to these topics, or the native client never receives it
+// ("Operation timed out" on CDevAdd, tree never refreshes).
+export const CLIENT_MQ_TOPIC_PREFIXES = [
+  'mq.alarm.msg.topic.',
+  'mq.alarm.msg.group.topic.',
+  'mq.event.msg.group.topic.',
+  'mq.event.msg.topic.',
+  'mq.common.msg.topic',
+  'mq.carsurvey.alarm.msg.topic.',
+  'mq.vehicle.msg.topic'
+];
+
+export function clientMqTopics(userId = '1') {
+  const id = String(userId || '');
+  const out = [];
+  for (const p of CLIENT_MQ_TOPIC_PREFIXES) {
+    out.push(p);
+    if (id) out.push(`${p}${id}`);
+  }
+  return out;
+}
+
+// E-088: envelope the native client parses (DPSDK ParseMQMsg dispatches on the
+// `method` string from the pool at DPSDK file 0xc71000+, e.g.
+// "brms.batchAddDevices"; payload keys read by the handlers:
+// operation/addOrgCode/deleteOrgCode/addChannels/deleteChannels/devices).
+// Keys are sent BOTH flat and under `params` - the DPSDK handlers were seen
+// reading both shapes (FUN_180054e30, FUN_180363e30).
+export function buildClientNotifyEnvelope(type, device) {
+  const d = typeof device === 'object' ? device : { deviceCode: String(device) };
+  const code = d.deviceCode || '';
+  const deleting = type === 'DEVICE_DELETED';
+  const method = deleting ? 'vms.deleteDev' : 'brms.batchAddDevices';
+  const payload = {
+    operation: deleting ? 2 : 1,
+    addOrgCode: deleting ? '' : (d.orgCode || ''),
+    deleteOrgCode: deleting ? (d.orgCode || '') : '',
+    addChannels: deleting || !code ? [] : [code],
+    deleteChannels: deleting && code ? [code] : [],
+    devices: [d]
+  };
+  return JSON.stringify({ method, params: payload, ...payload });
+}
+
 // GetMqConfig data payload. TopicInfos entries use the real parser keys
 // ("Topic", "IsAccUser"); dual-key strategy like the rest of the RPC layer.
 //
@@ -62,13 +114,19 @@ export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
 // the `addr` field. The pipe->MSG.exe (OpenWire) path is taken when `mqtt`
 // is EMPTY; the libcurl-MQTT branch only on a non-empty mqtt value.
 // E-087 lab evidence (2026-11-04 22:14:49-22:15:56 session): with mqtt ""
-// MSG.exe NEVER dialed 61616 (0 connection events in the broker log) =>
-// CDevAdd waits its notify on MQ and toasts "Operation timed out", and the
-// tree never refreshes (no HTTP re-fetch after join/batch). So we now serve
-// mqtt = "<host>:1883" (plain host:port, same shape as addr; DPSDK builds
-// mqtt://<mqtt>/<topic> via its "%s://%s" formatter) -> the client subscribes
-// DIRECTLY on our MQTT 1883 broker, where the gateway already dual-pushes
-// brms.notify*. addr/MQConfig stay 61616 (OpenWire ssl, MSG.exe fallback).
+// the notify never reached the client -> CDevAdd toasted "Operation timed
+// out". NOTE (E-088, refutes the old reading): "0 connection events in the
+// broker log" did NOT mean MSG.exe never dialed - ActiveMQ 6.2 does not
+// INFO-log successful connections. Jolokia on the live broker showed
+// CurrentConnectionsCount=2 and MSG.exe subscribed to the mq.*.msg.topic
+// pool; the real gap was that we only published brms.notify* (ConsumerCount
+// 0). So: mqtt stays "<host>:1883" (harmless dual path) and the notify
+// envelope is now ALSO published to the mq.* topics (see below).
+// addr/MQConfig stay 61616 (OpenWire ssl, MSG.exe).
+// E-088: UserId served in GetMqConfig - MSG.exe appends it to the per-user
+// mq.* topics (observed "mq.event.msg.topic.1" with UserId '1').
+export const MQ_USER_ID = '1';
+
 export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1883, enabled }) {
   const mqAddr = `${publicHost}:${amqPort}`;
   const mqttAddr = `${publicHost}:${mqttPort}`;
@@ -95,7 +153,7 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1
     // class of lab credentials already used by the gateway/e2e admin login)
     MQUser: 'admin',
     MQPwd: 'admin',
-    UserId: '1',
+    UserId: MQ_USER_ID,
     GroupId: '',
     SSLEnable: 0,
     UnSSLPort: amqPort,
@@ -241,7 +299,7 @@ export function createMqttBroker() {
 // --- notify hub: WS event stream + MQTT topics -------------------------------
 // WS message keeps BOTH shapes seen in the wild: the flat DEVICE_ADDED frame
 // (E-025) and the {type, data, timestamp} event envelope (EV-029 §event).
-export function createNotifyHub({ wsClients, mqttPublish, amqPublish }) {
+export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId = '1' }) {
   function deviceEvent(type, device) {
     if (!device) return;
     const d = typeof device === 'object' ? device : { deviceCode: String(device) };
@@ -258,6 +316,11 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish }) {
       try {
         amqPublish(TOPIC_BATCH_ADD_DEVICES, body);
         amqPublish(TOPIC_CHANNEL_STATUSES, body);
+        // E-088: MSG.exe listens on the mq.*.msg.topic pool, NOT on
+        // brms.notify* (ConsumerCount=0 there) - publish the method envelope
+        // there too or the native client never gets the notify.
+        const envelope = buildClientNotifyEnvelope(type, d);
+        for (const t of clientMqTopics(mqUserId)) amqPublish(t, envelope);
       } catch (err) { console.log('[E040-NOTIFY] amq publish failed:', err.message); }
     }
     // WS: dual-shape frame.

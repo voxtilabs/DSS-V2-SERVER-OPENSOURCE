@@ -12,7 +12,8 @@ import { WebSocketServer } from 'ws';
 import {
   createMqttBroker,
   createNotifyHub,
-  buildMqConfigPayload
+  buildMqConfigPayload,
+  MQ_USER_ID
 } from './e039-mq-notify.js';
 // E-040: STOMP publisher to the REAL ActiveMQ Classic broker (OpenWire
 // 61616 is what the native client's MSG.exe actually connects to - see the
@@ -269,7 +270,10 @@ const AMQ = AMQ_ENABLE
 const NOTIFY = createNotifyHub({
   wsClients: WS_CLIENTS,
   mqttPublish: (topic, body) => MQTT.publish(topic, body),
-  amqPublish: AMQ ? (topic, body) => AMQ.publish(`/topic/${topic}`, body) : null
+  amqPublish: AMQ ? (topic, body) => AMQ.publish(`/topic/${topic}`, body) : null,
+  // E-088: same UserId served by GetMqConfig so the mq.* notify topics match
+  // the ones MSG.exe subscribed to (mq.<x>.msg.topic.<UserId>).
+  mqUserId: MQ_USER_ID
 });
 
 // ===== ARS TCP Binary Protocol (DVRIP/DHIP) =====
