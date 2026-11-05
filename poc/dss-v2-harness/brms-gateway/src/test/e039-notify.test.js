@@ -11,6 +11,7 @@ import {
   createNotifyHub,
   buildMqConfigPayload,
   buildClientNotifyEnvelope,
+  buildClientNotifyEnvelopes,
   clientMqTopics,
   MQ_TOPICS,
   TOPIC_BATCH_ADD_DEVICES,
@@ -189,31 +190,47 @@ describe('E-039/E-040 notify hub fans out to WS + MQTT + ActiveMQ topics', () =>
     // NOT on brms.notify* (ConsumerCount=0 there, live Jolokia evidence) - the
     // method envelope must also go to every mq.* topic (bare + UserId).
     const mqPubs = amqPublished.slice(2);
-    assert.deepEqual(mqPubs.map((p) => p[0]), clientMqTopics('1'));
+    // E-092: 3 method envelopes x every mq.* topic (bare + UserId suffix)
+    assert.equal(mqPubs.length, 3 * clientMqTopics('1').length);
+    const topics = mqPubs.map((p) => p[0]);
+    const firstWave = mqPubs.slice(0, clientMqTopics('1').length);
+    for (const t of firstWave) assert.ok(topics.includes(t[0]));
+    const byMethod = new Map();
     for (const [, b] of mqPubs) {
       const env = JSON.parse(b);
-      assert.equal(env.method, 'brms.batchAddDevices');
       // E-091: ParseMQMsg (FUN_1800306b0) requires root keys "method" AND
-      // "info"; the handlers receive root["info"] (FUN_1800309c0).
+      // "info"; handlers receive root["info"] (dispatcher FUN_180030ed0).
       assert.ok(env.info && typeof env.info === 'object', 'root.info object required by ParseMQMsg gate');
-      assert.equal(env.info.method, 'brms.batchAddDevices');
-      assert.deepEqual(env.info.addChannels, ['HUB01$1$0$0'], 'addChannels carries CHANNEL codes (<code>$1$0$<seq>)');
-      assert.equal(env.info.operation, 1);
-      assert.equal(typeof env.info.timeCell, 'number');
-      assert.equal(env.params.operation, 1, 'params copy kept');
-      assert.deepEqual(env.addChannels, ['HUB01$1$0$0'], 'flat copy for handlers reading top-level keys');
-      assert.equal(env.info.devices[0].channels[0].channelCode, 'HUB01$1$0$0');
+      assert.ok(!('params' in env), 'params is never read on the MQ path');
+      if (!byMethod.has(env.method)) byMethod.set(env.method, env);
     }
+    // tree push: vms.LogicOrgChannel op=1 with CHANNEL codes (<code>$1$0$<seq>)
+    const loc = byMethod.get('vms.LogicOrgChannel');
+    assert.ok(loc, 'vms.LogicOrgChannel envelope present');
+    assert.equal(loc.info.operation, 1);
+    assert.deepEqual(loc.info.addChannels, ['HUB01$1$0$0']);
+    // device node: vms.addDev with full VO
+    const addDev = byMethod.get('vms.addDev');
+    assert.ok(addDev, 'vms.addDev envelope present');
+    assert.equal(addDev.info.code, 'HUB01');
+    assert.equal(addDev.info.channels[0].channelId, 'HUB01$1$0$0');
+    // result ACK: brms.batchAddDevices info={session,successfulCount,failedCount}
+    const ack = byMethod.get('brms.batchAddDevices');
+    assert.ok(ack, 'brms.batchAddDevices ACK present');
+    assert.equal(ack.info.successfulCount, 1);
+    assert.equal(ack.info.failedCount, 0);
+    assert.ok('session' in ack.info);
   });
 
-  it('E-088/E-091 envelope: DEVICE_DELETED maps to vms.deleteDev with deleteChannels', () => {
-    const env = JSON.parse(buildClientNotifyEnvelope('DEVICE_DELETED', { deviceCode: 'X1', orgCode: 'VIGILAB', channelNum: 2 }));
-    assert.equal(env.method, 'vms.deleteDev');
-    assert.equal(env.info.operation, 2);
-    assert.deepEqual(env.info.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
-    assert.equal(env.info.deleteOrgCode, 'VIGILAB');
-    assert.deepEqual(env.params.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
-    assert.deepEqual(env.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
+  it('E-092 envelope: DEVICE_DELETED maps to vms.LogicOrgChannel op=3 + vms.deleteDev', () => {
+    const envs = buildClientNotifyEnvelopes('DEVICE_DELETED', { deviceCode: 'X1', orgCode: 'VIGILAB', channelNum: 2 }).map((s) => JSON.parse(s));
+    const loc = envs.find((e) => e.method === 'vms.LogicOrgChannel');
+    assert.equal(loc.info.operation, 3);
+    assert.deepEqual(loc.info.deleteChannels, ['X1$1$0$0', 'X1$1$0$1']);
+    assert.equal(loc.info.deleteOrgCode, 'VIGILAB');
+    const del = envs.find((e) => e.method === 'vms.deleteDev');
+    assert.equal(del.info.devices[0].deviceCode, 'X1');
+    assert.equal(del.info.devices[0].orgCode, 'VIGILAB');
   });
 });
 

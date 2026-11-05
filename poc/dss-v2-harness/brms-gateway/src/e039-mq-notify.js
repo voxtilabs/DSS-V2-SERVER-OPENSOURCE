@@ -101,32 +101,86 @@ export function dssChannelCodes(deviceCode, channelNum) {
 }
 
 export function buildClientNotifyEnvelope(type, device) {
+  // Kept for compatibility/tests: returns the JSON of the FIRST (primary)
+  // envelope of buildClientNotifyEnvelopes().
+  return buildClientNotifyEnvelopes(type, device)[0];
+}
+
+// E-092 (RE-SCHEMA-DPSDK.md, Ghidra runs dpsdk7-11 on DPSDK.dll):
+// - MQ path (ParseMQMsg FUN_1800306b0) reads ONLY root "method" + "info";
+//   "params"/flat keys are ignored on this path. Handlers receive root["info"].
+// - brms.batchAddDevices is the batch-add RESULT ACK: info = {session:string,
+//   successfulCount:int, failedCount:int} -> UI callback 0x5e. It carries NO
+//   device list - sending addChannels under it does nothing.
+// - The method that actually pushes a device+channels into the org tree is
+//   vms.LogicOrgChannel: info = {operation:1..3, addOrgCode, addChannels:
+//   ["<deviceCode>$1$0$<seq>"], deleteOrgCode, deleteChannels} (parser
+//   FUN_180363e30; handler FUN_1800328b0). vms.addDev (handler FUN_180032ac0,
+//   parser FUN_180364830/FUN_1803649a0, callback 0xd) takes a full device
+//   object: orgCode + code/name/deviceIp/devicePort/serverCode/protocol/
+//   manufacturer/type/category/model/sn/status + channels[]/{channelId,...}.
+// - Delete side: vms.LogicOrgChannel op=3 {deleteOrgCode, deleteChannels} and
+//   vms.deleteDev info={devices:[{deviceCode, orgCode, reason}]}.
+export function buildClientNotifyEnvelopes(type, device) {
   const d = typeof device === 'object' ? device : { deviceCode: String(device) };
   const code = d.deviceCode || '';
   const deleting = type === 'DEVICE_DELETED';
-  const method = deleting ? 'vms.deleteDev' : 'brms.batchAddDevices';
+  const orgCode = d.orgCode || '';
   const channelNum = Number(d.channelNum || d.encoderChannelCount || d.channelCount) || 1;
   const channelCodes = code ? dssChannelCodes(code, channelNum) : [];
   const channels = Array.isArray(d.channels) && d.channels.length
     ? d.channels
     : channelCodes.map((channelCode, idx) => ({
         channelCode, channelId: channelCode, channelSeq: idx, channelNo: idx + 1,
-        deviceCode: code, deviceName: d.deviceName || '', orgCode: d.orgCode || ''
+        channelName: idx === 0 ? (d.deviceName || code) : `${d.deviceName || code} CH${idx + 1}`,
+        unitType: '1', deviceCode: code, deviceName: d.deviceName || '', orgCode
       }));
-  const payload = {
-    method,
-    operation: deleting ? 2 : 1,
-    addOrgCode: deleting ? '' : (d.orgCode || ''),
-    deleteOrgCode: deleting ? (d.orgCode || '') : '',
-    addChannels: deleting ? [] : channelCodes,
-    deleteChannels: deleting ? channelCodes : [],
-    timeCell: Date.now(),
-    devices: [{ ...d, channels, channelList: channels }]
+  const env = (method, info) => JSON.stringify({ method, info });
+  if (deleting) {
+    return [
+      env('vms.LogicOrgChannel', {
+        operation: 3, addOrgCode: '', addChannels: [],
+        deleteOrgCode: orgCode, deleteChannels: channelCodes
+      }),
+      env('vms.deleteDev', {
+        devices: [{ deviceCode: code, orgCode, reason: 0 }]
+      })
+    ];
+  }
+  const addDevInfo = {
+    orgCode,
+    code,
+    name: d.deviceName || code,
+    deviceIp: d.deviceIp || '',
+    devicePort: Number(d.devicePort) || 0,
+    serverCode: d.serverCode || 'video#local',
+    protocol: d.protocolName || 'ONVIF',
+    streamProtocol: d.protocolType || '99',
+    manufacturer: d.manufacturer || '',
+    type: String(d.deviceType || '1'),
+    category: String(d.deviceCategory || '1'),
+    model: d.model || '',
+    deviceModelStr: d.model || '',
+    sn: d.serialNumber || '',
+    status: 1,
+    loginType: 9,
+    domainId: '0',
+    channels,
+    units: [{ unitType: '1', unitSeq: 0, channels }]
   };
-  // E-091: root must carry "method" AND "info" (ParseMQMsg gate); the handlers
-  // receive root["info"], so the payload goes there - plus flat and "params"
-  // copies for the other reader shapes.
-  return JSON.stringify({ method, info: payload, params: payload, ...payload });
+  return [
+    // 1) tree push: add the channels under the org (this is what makes the
+    //    camera show up under VIGILAB in Dispositivos Agregados)
+    env('vms.LogicOrgChannel', {
+      operation: 1, addOrgCode: orgCode, addChannels: channelCodes,
+      deleteOrgCode: '', deleteChannels: []
+    }),
+    // 2) full device node
+    env('vms.addDev', addDevInfo),
+    // 3) batch-add result ACK (clears the CDevAdd waiter instead of
+    //    "Operation timed out")
+    env('brms.batchAddDevices', { session: '', successfulCount: 1, failedCount: 0 })
+  ];
 }
 
 // GetMqConfig data payload. TopicInfos entries use the real parser keys
@@ -350,10 +404,14 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
         amqPublish(TOPIC_BATCH_ADD_DEVICES, body);
         amqPublish(TOPIC_CHANNEL_STATUSES, body);
         // E-088: MSG.exe listens on the mq.*.msg.topic pool, NOT on
-        // brms.notify* (ConsumerCount=0 there) - publish the method envelope
+        // brms.notify* (ConsumerCount=0 there) - publish the method envelopes
         // there too or the native client never gets the notify.
-        const envelope = buildClientNotifyEnvelope(type, d);
-        for (const t of clientMqTopics(mqUserId)) amqPublish(t, envelope);
+        // E-092: one envelope per MQ method (vms.LogicOrgChannel tree push,
+        // vms.addDev device node, brms.batchAddDevices result ACK) to every
+        // mq.* topic (bare + UserId suffix).
+        for (const envelope of buildClientNotifyEnvelopes(type, d)) {
+          for (const t of clientMqTopics(mqUserId)) amqPublish(t, envelope);
+        }
       } catch (err) { console.log('[E040-NOTIFY] amq publish failed:', err.message); }
     }
     // WS: dual-shape frame.
