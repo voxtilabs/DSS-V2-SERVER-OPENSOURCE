@@ -20,7 +20,7 @@ import {
 // module header for the pcap + MSG.exe MQInit evidence).
 import { createStompPublisher } from './e040-amq-notify.js';
 // E-041: persistent org store (root '001' + 'VIGILAB' in data/orgs.json).
-import { loadOrgsFromDisk, buildGetOrganizationsPayload } from './e041-orgs.js';
+import { loadOrgsFromDisk, buildGetOrganizationsPayload, buildOrganizationListPayload } from './e041-orgs.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 // E-024: Dahua DSS v1.1 catalog contracts (device categories, access
@@ -1044,7 +1044,20 @@ app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({
 // Access (OBMS) + parking (IPMS) empty modules.
 app.get('/obms/api/v1.1/acp/area/list', async () => envelope({ list: [], total: 0 }));
 app.get('/obms/api/v1.1/acs/person-group/list', async () => envelope({ list: [], total: 0 }));
-app.get('/ipms/api/v1.1/organization/list', async () => envelope({ list: [], total: 0 }));
+// E-093: the native CDevAdd "Organization" combo (cmbGroupName) is filled by
+// DPSDK GetOrgList -> GET /ipms/api/v1.1/organization/list (FUN_1802af3d0,
+// parser FUN_1804c5f00). It was served EMPTY ({list:[],total:0}, cl=59 -
+// checklist 2026-11-05 ~04:05 UTC), so the combo listed nothing and
+// join/batch went out with orgCode:"". Serve the persistent org store
+// (001 root + VIGILAB) with dual keys list/results + total/count; item keys
+// per RE-SCHEMA-DPSDK.md §5.2 (see buildOrganizationListPayload).
+app.get('/ipms/api/v1.1/organization/list', async () => envelope(buildOrganizationListPayload()));
+// Same contract under the BRMS prefix the web SPA calls (useDeviceApi getOrg
+// -> /brms/api/v1.1/organization/list); registered before the /brms/api/*
+// fallback below so the real orgs win over {list:[],total:0}.
+app.get('/brms/api/v1.1/organization/list', async () => envelope(buildOrganizationListPayload()));
+app.get('/brms/api/v1.0/organization/list', async () => envelope(buildOrganizationListPayload()));
+app.post('/ipms/api/v1.1/organization/list', async () => envelope(buildOrganizationListPayload()));
 app.get('/ipms/api/v1.1/parking-lot/detail/list', async () => envelope({ list: [], total: 0 }));
 app.get('/IPMS/API/entrance/parking-lot/binding-vto-itc', async () => envelope({ list: [], count: 0 }));
 

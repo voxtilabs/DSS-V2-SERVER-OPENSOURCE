@@ -122,6 +122,57 @@ export function buildGetOrganizationsPayload() {
   };
 }
 
+// E-093: HTTP list contract for GET /ipms/api/v1.1/organization/list. The
+// native client fetches it via DPSDK CRestLogical::GetOrgList (FUN_1802af3d0,
+// URL "v1.1/organization/list"; response parsed in CDpsdkManager::GetOrgList
+// FUN_1804c5f00) to fill the CDevAdd Organization combo (cmbGroupName,
+// PluginFactory.dll). The REST layer unwraps `data` and reads the row array
+// + count, so BOTH spellings are served (list/results, total/count). Item
+// keys follow RE-SCHEMA-DPSDK.md §5.2 (vms.LogicOrg org object: orgCode,
+// orgName, id, parentCode, sort, domainId, modifyTime, channels,
+// deparmentsCount [sic - typo in the DPSDK.dll string pool]) merged with the
+// E-087 GetOrganizationsVo descriptor keys and the native-tree aliases
+// (hasChild/checked served as "1"/"0" strings, the client binds strings).
+export function buildOrganizationListPayload() {
+  const orgs = listOrgs();
+  const items = orgs.map((o) => {
+    const children = orgs.filter((x) => x.parentCode === o.code && x.code !== o.code);
+    return {
+      // RE-SCHEMA-DPSDK.md §5.2 - vms.LogicOrg org object keys
+      orgCode: o.code,
+      orgName: o.name,
+      id: o.code,
+      parentCode: o.parentCode || '0',
+      sort: '0',
+      domainId: String(o.domainId ?? '0'),
+      modifyTime: o.modifyTime || '',
+      channels: [],
+      deparmentsCount: String(children.length), // sic - binary typo, keep it
+      // E-087 GetOrganizationsVo descriptor + tree aliases
+      parentOrgCode: o.parentCode || '0',
+      orgType: String(o.orgType ?? '1'),
+      sourceType: '',
+      sourceId: '',
+      associateId: '',
+      remark: '',
+      authority: '',
+      code: o.code,
+      name: o.name,
+      hasChild: children.length ? '1' : '0',
+      checked: '0'
+    };
+  });
+  return {
+    list: items,
+    results: items,
+    organizations: items,
+    items,
+    total: items.length,
+    count: items.length,
+    totalCount: items.length
+  };
+}
+
 export function addOrg({ code, name, parentCode, orgType = '1', domainId = '0' }) {
   const c = String(code ?? '').trim();
   if (!c) return { error: 'code is required' };

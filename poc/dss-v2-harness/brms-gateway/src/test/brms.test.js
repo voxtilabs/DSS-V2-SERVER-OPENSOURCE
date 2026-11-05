@@ -407,6 +407,40 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     });
   });
 
+  it('E-093 /ipms/api/v1.1/organization/list serves the org store (001+VIGILAB) with dual keys list/results + total/count', async () => {
+    // The native CDevAdd Organization combo (cmbGroupName) is fed by DPSDK
+    // GetOrgList -> GET /ipms/api/v1.1/organization/list; it was empty
+    // ({list:[],total:0}) so join/batch went out with orgCode:"".
+    const r = await fetch(`${BASE}/ipms/api/v1.1/organization/list`);
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.code, 1000);
+    const d = j.data;
+    assert.ok(Array.isArray(d.list) && Array.isArray(d.results), 'dual keys list+results');
+    assert.equal(d.list.length, d.results.length, 'list === results');
+    assert.equal(d.total, d.list.length, 'total');
+    assert.equal(d.count, d.list.length, 'count');
+    const codes = d.list.map((o) => o.orgCode);
+    assert.ok(codes.includes('001') && codes.includes('VIGILAB'), '001+VIGILAB present: ' + codes.join(','));
+    const vig = d.list.find((o) => o.orgCode === 'VIGILAB');
+    assert.equal(vig.orgName, 'VIGILAB');
+    assert.equal(vig.parentCode, '001');
+    assert.equal(vig.parentOrgCode, '001');
+    // RE-SCHEMA-DPSDK.md §5.2 vms.LogicOrg org keys (deparmentsCount sic)
+    for (const k of ['orgCode', 'orgName', 'id', 'parentCode', 'sort', 'domainId', 'modifyTime', 'channels', 'deparmentsCount']) {
+      assert.ok(k in vig, 'org item key ' + k);
+    }
+    assert.equal(vig.hasChild, '0', 'string flags, not booleans');
+    // BRMS aliases (web SPA useDeviceApi getOrg) serve the same payload
+    for (const p of ['/brms/api/v1.1/organization/list', '/brms/api/v1.0/organization/list']) {
+      const r2 = await fetch(`${BASE}${p}`);
+      assert.equal(r2.status, 200, p);
+      const j2 = await r2.json();
+      assert.ok((j2.data.list || []).some((o) => o.orgCode === 'VIGILAB'), p + ' has VIGILAB');
+      assert.equal(j2.data.total, j2.data.count);
+    }
+  });
+
   it('E-032 registry persistence: discovery join/batch writes devices.json, delete/batch rewrites it', async () => {
     const readStore = () => {
       try { return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')); } catch { return []; }
