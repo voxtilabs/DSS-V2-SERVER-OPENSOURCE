@@ -360,7 +360,8 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(admin.status, '1', 'admin status must be STRING "1"');
     assert.strictEqual(admin.online, '1');
     assert.strictEqual(admin.locked, '0');
-    assert.ok(Array.isArray(admin.roleIds) && admin.roleIds.includes('1'));
+    assert.strictEqual(admin.roleIds, '1', 'E-101: roleIds is CSV string');
+    assert.ok(Array.isArray(admin.roleIdArray) && admin.roleIdArray.includes('1'), 'roleIdArray alias keeps the array');
     assert.ok(
       typeof admin.id !== 'undefined' && typeof admin.username !== 'undefined',
       'userGroupView reads {value:e.id,label:e.username}'
@@ -476,6 +477,29 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const up = await (await fetch(`${BASE}/brms/api/v1.1/user/page?page=1&pageSize=20`)).json();
     assert.strictEqual(typeof up.data.totalCount, 'string', 'user/page totalCount string');
     assert.ok(up.data.pageData.some((u) => u.username === 'admin'), 'admin visible in user/page');
+  });
+
+  it('E-101 tree full GET (no FALLBACK) + real role write + roleIds CSV', async () => {
+    // GET /full/grade-device-tree: the Users dialog permission tree (observed
+    // live 22:53:21Z falling into [FALLBACK] {list:[],total:0} -> AppHang)
+    const t = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree?sourceType=&protocolType=&orgCode=001&addType=&domain=&roleId=`)).json();
+    assert.equal(t.code, 1000);
+    assert.ok(Array.isArray(t.data.organizations) && Array.isArray(t.data.devices), 'full tree carries organizations+devices');
+    assert.ok(Array.isArray(t.data.channels), 'full tree carries channels');
+    const t2 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree/search/list?keyword=`)).json();
+    assert.ok(Array.isArray(t2.data.channels) && Array.isArray(t2.data.devices));
+    // role write returns a REAL role row (string flags), not a static stub
+    const rw = await (await fetch(`${BASE}/brms/api/v1.1/role`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roleName: 'TestRole', menuCodes: [], functionCodes: [], channelIds: [], deviceCodes: [] }) })).json();
+    assert.strictEqual(rw.data.success, true);
+    assert.ok(rw.data.roleId && rw.data.id === rw.data.roleId, 'role write returns id');
+    assert.strictEqual(rw.data.status, '1');
+    assert.strictEqual(rw.data.roleName, 'TestRole');
+    // user rows: roleIds as CSV string (Dahua convention), arrays under aliases
+    const up = await (await fetch(`${BASE}/brms/api/v1.1/user/page?page=1&pageSize=20`)).json();
+    assert.strictEqual(up.data.pageData[0].roleIds, '1', 'roleIds CSV string');
+    assert.deepStrictEqual(up.data.pageData[0].roleIdArray, ['1'], 'roleIdArray alias');
+    const ud = await (await fetch(`${BASE}/brms/api/v1.1/user/1`)).json();
+    assert.strictEqual(ud.data.roleIds, '1');
   });
 
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');

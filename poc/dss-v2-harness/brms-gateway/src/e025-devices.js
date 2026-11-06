@@ -1404,6 +1404,19 @@ export const USER_GROUP_STORE = [
   }
 ];
 
+// E-101: Dahua REST serves id/name lists as CSV STRINGS ("1,2") in user rows;
+// the native parser may split(',') on them - a JSON array there is the prime
+// AppHang suspect after user/page. Arrays are kept under roleIdArray/roleNameArray.
+function serializeUserRow(u) {
+  return {
+    ...u,
+    roleIds: Array.isArray(u.roleIds) ? u.roleIds.join(',') : String(u.roleIds ?? ''),
+    roleNames: Array.isArray(u.roleNames) ? u.roleNames.join(',') : String(u.roleNames ?? ''),
+    roleIdArray: Array.isArray(u.roleIds) ? u.roleIds : [],
+    roleNameArray: Array.isArray(u.roleNames) ? u.roleNames : []
+  };
+}
+
 export function buildUserPagePayload(query = {}) {
   const q = (key) => String(query[key] ?? '').trim();
   const username = q('username').toLowerCase();
@@ -1423,7 +1436,7 @@ export function buildUserPagePayload(query = {}) {
   });
   const totalCount = rows.length;
   const start = (page - 1) * pageSize;
-  const pageData = rows.slice(start, start + pageSize);
+  const pageData = rows.slice(start, start + pageSize).map(serializeUserRow);
   return {
     pageData, list: pageData, results: pageData, items: pageData, userList: pageData,
     totalCount: String(totalCount), total: String(totalCount), // E-100: string counters
@@ -1434,7 +1447,7 @@ export function buildUserPagePayload(query = {}) {
 
 export function buildUserDetailPayload(userId) {
   const row = USER_STORE.find((u) => String(userId) === u.id || String(userId) === u.userId);
-  return row ? { ...row } : null;
+  return row ? serializeUserRow(row) : null; // E-101: CSV roleIds + array aliases
 }
 
 export function buildUserGroupListPayload(query = {}) {

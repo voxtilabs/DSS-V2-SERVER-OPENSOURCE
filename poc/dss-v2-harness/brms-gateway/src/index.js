@@ -1378,6 +1378,20 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
 app.post('/brms/api/v1.1/tree/grade-device-tree', async (req) => envelope(buildGradeDeviceTreePayload(req.body || {})));
 app.post('/brms/api/v1.1/tree/grade-device-tree/search/list', async (req) => envelope(buildGradeDeviceTreeSearchPayload(req.body || {})));
 app.post('/brms/api/v1.0/tree/grade-device-tree', async (req) => envelope(buildGradeDeviceTreePayload(req.body || {})));
+// E-101: the Users/Config permission dialog calls the GET variants with
+// /full/ in the path (observed live 22:53:21Z -> fell into [FALLBACK]
+// {list:[],total:0}, leaving the permission tree loading forever = AppHang).
+// GET and POST, plain and /full/, v1.0 and v1.1 - query and body merged.
+const gdtHandler = async (req) => envelope(buildGradeDeviceTreePayload({ ...req.query, ...(req.body || {}) }));
+const gdtSearchHandler = async (req) => envelope(buildGradeDeviceTreeSearchPayload({ ...req.query, ...(req.body || {}) }));
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  app.get(`${host}/tree/grade-device-tree`, gdtHandler);
+  app.get(`${host}/tree/full/grade-device-tree`, gdtHandler);
+  app.post(`${host}/tree/full/grade-device-tree`, gdtHandler);
+  app.get(`${host}/tree/grade-device-tree/search/list`, gdtSearchHandler);
+  app.get(`${host}/tree/full/grade-device-tree/search/list`, gdtSearchHandler);
+  app.post(`${host}/tree/full/grade-device-tree/search/list`, gdtSearchHandler);
+}
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/storage/plan/channel/record-plan/page`, async (req) => envelope(buildRecordPlanPagePayload(req.query)));
   app.get(`${host}/storage/plan/motion-detection-record-plan/page`, async (req) => envelope(buildMotionDetectionRecordPlanPagePayload(req.query)));
@@ -1649,7 +1663,29 @@ app.get('/brms/api/v1.1/role/:roleId', async (req, reply) => {
   if (!role) return reply.code(404).send(envelope(null, 404, 'Role not found'));
   return envelope(role);
 });
-const roleWriteOk = async () => envelope({ success: true, roleId: '1' });
+// E-101: role write returns the REAL role row (string flags per E-095/E-099)
+// instead of a static stub - the native dialog materializes menuCodes/
+// functionCodes/channelIds/deviceCodes on the returned id (observed POST
+// /role 22:53:29Z with empty arrays; a static roleId '1' can break the
+// native assertion and abort the dialog).
+const roleWriteOk = async (req) => {
+  const b = req.body || {};
+  const roles = buildRolePagePayload().list || [];
+  const nextId = String(roles.length + 1);
+  const id = String(b.roleId || req.params?.roleId || nextId);
+  const role = {
+    roleId: id, id,
+    roleCode: b.roleCode || ('role' + id), roleName: b.roleName || 'New Role',
+    description: b.description || '', userCount: '0',
+    status: '1', statusName: 'Enable', level: String(b.level || id), roleLevel: String(b.level || id),
+    default: '0', editable: '1', deletable: '1', checked: '1', permission: '1', operate: '1',
+    orgCode: b.orgCode || '001',
+    menuCodes: b.menuCodes || [], functionCodes: b.functionCodes || [],
+    channelIds: b.channelIds || [], deviceCodes: b.deviceCodes || [],
+    createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00'
+  };
+  return envelope({ success: true, ...role, role, data: role });
+};
 app.post('/brms/api/v1.1/role', roleWriteOk);
 app.put('/brms/api/v1.1/role', roleWriteOk);
 app.put('/brms/api/v1.1/role/:roleId', roleWriteOk);
