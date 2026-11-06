@@ -183,8 +183,8 @@ export function dahuaRtspUri(ip, channel = 1, subtype = 0) {
 // client never sees "data abnormal" toasts.
 // These were observed during operator testing:
 export const FALLBACK_ROUTES = {
-  // User / role management
-  'GET /brms/api/v1.1/user/list': { list: [], total: 0 },
+  // E-095: 'GET /brms/api/v1.1/user/list' ya NO es fallback - index.js lo sirve
+  // real (admin) antes de este mapa.
   // E-033: monitor/view/view-tree is NOT a fallback any more - it is served by
   // the real ViewController contract (see e033-monitor-views.js).
   'GET /brms/api/v1.1/config/ai/privacy': { enable: 0, privacyMask: [], list: [] },

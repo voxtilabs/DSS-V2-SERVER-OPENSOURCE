@@ -304,6 +304,53 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(chans.data.pageData), 'omms channel/page serves pageData');
   });
 
+  it('E-095 device rows carry STRING status "1" + statusName (SPA strict === DEVICE_STATUS.ONLINE)', async () => {
+    // RE evidence: device-JBrSmGvP.js DEVICE_STATUS:{OFFLINE:"0",ONLINE:"1"};
+    // index-DsQ1Ve9V.js compares e.status === DEVICE_STATUS.ONLINE (strict).
+    for (const ns of ['omms', 'brms']) {
+      const page = await (await fetch(`${BASE}/${ns}/api/v1.1/device/page?page=1&pageSize=100`)).json();
+      const row = page.data.pageData.find((r) => r.deviceIp === '192.168.0.238');
+      assert.ok(row, ns + ' row present');
+      assert.strictEqual(row.status, '1', ns + ' row.status must be the STRING "1", got ' + JSON.stringify(row.status));
+      assert.strictEqual(row.statusName, 'Online');
+      assert.strictEqual(row.onlineStatus, '1');
+      assert.strictEqual(row.faultStatus, '0');
+      assert.strictEqual(row.faultStatusName, 'Normal');
+    }
+    // channel cards: channelStatus === DEVICE_STATUS_TYPE.ONLINE ("1") strict
+    const chans = await (await fetch(`${BASE}/omms/api/v1.1/device/channel/page`)).json();
+    for (const c of chans.data.pageData) {
+      assert.strictEqual(c.channelStatus, '1');
+      assert.strictEqual(c.status, '1');
+      assert.strictEqual(c.statusName, 'Channel Online');
+    }
+    // top cards: bare /omms device/statistics returns top-level counters
+    const stats = await (await fetch(`${BASE}/omms/api/v1.1/device/statistics`)).json();
+    assert.ok(stats.data.deviceCount >= 1 && stats.data.onlineDeviceCount >= 1, 'statistics aggregate counters');
+    // overview derived from registry
+    const ov = await (await fetch(`${BASE}/brms/api/v1.1/account/device/overview`)).json();
+    assert.ok(ov.data.deviceCount >= 1 && ov.data.onlineDeviceCount >= 1 && ov.data.offlineDeviceCount === ov.data.deviceCount - ov.data.onlineDeviceCount);
+    // history tab + export session + disk page + detail
+    const hist = await (await fetch(`${BASE}/omms/api/v1.1/device/status/history/record/fetch/page`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ page: 1, pageSize: 20 }) })).json();
+    assert.ok(Array.isArray(hist.data.pageData) && hist.data.pageData.length >= 1 && hist.data.pageData[0].status === '1' && hist.data.pageData[0].statusName === 'Online');
+    const exp = await (await fetch(`${BASE}/omms/api/v1.1/device/export`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(exp.data.session && exp.data.fileUrl, 'export returns session+fileUrl');
+    const disk = await (await fetch(`${BASE}/omms/api/v1.1/device/disk/status/page`)).json();
+    assert.ok(Array.isArray(disk.data.pageData));
+    const anyPage = await (await fetch(`${BASE}/brms/api/v1.1/device/page?page=1&pageSize=100`)).json();
+    const anyCode = anyPage.data.pageData[0].deviceCode;
+    const det = await (await fetch(`${BASE}/omms/api/v1.1/device/${anyCode}`)).json();
+    assert.strictEqual(det.data.status, '1');
+    assert.strictEqual(det.data.statusName, 'Online');
+    assert.ok('offlineReason' in det.data && 'faultReason' in det.data && 'updateTime' in det.data);
+    // dictionaries requested in the operator session
+    const dict = await (await fetch(`${BASE}/brms/api/v1.1/dictionary/list?types=2001,2016,2052,2053,2055,22,9041,9046`)).json();
+    for (const g of dict.data.results) assert.ok(g.items.length > 0, 'dictionary type ' + g.type + ' non-empty');
+    // user/list real
+    const users = await (await fetch(`${BASE}/brms/api/v1.1/user/list?username=`)).json();
+    assert.ok(users.data.list.some((u) => u.username === 'admin'));
+  });
+
   it('E-025 network / timezone / role / function / subsystem / omms alert types', async () => {
     const net = await (await fetch(`${BASE}/brms/api/v1.1/system/network/list`)).json();
     assert.ok(Array.isArray(net.data.list) && net.data.list.length > 0 && net.data.list[0].ip);

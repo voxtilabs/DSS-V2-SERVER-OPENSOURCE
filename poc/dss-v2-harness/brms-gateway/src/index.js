@@ -20,7 +20,7 @@ import {
 // module header for the pcap + MSG.exe MQInit evidence).
 import { createStompPublisher } from './e040-amq-notify.js';
 // E-041: persistent org store (root '001' + 'VIGILAB' in data/orgs.json).
-import { loadOrgsFromDisk, buildGetOrganizationsPayload, buildOrganizationListPayload } from './e041-orgs.js';
+import { loadOrgsFromDisk, buildGetOrganizationsPayload, buildOrganizationListPayload, deviceOrgCode, orgName } from './e041-orgs.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 // E-024: Dahua DSS v1.1 catalog contracts (device categories, access
@@ -75,7 +75,9 @@ import {
   registerArsDevice,
   createDeviceRecord,
   persistDevice,
-  loadDevicesFromDisk
+  loadDevicesFromDisk,
+  deviceOnlineOf,
+  buildDeviceTableRow
 } from './e025-devices.js';
 // E-026: load persisted devices from disk so they survive restarts and
 // appear in device/page, tree/*, statistics immediately.
@@ -1182,11 +1184,19 @@ app.get('/brms/api/v1.1/alarm/overview/summary', async () => envelope({
   summary: { total: 0, unhandled: 0, handled: 0, handling: 0 },
   list: []
 }));
-app.get('/brms/api/v1.1/account/device/overview', async () => envelope({
-  deviceCount: 1, onlineDeviceCount: 1, offlineDeviceCount: 0,
-  channelCount: 1, onlineChannelCount: 1, offlineChannelCount: 0,
-  overview: { deviceCount: 1, onlineDeviceCount: 1, offlineDeviceCount: 0 }
-}));
+// E-095: overview must derive from the live registry, not hardcoded 1/1/0
+// (the SPA home header reads deviceCount/onlineDeviceCount/offlineDeviceCount).
+app.get('/brms/api/v1.1/account/device/overview', async () => {
+  const devs = [...DEVICE_REGISTRY.values()];
+  const dc = devs.length;
+  const oc = devs.filter((d) => deviceOnlineOf(d)).length;
+  const cc = devs.reduce((n, d) => n + Math.max(1, Number(d.channelNum) || 1), 0);
+  return envelope({
+    deviceCount: dc, onlineDeviceCount: oc, offlineDeviceCount: dc - oc,
+    channelCount: cc, onlineChannelCount: oc, offlineChannelCount: cc - oc,
+    overview: { deviceCount: dc, onlineDeviceCount: oc, offlineDeviceCount: dc - oc }
+  });
+});
 
 // P2P config family ("network abnormal" toasts likely reference this).
 app.get('/brms/api/v1.1/config/p2p', async () => envelope({ p2pEnable: 0, enable: 0, openState: '0', list: [] }));
@@ -1366,6 +1376,24 @@ app.get('/brms/api/v1.0/account/user/level', async () => envelope(buildUserLevel
 app.get('/brms/api/v1.1/config/timezone/info', async (req) => envelope(buildAreaTimezonePayload(req.query.area)));
 app.get('/brms/api/v1.0/config/timezone/info', async (req) => envelope(buildAreaTimezonePayload(req.query.area)));
 
+// E-095: user/list real (the SPA vtalk module calls getUserList?username=&roleId=;
+// it was served by the empty FALLBACK). Registered explicitly so it wins over
+// the FALLBACK_ROUTES loop below.
+app.get('/brms/api/v1.1/user/list', async (req) => {
+  const kw = String(req.query?.username ?? req.query?.keyword ?? '').trim().toLowerCase();
+  const admin = {
+    userId: '1', id: '1', username: 'admin', realName: 'Administrator',
+    roleId: '1', roleName: 'Super Administrator', orgCode: '001',
+    status: '1', enable: '1', online: '1', createTime: '2026-01-01 00:00:00'
+  };
+  const list = kw && !admin.username.includes(kw) ? [] : [admin];
+  return envelope({
+    list, results: list, items: list,
+    total: list.length, totalCount: list.length,
+    pageNo: 1, pageSize: 20
+  });
+});
+
 // --- device lists ---
 app.get('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
 app.get('/brms/api/v1.0/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
@@ -1386,7 +1414,26 @@ app.get('/omms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePay
 app.post('/omms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload({ ...req.query, ...(req.body || {}) })));
 app.get('/omms/api/v1.1/device/statistics/group-by-device-category/list', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), req.query)));
 app.post('/omms/api/v1.1/device/statistics/group-by-device-category/list', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), { ...req.query, ...(req.body || {}) })));
-app.get('/omms/api/v1.1/device/statistics', async (req) => envelope(buildStatisticsCategoryPayload(buildDeviceTypeResults(), req.query)));
+// E-095: the top cards of the DeviceStatus page (RealDeviceStatus) call the
+// BARE /omms/api/v1.1/device/statistics and read TOP-LEVEL .deviceCount /
+// .onlineDeviceCount / .abnormalDeviceCount / .alertDeviceCount (RE-SPA-part3
+// §3) - not the grouped list. Serve real aggregates from the registry.
+app.get('/omms/api/v1.1/device/statistics', async () => {
+  const devs = [...DEVICE_REGISTRY.values()];
+  const dc = devs.length;
+  const oc = devs.filter((d) => deviceOnlineOf(d)).length;
+  return envelope({
+    deviceCount: dc, onlineDeviceCount: oc, offlineDeviceCount: dc - oc,
+    abnormalDeviceCount: 0, alertDeviceCount: 0,
+    channelCount: devs.reduce((n, d) => n + Math.max(1, Number(d.channelNum) || 1), 0),
+    results: buildStatisticsCategoryPayload(buildDeviceTypeResults(), {}).results
+  });
+});
+// E-095: exportDevices (POST /omms/api/v1.1/device/export) reads .session/.fileUrl
+app.post('/omms/api/v1.1/device/export', async () => envelope({
+  session: genToken().slice(0, 16),
+  fileUrl: '/omms/api/v1.1/device/export/file?session=' + genToken().slice(0, 16)
+}));
 app.get('/omms/api/v1.1/device/export', async (req) => envelope(buildDevicePagePayload(req.query)));
 app.get('/omms/api/v1.1/channel/page', async () => {
   const list = allChannels();
@@ -1395,6 +1442,55 @@ app.get('/omms/api/v1.1/channel/page', async () => {
 app.get('/omms/api/v1.1/device/channel/page', async () => {
   const list = allChannels();
   return envelope({ list, results: list, channelList: list, items: list, pageData: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: list.length || 20 });
+});
+// E-095: DeviceStatus History tab - POST fetch/page reads .pageData[] rows with
+// deviceCode/deviceName/deviceIp/deviceCategoryName/deviceTypeName/orgName/
+// orgCode/status/statusName/startTime/endTime/duration + .totalCount (RE-SPA-part3 §4)
+app.post('/omms/api/v1.1/device/status/history/record/fetch/page', async (req) => {
+  const body = req.body || {};
+  const now = Math.floor(Date.now() / 1000);
+  const rows = [...DEVICE_REGISTRY.values()].map((d) => {
+    const on = deviceOnlineOf(d);
+    return {
+      deviceCode: d.deviceCode, deviceName: d.deviceName, deviceIp: d.deviceIp,
+      deviceCategory: String(d.deviceCategory || '1'),
+      deviceCategoryName: d.deviceCategoryName || 'Encoder',
+      deviceTypeName: d.deviceTypeName || String(d.deviceType || ''),
+      orgCode: deviceOrgCode(d), orgName: orgName(deviceOrgCode(d)),
+      status: on ? '1' : '0', statusName: on ? 'Online' : 'Offline',
+      startTime: now - 3600, endTime: now, duration: 3600,
+      updateTime: new Date().toISOString().replace('T', ' ').slice(0, 19)
+    };
+  });
+  const page = Math.max(1, Number(body.page ?? 1) || 1);
+  const size = Math.max(1, Number(body.pageSize ?? 20) || 20);
+  const slice = rows.slice((page - 1) * size, page * size);
+  return envelope({ pageData: slice, list: slice, results: slice, totalCount: rows.length, total: rows.length, pageNo: page, pageSize: size });
+});
+app.post('/omms/api/v1.1/device/status/history/record/export', async () => envelope({
+  session: genToken().slice(0, 16),
+  fileUrl: '/omms/api/v1.1/device/status/history/record/export/file?session=' + genToken().slice(0, 16)
+}));
+// E-095: disk status page (device detail tab) - .pageData[]/.totalCount
+app.get('/omms/api/v1.1/device/disk/status/page', async () => {
+  const rows = [...DEVICE_REGISTRY.values()].map((d) => ({
+    id: d.deviceCode, deviceCode: d.deviceCode, deviceName: d.deviceName,
+    diskStatus: '1', diskStatusName: 'Normal', totalCapacity: 0, freeCapacity: 0, usedCapacity: 0
+  }));
+  return envelope({ pageData: rows, list: rows, results: rows, totalCount: rows.length, total: rows.length });
+});
+// E-095: device detail (DeviceStatusDetail) - GET /omms/api/v1.1/device/{code}
+// reads data.{deviceName,deviceIp,deviceCategory,status,statusName,offlineReason
+// (only when status==="0"),faultStatus,faultStatusName,faultReason,updateTime}
+app.get('/omms/api/v1.1/device/:deviceCode', async (req, reply) => {
+  const base = findDevicePayloadByCode(req.params?.deviceCode);
+  if (!base) return reply.code(404).send(envelope(null, 404, 'Device not found'));
+  const row = buildDeviceTableRow(base);
+  return envelope({
+    ...row,
+    faultReason: '',
+    updateTime: new Date().toISOString().replace('T', ' ').slice(0, 19)
+  });
 });
 // E-025b: RTSP URL lookup so the client can stream via our MediaMTX proxy
 // instead of dialing the camera's RTSP port directly (which may be closed).

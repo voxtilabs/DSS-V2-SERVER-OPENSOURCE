@@ -502,8 +502,18 @@ function channelVo(device, no) {
     ptz: 0,
     audio: 1,
     record: 0,
-    status: 1,
-    online: 1,
+    // E-095: channel cards compare channelStatus === DEVICE_STATUS_TYPE.ONLINE
+    // (strict ===, string "1" - index-CW-2lZHA.js), so status/online must be
+    // strings, plus the channelStatus alias the cards read.
+    status: '1',
+    online: '1',
+    onlineStatus: '1',
+    channelStatus: '1',
+    // E-095: device detail channel tab reads statusName/faultStatusName/updateTime
+    statusName: 'Channel Online',
+    faultStatus: '0',
+    faultStatusName: 'Normal',
+    updateTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
     deviceType: device.deviceType,
     deviceIp: device.deviceIp,
     devicePort: device.devicePort,
@@ -683,6 +693,73 @@ export function buildDiscoverDetailPayload(body, identity = {}) {
   return { ...summary, channels: [], channelList: [], capabilities: [] };
 }
 
+// E-095: exact row contract of the REAL bundle's deviceTable component
+// (web-module/js/index-yv7-szZK.js, Device Status -> "Real-Time" tab).
+// Column props read from the minified source (verified, not guessed):
+//   "NO"(client-set) "deviceName" "deviceIp" "deviceCategoryName"
+//   "deviceTypeName" "orgName" "statusName" "faultStatusName"
+//   "channelFaultStatusName" "deviceRecordWholenessStatusName"
+//   "diskStatusName" "pendingCount"; Operate uses deviceCode/orgCode/orgName/
+//   deviceCategory. The "Online/Offline Status" column has prop "statusName"
+//   and renders row.statusName as text plus an icon from row.status
+//   (0==offline, 1==online, loose ==). Its filter model sends status as a
+//   comma string ("0,1"). deviceTable loads via getPageDevices
+//   (GET /omms/api/v1.1/device/page) reading data.pageData + data.totalCount.
+// E-095: registry records store online as boolean/1/"1" interchangeably.
+export function deviceOnlineOf(d) {
+  return !(d.online === false || d.online === 0 || d.online === '0');
+}
+
+export function buildDeviceTableRow(d) {
+  const online = deviceOnlineOf(d);
+  return {
+    ...d,
+    id: d.deviceCode,
+    orgCode: deviceOrgCode(d),
+    orgName: orgName(deviceOrgCode(d)),
+    deviceCategoryName: d.deviceCategoryName || d.deviceCategory || '',
+    deviceTypeName: d.deviceTypeName || d.deviceType || '',
+    // "Online/Offline Status" column: prop "statusName" + icon from "status".
+    // E-095 root cause of the "Offline" label: the SPA tables compare with
+    // STRICT === against DEVICE_STATUS.ONLINE which is the STRING "1"
+    // (device-JBrSmGvP.js: DEVICE_STATUS:{OFFLINE:"0",ONLINE:"1",SLEEP:"2"};
+    // index-DsQ1Ve9V.js: e.status === DEVICE_STATUS.ONLINE). A numeric 1
+    // never matches, so the row fell into the else -> "Offline". The omms
+    // deviceTable icon uses loose == (1==a), which also matches "1".
+    statusName: online ? 'Online' : 'Offline',
+    status: online ? '1' : '0',
+    onlineStatus: online ? '1' : '0',
+    online: online ? '1' : '0',
+    isOnline: online ? '1' : '0',
+    isOnLine: online ? '1' : '0',
+    deviceStatus: online ? 'online' : 'offline',
+    offlineReason: online ? '' : (d.errorMsg || 'offline'),
+    errorCode: online ? 0 : 1,
+    // "Device Status" column: prop "faultStatusName" + icon from "faultStatus"
+    // (bundle filter enum: Normal "0" / Abnormal "1")
+    faultStatusName: 'Normal',
+    faultStatus: '0',
+    // Channel Status / Video Integrity / Disk Status columns render the *Name
+    // only when the flag is truthy, otherwise "--"
+    channelFaultStatusName: 'Normal',
+    channelFaultStatus: 1,
+    deviceRecordWholenessStatusName: 'Normal',
+    deviceRecordWholenessStatus: 1,
+    diskStatusName: 'Normal',
+    diskStatus: 1,
+    // "Alerts to be Processed from Last 7 Days" (renders pendingCount||"--")
+    pendingCount: 0
+  };
+}
+
+// Query params may arrive as a comma string ("0,1") or as an array
+// (qs extended parser) - the deviceTable sends comma strings.
+function queryList(v) {
+  if (v === undefined || v === null) return [];
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+  return String(v).split(',').map((x) => x.trim()).filter(Boolean);
+}
+
 export function buildDevicePagePayload(query = {}) {
   const page = Math.max(1, Number(query.pageNo ?? query.page ?? 1) || 1);
   const size = Math.max(1, Number(query.pageSize ?? query.page) || 20);
@@ -700,24 +777,23 @@ export function buildDevicePagePayload(query = {}) {
     list = list.filter((d) => isDescendant(deviceOrgCode(d)));
   }
   if (keyword) list = list.filter((d) => d.deviceName.includes(keyword) || d.deviceIp.includes(keyword));
+  // E-095: deviceTable filter params (verified in index-yv7-szZK.js):
+  //   status:"0,1" faultStatus:"0,1" deviceTypes:"1,2" deviceCategory deviceCode
+  const statusSet = queryList(query.status);
+  if (statusSet.length) list = list.filter((d) => statusSet.includes(d.online === false ? '0' : '1'));
+  const faultSet = queryList(query.faultStatus);
+  if (faultSet.length) list = list.filter(() => faultSet.includes('0')); // all rows are faultStatus 0 (Normal)
+  const catFilter = String(query.deviceCategory ?? '').trim();
+  if (catFilter) list = list.filter((d) => String(d.deviceCategory ?? '') === catFilter);
+  const typesSet = queryList(query.deviceTypes);
+  if (typesSet.length) list = list.filter((d) => typesSet.includes(String(d.deviceType ?? '')));
+  const codeSet = queryList(query.deviceCode);
+  if (codeSet.length) list = list.filter((d) => codeSet.includes(String(d.deviceCode ?? '')));
   const start = (page - 1) * size;
   const slice = list.slice(start, start + size);
-  // E-094: the web SPA device table (deviceTable in index-yv7-szZK.js of the
-  // REAL bundle) reads data.pageData + data.totalCount; every row needs
-  // orgName/deviceTypeName/onlineStatus aliases for the table columns
-  // (Organization / Device Type / Online Status / Offline Reason).
-  const rows = slice.map((d) => ({
-    ...d,
-    id: d.deviceCode,
-    orgCode: deviceOrgCode(d),
-    orgName: orgName(deviceOrgCode(d)),
-    deviceTypeName: d.deviceTypeName || d.deviceType || '',
-    deviceCategoryName: d.deviceCategoryName || d.deviceCategory || '',
-    onlineStatus: d.online === false ? '0' : '1',
-    status: d.online === false ? 0 : 1,
-    offlineReason: d.online === false ? (d.errorMsg || 'offline') : '',
-    errorCode: d.online === false ? 1 : 0
-  }));
+  // E-094/E-095: the web SPA device table reads data.pageData + data.totalCount;
+  // rows carry the exact column props the bundle reads (buildDeviceTableRow).
+  const rows = slice.map((d) => buildDeviceTableRow(d));
   return {
     list: rows,
     results: rows,
@@ -729,7 +805,7 @@ export function buildDevicePagePayload(query = {}) {
     total: list.length,
     totalCount: list.length,
     pageCount: Math.max(1, Math.ceil(list.length / size)),
-    onlineCount: list.filter((d) => d.online).length
+    onlineCount: list.filter((d) => deviceOnlineOf(d)).length
   };
 }
 
@@ -1036,15 +1112,18 @@ export function buildDeviceDiscoverAsyncBatchPayload() {
 // ---------------------------------------------------------------------------
 export function buildStatisticsCategoryPayload(catalog, query = {}) {
   const counts = new Map();
+  const onlineCounts = new Map();
   for (const d of DEVICE_REGISTRY.values()) {
     const key = String(d.deviceCategory || '1');
     counts.set(key, (counts.get(key) || 0) + 1);
+    // E-095: onlineCount must reflect the real online state, not equal deviceCount
+    if (deviceOnlineOf(d)) onlineCounts.set(key, (onlineCounts.get(key) || 0) + 1);
   }
   const list = catalog.map((g) => ({
     deviceCategory: g.deviceCategory,
     deviceCategoryName: g.deviceCategoryName,
     deviceCount: counts.get(String(g.deviceCategory)) || 0,
-    onlineCount: counts.get(String(g.deviceCategory)) || 0,
+    onlineCount: onlineCounts.get(String(g.deviceCategory)) || 0,
     channelCount: (counts.get(String(g.deviceCategory)) || 0) * 1,
     type: g.deviceCategory,
     name: g.deviceCategoryName,

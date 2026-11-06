@@ -298,6 +298,24 @@ export const DAHUA_AVAILABLE_SERVERS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Vehicle / ANPR dictionaries (requested live by the client in the operator
+// session: dictionary/list?types=2001,2016,2052,2053,2055,22,9041,9046 - see
+// web-module/js/common-DuWRQnVr.js: CAR_COLOR=2001, CAR_BRAND=2016,
+// CAR_MODEL=2055, NONVEHICLE_TYPE=2052, NONVEHICLE_COLOR=2053,
+// JACKET_COLOR=9041, REGION=9046; type 22 = vehicle type).
+// code/name pairs mirror the DSS sys_dictionary seed rows.
+// ---------------------------------------------------------------------------
+const d = (code, name) => ({ code: String(code), name });
+export const DICT_CAR_COLOR = [d(1, 'White'), d(2, 'Black'), d(3, 'Red'), d(4, 'Blue'), d(5, 'Yellow'), d(6, 'Green'), d(7, 'Gray'), d(8, 'Silver'), d(9, 'Brown'), d(10, 'Orange'), d(11, 'Purple'), d(12, 'Pink')];
+export const DICT_CAR_BRAND = [d(1, 'Toyota'), d(2, 'Honda'), d(3, 'Nissan'), d(4, 'Hyundai'), d(5, 'Kia'), d(6, 'BMW'), d(7, 'Mercedes-Benz'), d(8, 'Volkswagen'), d(9, 'Ford'), d(10, 'Chevrolet'), d(11, 'Mazda'), d(12, 'Suzuki'), d(13, 'Mitsubishi'), d(14, 'Subaru'), d(15, 'Other')];
+export const DICT_CAR_MODEL = [d(1, 'Sedan'), d(2, 'SUV'), d(3, 'Hatchback'), d(4, 'Pickup'), d(5, 'Van'), d(6, 'Bus'), d(7, 'Truck'), d(8, 'Motorcycle'), d(9, 'Other')];
+export const DICT_NONVEHICLE_TYPE = [d(1, 'Person'), d(2, 'Bicycle'), d(3, 'Motorcycle'), d(4, 'Tricycle'), d(5, 'Other')];
+export const DICT_NONVEHICLE_COLOR = DICT_CAR_COLOR;
+export const DICT_JACKET_COLOR = [d(1, 'Black'), d(2, 'White'), d(3, 'Red'), d(4, 'Blue'), d(5, 'Yellow'), d(6, 'Green'), d(7, 'Gray'), d(8, 'Other')];
+export const DICT_REGION = [d(1, 'Región Metropolitana'), d(2, 'Valparaíso'), d(3, 'Biobío'), d(4, 'Araucanía'), d(5, 'Other')];
+export const DICT_VEHICLE_TYPE = [d(1, 'Car'), d(2, 'Truck'), d(3, 'Bus'), d(4, 'Motorcycle'), d(5, 'Van'), d(6, 'Other')];
+
+// ---------------------------------------------------------------------------
 // Builders
 // ---------------------------------------------------------------------------
 
@@ -318,8 +336,21 @@ export function buildDictionaryResults(rawTypes) {
     '4': DAHUA_CHANNEL_CAPABILITIES,
     '5': DAHUA_SNMP_MANUFACTURERS.map((m) => ({
       code: m.manufacturerCode, name: m.manufacturerName, param1: '', param2: ''
-    }))
+    })),
+    // E-095: vehicle/ANPR dictionaries requested live by the SPA
+    '2001': DICT_CAR_COLOR,
+    '2016': DICT_CAR_BRAND,
+    '2055': DICT_CAR_MODEL,
+    '2052': DICT_NONVEHICLE_TYPE,
+    '2053': DICT_NONVEHICLE_COLOR,
+    '9041': DICT_JACKET_COLOR,
+    '9046': DICT_REGION,
+    '22': DICT_VEHICLE_TYPE
   };
+  // E-095: log unknown dictionary types instead of silently serving items:[]
+  for (const t of requested.length ? requested : []) {
+    if (!catalogs[t]) console.log('[E095-DICT] unknown dictionary type', t);
+  }
 
   const types = requested.length ? requested : Object.keys(catalogs);
   return types.map((type) => ({
