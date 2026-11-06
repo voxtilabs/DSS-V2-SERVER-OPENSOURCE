@@ -414,3 +414,36 @@
   sdk_log sigue en C:\DSS\DSS Client\sdk_log\sdk_log.log.
   Ventana de captura de la prueba manual: usar docker logs con --since.
   Tests: unit 52 pass/0 fail/1 skip, e2e 12/12 x3, live-verify 15/15.
+
+- **Checkpoint 2026-11-06 (c) - E-099 HOTFIX crash User Config, commit dd3ca0e**.
+  Diagnostico conjunto (3 subagentes): gateway log 21:08-21:13 UTC muestra
+  secuencia del dialog role/page -> function/available -> menu/available ->
+  subsystem/available -> user/group/list -> config/ldap -> **role/list
+  21:12:26.852 (ULTIMA, 200, 1903B)** y luego silencio total (unico evento
+  posterior: TLS handshake timeout 21:14:29 = cliente ya muerto). sdk_log
+  cliente: crash real ~18:11:19 local con todos los bind UDP broadcast
+  fallando (err 10013 WSAEACCES en NICs virtuales Tailscale/VMware/Hyper-V,
+  pSocket NULL, error SDK 90002002) - firma 0xC0000005 en netsdk por socket
+  nulo; ademas el parser del SPA hacia strict === con "1" y role/list servia
+  status/level/default/editable/deletable/userCount NUMERICOS (misma causa
+  raiz que E-095). FIX server-side: buildRolePagePayload y role/:id ahora
+  sirven TODOS los flags como STRING + statusName (+checked/permission/
+  operate); igual function/available/list (superset menu+FunctionType),
+  subsystem/available, alert-types y user/group list. Combo Organization del
+  dialog: nuevo GET/POST v1.1/domain/organization/list (+ipms,
+  domain/import/organization/page) sirviendo 001 root + VIGILAB con pageData
+  (DPSDK GetDomainOrganizations @0xc5720). Gate de Live View: nuevos
+  v1.1/account/function/channel/check[/batch] y /device/check
+  (@0xc9ca80/@0xc7f0c0/@0xc9c978, clave functionCodes @0xcc9440) que
+  otorgan TODOS los FunctionType (liveView 8, playback 9, ptz 13, download
+  10...) en cada canal registrado -> D0238JDG3016\\\ en VIGILAB abre
+  Live View/Playback/PTZ/Alarma; resource-binding/channel/relation/page
+  sirve los canales bindeados. E-098 authority: inputChecked string y
+  operator granted en cualquier asset VIGILAB (org/device/canal).
+  Verificado en vivo: role/list flags string, domain org list [001,VIGILAB],
+  channel check D0238JDG3016\\\ -> functionCodes incl 8/9/13,
+  authority resource D0238JDG3016 -> admin checked "1". Tests: unit 53
+  pass/0 fail/1 skip, e2e 12/12 x3, live-verify 15/15.
+  NOTA cliente (ambiental): permitir UDP broadcast Dahua en el firewall de
+  Windows o desactivar NICs virtuales (Tailscale/VMware/Hyper-V); si el
+  crash persiste, capturar con procdump -ma -e 1 "DSS Client.exe".
