@@ -325,3 +325,51 @@
   `orgCode=NOPE` → 0; `omms channel/page` → pageData=1. D0238JDG3016 intacto.
   Logs: `%TEMP%\opencode\unit-e094.log`, `e2e-e094-{1,2,3}.log`,
   `live-verify-e094.log`.
+
+- **Checkpoint 2026-11-05 ~23:45 UTC — séptima causa raíz (E-095), fix
+  desplegado y verificado en vivo (`ca111cd`)**: la fila aparecía en la
+  tabla Device pero en **Offline** aunque el server sabía que estaba online.
+  Causa raíz verificada en el bundle real servido
+  (`web-module/js/device-JBrSmGvP.js`: `DEVICE_STATUS:{OFFLINE:"0",
+  ONLINE:"1",SLEEP:"2"}` — **strings**) y en las tablas SPA que comparan con
+  `===` estricto (`index-DsQ1Ve9V.js`: `e.status === DEVICE_STATUS.ONLINE`;
+  `index-CW-2lZHA.js`: `e.channelStatus === DEVICE_STATUS_TYPE.ONLINE`):
+  nuestras filas enviaban `status: 1` **numérico** → `1 === "1"` es false →
+  caía al else → "Offline". La tabla omms (`index-yv7-szZK.js`) lee texto de
+  `statusName` e icono de `status` (loose ==). Fix (contratos RE-SPA-part2/3/4
+  de `%TEMP%\opencode\`): `buildDeviceTableRow` emite `status/online/
+  onlineStatus` como strings `"1"/"0"` + `statusName`/`faultStatusName` +
+  columnas restantes de deviceTable; filtros CSV `status/faultStatus/
+  deviceTypes/deviceCategory/deviceCode`; `channelVo` con `status:"1"`,
+  `channelStatus:"1"`, `statusName:"Channel Online"`; contadores reales en
+  `/omms/api/v1.1/device/statistics` (top-level `deviceCount/
+  onlineDeviceCount/...`), `/account/device/overview` derivado del registro y
+  `statistics/...group-by...` con `onlineCount` real; nuevas rutas
+  `POST /omms/api/v1.1/device/status/history/record/fetch/page` (pageData con
+  status/statusName/startTime/endTime/duration), `.../export` y
+  `device/export` (session+fileUrl), `GET .../device/disk/status/page`,
+  `GET /omms/api/v1.1/device/{code}` (detalle con status/statusName/
+  offlineReason/faultReason/updateTime); diccionarios ANPR pedidos en vivo
+  (2001/2016/2052/2053/2055/22/9041/9046) en `e024-catalogs.js`;
+  `GET /brms/api/v1.1/user/list` real (admin) fuera del FALLBACK.
+  Hallazgo RE-SPA-part4: la página DeviceStatus **no hace polling** — refresca
+  solo al montar/cambiar pestaña/nodo/búsqueda (por eso bastaba con F5); el
+  estado en tiempo real en otras vistas llega por push eventBus
+  `vms.notifyDeviceStatus`/`vms.notifyDeviceOffline`. Tests: unit **49 pass /
+  0 fail / 1 skip** (test E-095: `row.status === "1"` estricto), e2e
+  **12/12 ×3**. Deploy + live-verify **15/15**. En vivo post-deploy:
+  `omms+brms device/page` → `D0238JDG3016 status="1" statusName="Online"
+  faultStatus="0" faultStatusName="Normal"`; statistics 1/1/0/0; history
+  `status=1/Online`; detail `status=1 statusName=Online`; channel
+  `channelStatus=1 statusName=Channel Online`; dict 2001=12 2016=15 2052=5
+  2053=12 2055=9 22=6 9041=8 9046=5; user/list admin; overview
+  `{deviceCount:1, onlineDeviceCount:1, offlineDeviceCount:0}`. Logs:
+  `%TEMP%\opencode\unit-e095.log`, `e2e-e095-{1,2,3}.log`,
+  `live-verify-e094.log`, `check-e095.ps1`.
+  **Pendiente conocido**: el toast residual "Operation timed out" en CDevAdd
+  proviene del waiter de 30 s del diálogo nativo (PluginFactory.dll
+  `DAT_181f98388`) y del probe directo del cliente a 192.168.0.238 (inalcanzable
+  desde WINPC_V2; sdk_log: error 90002002) — server-side la secuencia de add
+  es toda 200 en 5-18 ms (cost-time/summary/device/join-batch) y el ACK MQ
+  `brms.batchAddDevices` {session:'',successfulCount,failedCount} ya llega
+  (toast "Successfully added the devices").
