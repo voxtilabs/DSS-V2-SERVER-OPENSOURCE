@@ -1307,6 +1307,133 @@ export const OMMS_ALERT_TYPES = [
   { alertType: '15', alertTypeName: 'Temperature Alarm', alertName: 'Temperature Alarm', category: 'ai', level: 2, enable: 1 }
 ];
 
+// ===== E-096: USER MANAGEMENT + ROLE MANAGEMENT (native client path) =========
+//
+// The DSS Client User Management view is NATIVE: UserLogical.dll ->
+// DPSDK_GetUserManagerUsers -> GET /brms/api/v1.1/user/page (CRestLogical::
+// GetUserManagerUsers, DPSDK.dll @0xc9cf50). The SPA "userGroupView"
+// (index-BQObycDy.js @29711) reads data.pageData rows as {value:e.id,label:
+// e.username}. Native REST surface extracted from the DPSDK string pool
+// (@0xc9cfe0-0xc9d898):
+//   GetUserManagerUsers  -> v1.1/user/page        (query: username=,online=,
+//                                                  groupId=,pageSize=20,
+//                                                  roleIds=,page=1,userType=)
+//   GetUser              -> v1.1/user/:id
+//   GetUserDetailInfo    -> Rights/User detail
+//   AddUser              -> POST v1.1/user
+//   SaveUser             -> v1.1/user/:id         (save/modify)
+//   LockUser/UnLockUser  -> v1.1/user/:id/lock|unlock
+//   DeleteUser           -> pUserIdList (DELETE/POST /user + /user/delete)
+//   GetUserEmailsByPage  -> v1.1/user/email/page
+//   AssociateUserEmails  -> v1.1/user/email/associate/list?keyword=
+//   GetGroupUsers        -> v1.1/user/group-by-role-level/list
+//   GetUserManagerRoles  -> v1.1/role/page  GetRole->v1.1/role/:id
+//   AddRole/UpdateRole/DeleteRole -> v1.1/role...  pRoleIdList
+// E-095 lesson (EVIDENCE device-JBrSmGvP.js DEVICE_STATUS.ONLINE==="1"): every
+// boolean/enum field is served as a STRING ("1"/"0") - the client compares with
+// strict ===. The native parser ignores unknown keys (RE-SCHEMA-DPSDK), so rows
+// are a superset: username/loginName/realName/id/userId all covered.
+//
+// The user store is intentionally minimal but REAL: admin (lock=0, online
+// follows the login session) + operator. Deleting admin is rejected server-side.
+
+export const USER_STORE = [
+  {
+    id: '1', userId: '1', userUuid: '1',
+    username: 'admin', loginName: 'admin', userName: 'admin',
+    realName: 'Administrator', employeeName: 'Administrator',
+    userType: '1', userTypeName: 'Administrator', adminFlag: '1', isAdmin: '1',
+    status: '1', statusName: 'Normal', online: '1', enable: '1', locked: '0', lock: '0',
+    roleIds: ['1'], roleId: '1', roleNames: ['Super Administrator'], roleName: 'Super Administrator',
+    groupId: '1', groupName: 'Default', userGroupName: 'Default',
+    orgCode: '001', domainId: '0',
+    email: 'admin@vigilab.local', telephone: '', mobile: '',
+    passwordExpired: '0', passwordModifyTime: '2026-01-01 00:00:00',
+    createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00',
+    remarks: 'Built-in administrator', remark: 'Built-in administrator', deletable: '0'
+  },
+  {
+    id: '2', userId: '2', userUuid: '2',
+    username: 'operator', loginName: 'operator', userName: 'operator',
+    realName: 'Operator', employeeName: 'Operator',
+    userType: '0', userTypeName: 'Normal', adminFlag: '0', isAdmin: '0',
+    status: '1', statusName: 'Normal', online: '0', enable: '1', locked: '0', lock: '0',
+    roleIds: ['2'], roleId: '2', roleNames: ['Operator'], roleName: 'Operator',
+    groupId: '1', groupName: 'Default', userGroupName: 'Default',
+    orgCode: '001', domainId: '0',
+    email: '', telephone: '', mobile: '',
+    passwordExpired: '0', passwordModifyTime: '2026-01-01 00:00:00',
+    createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00',
+    remarks: '', remark: '', deletable: '1'
+  }
+];
+
+export const USER_GROUP_STORE = [
+  {
+    id: '1', groupId: '1', groupName: 'Default', name: 'Default',
+    parentId: '0', parentCode: '0', description: 'Default user group',
+    remark: 'Default user group', userCount: String(USER_STORE.length),
+    sort: 1, modifyTime: '2026-01-01 00:00:00'
+  }
+];
+
+export function buildUserPagePayload(query = {}) {
+  const q = (key) => String(query[key] ?? '').trim();
+  const username = q('username').toLowerCase();
+  const online = q('online');
+  const groupId = q('groupId');
+  const roleIds = q('roleIds');
+  const userType = q('userType');
+  const page = Math.max(1, Number(q('page') || q('pageNo') || 1) || 1);
+  const pageSize = Math.max(1, Number(q('pageSize') || 20) || 20);
+  let rows = USER_STORE.filter((u) => {
+    if (username && !u.username.toLowerCase().includes(username)) return false;
+    if (online !== '' && u.online !== online) return false;
+    if (groupId && u.groupId !== groupId) return false;
+    if (roleIds && !u.roleIds.includes(roleIds)) return false;
+    if (userType && u.userType !== userType) return false;
+    return true;
+  });
+  const totalCount = rows.length;
+  const start = (page - 1) * pageSize;
+  const pageData = rows.slice(start, start + pageSize);
+  return {
+    pageData, list: pageData, results: pageData, items: pageData, userList: pageData,
+    totalCount, total: totalCount, pageNo: String(page), page: String(page),
+    pageSize: String(pageSize), pageCount: String(Math.max(1, Math.ceil(totalCount / pageSize)))
+  };
+}
+
+export function buildUserDetailPayload(userId) {
+  const row = USER_STORE.find((u) => String(userId) === u.id || String(userId) === u.userId);
+  return row ? { ...row } : null;
+}
+
+export function buildUserGroupListPayload(query = {}) {
+  const kw = String(query?.keyword ?? '').trim().toLowerCase();
+  const list = USER_GROUP_STORE.filter((g) => !kw || g.groupName.toLowerCase().includes(kw));
+  return {
+    list, results: list, items: list, userGroupList: list, groupList: list,
+    total: list.length, totalCount: list.length
+  };
+}
+
+export function buildLdapConfigPayload() {
+  return {
+    enable: '0', enableLdap: '0', status: '0',
+    ip: '', address: '', port: '', baseDn: '', baseDN: '',
+    userName: '', password: '', useSsl: '0', useSSL: '0', encryptType: '0',
+    usernameAttribute: 'uid', remark: ''
+  };
+}
+
+export function buildUserEmailListPayload(query = {}) {
+  const kw = String(query?.keyword ?? '').trim().toLowerCase();
+  const hits = USER_STORE.filter((u) => u.email && (!kw || u.email.toLowerCase().includes(kw) || u.username.toLowerCase().includes(kw)));
+  const list = hits.map((u) => ({ id: u.id, userId: u.id, username: u.username, email: u.email }));
+  return { list, results: list, items: list, emailList: list, total: list.length, totalCount: list.length };
+}
+
 export function buildAlertTypeListPayload() {
   return {
     results: OMMS_ALERT_TYPES,

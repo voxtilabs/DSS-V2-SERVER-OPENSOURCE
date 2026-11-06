@@ -65,6 +65,11 @@ import {
   buildNetworkListPayload,
   buildP2PStatusPayload,
   buildRolePagePayload,
+  buildUserPagePayload,
+  buildUserDetailPayload,
+  buildUserGroupListPayload,
+  buildLdapConfigPayload,
+  buildUserEmailListPayload,
   buildServerTimezonePayload,
   buildStatisticsCategoryPayload,
   buildSubsystemAvailablePayload,
@@ -1514,6 +1519,10 @@ function scheduleStreamProvisioning(devices) {
     setImmediate(async () => {
       try { await ensureDeviceStream(d); }
       catch (err) { console.log('[E034-STREAM] provisioning failed:', err.message); }
+      // E-097: once provisioning settles the device is Online - push the
+      // status over the real MQ methods so the client updates the row WITHOUT
+      // a manual refresh of the Device Management view.
+      try { NOTIFY.deviceEvent('DEVICE_STATUS', d); } catch { /* best effort */ }
     });
   }
 }
@@ -1570,6 +1579,76 @@ app.get('/brms/api/v1.1/role/page', roleHandler);
 app.post('/brms/api/v1.1/role/page', roleHandler);
 app.get('/brms/api/v1.1/role/list', roleHandler);
 app.get('/brms/api/v1.1/role/all/list', roleHandler);
+
+// ===== E-096: User Management + Role Management (native UserLogical.dll path)
+// Live evidence gw-last40m.log 02:55-02:58 UTC: /user/page, /user/group/list
+// and /config/ldap hit the generic fallback -> the User Management view showed
+// an empty table (no admin row) and Role/x buttons had no data. Contracts from
+// the DPSDK.dll string pool (@0xc9cfe0-0xc9d898) - see e025-devices.js E-096.
+const userPageHandler = async (req) => envelope(buildUserPagePayload({ ...req.query, ...(req.body || {}) }));
+app.get('/brms/api/v1.1/user/page', userPageHandler);
+app.post('/brms/api/v1.1/user/page', userPageHandler);
+app.get('/brms/api/v1.1/user/group/list', async (req) => envelope(buildUserGroupListPayload(req.query)));
+app.get('/brms/api/v1.1/user/group-by-role-level/list', async (req) => envelope(buildUserGroupListPayload(req.query)));
+app.get('/brms/api/v1.1/config/ldap', async () => envelope(buildLdapConfigPayload()));
+app.put('/brms/api/v1.1/config/ldap', async (req) => envelope(buildLdapConfigPayload()));
+app.post('/brms/api/v1.1/config/ldap', async (req) => envelope(buildLdapConfigPayload()));
+app.get('/brms/api/v1.1/user/email/associate/list', async (req) => envelope(buildUserEmailListPayload(req.query)));
+app.get('/brms/api/v1.1/user/detail/list', async (req) => envelope(buildUserPagePayload({ ...req.query, ...(req.body || {}) })));
+// user/detail/list + email page (DPSDK GetUserEmailsByPage)
+app.get('/brms/api/v1.1/user/email/page', async (req) => envelope(buildUserEmailListPayload(req.query)));
+// GetUser -> v1.1/user/:id (static paths above win over this param route)
+app.get('/brms/api/v1.1/user/:userId', async (req, reply) => {
+  const row = buildUserDetailPayload(req.params?.userId);
+  if (!row) return reply.code(404).send(envelope(null, 404, 'User not found'));
+  return envelope(row);
+});
+// SaveUser (v1.1/user/:id), AddUser (POST v1.1/user), Lock/UnLock, DeleteUser.
+// All acknowledged as success - DSS server semantics, no real mutation needed
+// (the native view keeps its own in-memory state after a 200).
+const userWriteOk = async (req, reply) => {
+  const code = String(req.params?.userId || '1');
+  if (req.method === 'DELETE' || String(req.url || '').includes('/delete')) {
+    // admin can never be deleted (UI lock is '0' but be safe server-side too)
+    const ids = (req.body?.userIdList || []).map(String);
+    if (ids.includes('1')) return reply.code(200).send(envelope({ success: false, failedList: [{ userId: '1' }] }));
+  }
+  const target = buildUserDetailPayload(code);
+  const out = { success: true, userId: code, username: target?.username || '' };
+  return envelope({ success: true, ...out, out, data: out });
+};
+for (const m of ['post', 'put', 'get']) {
+  app[m]('/brms/api/v1.1/user/:userId/lock', userWriteOk);
+  app[m]('/brms/api/v1.1/user/:userId/unlock', userWriteOk);
+}
+app.post('/brms/api/v1.1/user', userWriteOk);
+app.put('/brms/api/v1.1/user', userWriteOk);
+app.put('/brms/api/v1.1/user/:userId', userWriteOk);
+app.post('/brms/api/v1.1/user/:userId', userWriteOk);
+app.post('/brms/api/v1.1/user/delete', userWriteOk);
+app.delete('/brms/api/v1.1/user/:userId', userWriteOk);
+app.delete('/brms/api/v1.1/user', userWriteOk);
+// Role detail (GetRole -> v1.1/role/:roleId) derived from the role page store.
+app.get('/brms/api/v1.1/role/:roleId', async (req, reply) => {
+  const id = String(req.params?.roleId || '');
+  const roles = buildRolePagePayload().list || [];
+  const role = roles.find((r) => String(r.roleId) === id || String(r.roleCode) === id)
+    // E-096: the admin role is exposed under legacy ids too (GetUserRole uses
+    // level==1); synthesize so a role id of '0'/'001' still resolves.
+    || (id && !['page', 'all', 'list'].includes(id)
+      ? { roleId: id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: 1, status: 1, level: 1, roleLevel: 1, default: 1, editable: 0, deletable: 0, createTime: '2026-01-01 00:00:00' }
+      : null);
+  if (!role) return reply.code(404).send(envelope(null, 404, 'Role not found'));
+  return envelope(role);
+});
+const roleWriteOk = async () => envelope({ success: true, roleId: '1' });
+app.post('/brms/api/v1.1/role', roleWriteOk);
+app.put('/brms/api/v1.1/role', roleWriteOk);
+app.put('/brms/api/v1.1/role/:roleId', roleWriteOk);
+app.post('/brms/api/v1.1/role/:roleId', roleWriteOk);
+app.post('/brms/api/v1.1/role/delete', roleWriteOk);
+app.delete('/brms/api/v1.1/role/:roleId', roleWriteOk);
+app.delete('/brms/api/v1.1/role', roleWriteOk);
 // E-035: the REAL function catalog (FunctionType enum of the server package).
 // The previous answer listed invented codes ("realtime", "playback", ...)
 // while the real DSS addresses functions by numeric code.

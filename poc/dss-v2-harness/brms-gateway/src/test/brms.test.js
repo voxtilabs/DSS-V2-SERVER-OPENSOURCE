@@ -351,6 +351,62 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(users.data.list.some((u) => u.username === 'admin'));
   });
 
+  it('E-096 user/page + group/list + config/ldap + role detail (User Management native path)', async () => {
+    // GetUserManagerUsers: admin row present with STRING flags (strict ===)
+    const page = await (await fetch(`${BASE}/brms/api/v1.1/user/page?username=&online=&groupId=&pageSize=20&roleIds=&page=1&userType=`)).json();
+    assert.ok(Array.isArray(page.data.pageData) && page.data.pageData.length >= 1, 'user/page serves pageData');
+    const admin = page.data.pageData.find((u) => u.username === 'admin');
+    assert.ok(admin, 'admin visible in User Management');
+    assert.strictEqual(admin.status, '1', 'admin status must be STRING "1"');
+    assert.strictEqual(admin.online, '1');
+    assert.strictEqual(admin.locked, '0');
+    assert.ok(Array.isArray(admin.roleIds) && admin.roleIds.includes('1'));
+    assert.ok(
+      typeof admin.id !== 'undefined' && typeof admin.username !== 'undefined',
+      'userGroupView reads {value:e.id,label:e.username}'
+    );
+    // SPA usersByPage shape too
+    const spaPage = await (await fetch(`${BASE}/brms/api/v1.1/user/page?page=1&pageSize=500&groupId=1`)).json();
+    assert.ok(spaPage.data.pageData.some((u) => u.id === '1' && u.username === 'admin'));
+    // group/list non-empty (Default) + keyword filter
+    const groups = await (await fetch(`${BASE}/brms/api/v1.1/user/group/list?keyword=`)).json();
+    assert.ok(Array.isArray(groups.data.list) && groups.data.list.some((g) => g.groupName === 'Default'));
+    const none = await (await fetch(`${BASE}/brms/api/v1.1/user/group/list?keyword=ZZZ`)).json();
+    assert.equal(none.data.list.length, 0, 'keyword filter applies');
+    // config/ldap reaches 200 (no FALLBACK)
+    const ldap = await (await fetch(`${BASE}/brms/api/v1.1/config/ldap`)).json();
+    assert.equal(ldap.code, 1000);
+    // GetUser detail by id
+    const det = await (await fetch(`${BASE}/brms/api/v1.1/user/1`)).json();
+    assert.equal(det.data.username, 'admin');
+    assert.strictEqual(det.data.status, '1');
+    // lock/unlock acknowledged
+    const lock = await (await fetch(`${BASE}/brms/api/v1.1/user/2/lock`, { method: 'POST' })).json();
+    assert.equal(lock.code, 1000);
+    // Role Management: detail (GetRole -> v1.1/role/1)
+    const role = await (await fetch(`${BASE}/brms/api/v1.1/role/1`)).json();
+    assert.equal(role.code, 1000);
+    assert.equal(role.data.roleName, 'Administrator');
+    // e-mail associate list (DPSDK AssociateUserEmails)
+    const emails = await (await fetch(`${BASE}/brms/api/v1.1/user/email/associate/list?keyword=`)).json();
+    assert.ok(emails.data.list.some((e) => e.username === 'admin' && e.email));
+  });
+
+  it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {
+    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
+    const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
+    assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
+    for (const raw of envs) {
+      const env = JSON.parse(raw);
+      assert.ok(env.method === 'vms.notifyDeviceStatus' || env.method === 'vms.notifyDevChannelStatus', 'method from DPSDK table @0xc71358');
+      const info = env.info.info || env.info;
+      assert.strictEqual(info.status, '1', 'status STRING "1"');
+      assert.strictEqual(info.online, '1');
+      assert.equal(info.deviceCode, 'D0238JDG3016');
+      assert.ok(Array.isArray(info.channels) && info.channels.length >= 1, 'channel list present');
+    }
+  });
+
   it('E-025 network / timezone / role / function / subsystem / omms alert types', async () => {
     const net = await (await fetch(`${BASE}/brms/api/v1.1/system/network/list`)).json();
     assert.ok(Array.isArray(net.data.list) && net.data.list.length > 0 && net.data.list[0].ip);

@@ -121,6 +121,41 @@ export function buildClientNotifyEnvelope(type, device) {
 //   manufacturer/type/category/model/sn/status + channels[]/{channelId,...}.
 // - Delete side: vms.LogicOrgChannel op=3 {deleteOrgCode, deleteChannels} and
 //   vms.deleteDev info={devices:[{deviceCode, orgCode, reason}]}.
+// E-097 (no-refresh fix): the device-status push methods the native client
+// subscribes to are in the DPSDK method table (@0xc71358/0xc71370):
+//   vms.notifyDeviceStatus / vms.notifyDevChannelStatus (plus the flat
+//   brms.notifyChannelStatuses). Typo warning: the DPSDK string pool spells the
+//   deviceStatus variant "notifyDeviceStatus" exactly (not "notifyDeviceState").
+//   The parser keys are NOT fully RE'd (no Ghidra decomp for its handler), so
+//   info is a defensive superset: deviceCode/deviceId + status "1"/"0" STRING
+//   (E-095: strict === against "1"), online, statusName and a channel array
+//   covering both notifyDevChannelStatus shapes.
+export function buildDeviceStatusNotifyEnvelopes(device, online = true) {
+  const d = typeof device === 'object' ? device : { deviceCode: String(device) };
+  const code = d.deviceCode || '';
+  if (!code) return [];
+  const status = online ? '1' : '0';
+  const statusName = online ? 'Online' : 'Offline';
+  const orgCode = d.orgCode || '';
+  const channelNum = Number(d.channelNum || d.encoderChannelCount || d.channelCount) || 1;
+  const channelCodes = dssChannelCodes(code, channelNum);
+  const channelList = channelCodes.map((channelId) => ({
+    channelId, channelCode: channelId, deviceCode: code, status, online: status,
+    statusName, channelStatus: status
+  }));
+  const statusInfo = {
+    deviceCode: code, deviceId: code, deviceName: d.deviceName || code,
+    orgCode, status, online: status, statusName,
+    deviceStatus: status, statusValue: status, time: new Date().toISOString(),
+    channels: channelList
+  };
+  const env = (method, info) => JSON.stringify({ method, info });
+  return [
+    env('vms.notifyDeviceStatus', { ...statusInfo, info: statusInfo }),
+    env('vms.notifyDevChannelStatus', { ...statusInfo, info: statusInfo })
+  ];
+}
+
 export function buildClientNotifyEnvelopes(type, device) {
   const d = typeof device === 'object' ? device : { deviceCode: String(device) };
   const code = d.deviceCode || '';
@@ -412,6 +447,15 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
         for (const envelope of buildClientNotifyEnvelopes(type, d)) {
           for (const t of clientMqTopics(mqUserId)) amqPublish(t, envelope);
         }
+        // E-097: DEVICE_STATUS events additionally publish the native
+        // vms.notifyDeviceStatus / vms.notifyDevChannelStatus methods so the
+        // client updates the device row LIVE (no manual refresh). DEVICE_STATUS
+        // is emitted by scheduleStreamProvisioning after every add funnel.
+        if (type === 'DEVICE_STATUS') {
+          for (const envelope of buildDeviceStatusNotifyEnvelopes(d, true)) {
+            for (const t of clientMqTopics(mqUserId)) amqPublish(t, envelope);
+          }
+        }
       } catch (err) { console.log('[E040-NOTIFY] amq publish failed:', err.message); }
     }
     // WS: dual-shape frame.
@@ -425,7 +469,14 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
       const envelopeMsg = JSON.stringify({ type, eventType: type, data: d, timestamp });
       for (const ws of wsClients) {
         if (ws.readyState !== 1) continue;
-        try { ws.send(flat); ws.send(envelopeMsg); } catch (err) { console.log('[E039-NOTIFY] ws send failed:', err.message); }
+        try {
+          ws.send(flat); ws.send(envelopeMsg);
+          // E-097: SPA eventBus frames for live status updates (the SPA
+          // subscribes to vms.notifyDeviceStatus in monitoring views).
+          if (type === 'DEVICE_STATUS') {
+            ws.send(JSON.stringify({ type: 'vms.notifyDeviceStatus', method: 'vms.notifyDeviceStatus', data: d, info: d, timestamp }));
+          }
+        } catch (err) { console.log('[E039-NOTIFY] ws send failed:', err.message); }
       }
     }
     console.log(`[E039-NOTIFY] ${type} ${d.deviceCode || ''}`);
