@@ -198,7 +198,7 @@ export function buildMenuAvailablePayload(roleId = '1') {
     menuName: m.menuName,
     menuNameKey: m.menuNameKey,
     pid: m.pid,
-    sort: m.sort,
+    sort: String(m.sort), // E-100: sort as STRING (E-095 lesson: numeric enums crash strict ===)
     systemCode: m.systemCode
   }));
   return { results, list: results, items: results, menuList: results, total: results.length };

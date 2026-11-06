@@ -1235,11 +1235,11 @@ export function buildTimezoneListPayload() {
 // keys, RE-SCHEMA-DPSDK).
 export function buildRolePagePayload() {
   const list = [
-    { roleId: '1', roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator',
+    { roleId: '1', id: '1', roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator',
       userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1',
       default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1',
       orgCode: '001', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' },
-    { roleId: '2', roleCode: 'operator', roleName: 'Operator', description: 'Built-in operator',
+    { roleId: '2', id: '2', roleCode: 'operator', roleName: 'Operator', description: 'Built-in operator',
       userCount: '1', status: '1', statusName: 'Enable', level: '2', roleLevel: '2',
       default: '0', editable: '1', deletable: '1', checked: '1', permission: '1', operate: '1',
       orgCode: 'VIGILAB', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' }
@@ -1426,7 +1426,8 @@ export function buildUserPagePayload(query = {}) {
   const pageData = rows.slice(start, start + pageSize);
   return {
     pageData, list: pageData, results: pageData, items: pageData, userList: pageData,
-    totalCount, total: totalCount, pageNo: String(page), page: String(page),
+    totalCount: String(totalCount), total: String(totalCount), // E-100: string counters
+    pageNo: String(page), page: String(page),
     pageSize: String(pageSize), pageCount: String(Math.max(1, Math.ceil(totalCount / pageSize)))
   };
 }
@@ -1440,8 +1441,9 @@ export function buildUserGroupListPayload(query = {}) {
   const kw = String(query?.keyword ?? '').trim().toLowerCase();
   const list = USER_GROUP_STORE.filter((g) => !kw || g.groupName.toLowerCase().includes(kw));
   return {
-    list, results: list, items: list, userGroupList: list, groupList: list,
-    total: list.length, totalCount: list.length
+    list, results: list, items: list, userGroupList: list, groupList: list, pageData: list,
+    total: String(list.length), totalCount: String(list.length),
+    pageNo: '1', pageSize: '100', pageCount: '1'
   };
 }
 
@@ -1458,7 +1460,14 @@ export function buildUserEmailListPayload(query = {}) {
   const kw = String(query?.keyword ?? '').trim().toLowerCase();
   const hits = USER_STORE.filter((u) => u.email && (!kw || u.email.toLowerCase().includes(kw) || u.username.toLowerCase().includes(kw)));
   const list = hits.map((u) => ({ id: u.id, userId: u.id, username: u.username, email: u.email }));
-  return { list, results: list, items: list, emailList: list, total: list.length, totalCount: list.length };
+  // E-100: SPA consumers read data.pageData for user/email/page (report-send
+  // dialog index-C1zRFxk1.js @85138) - without it V.value stays undefined and
+  // the render throws (white screen). pageData + string counters.
+  return {
+    list, results: list, items: list, emailList: list, pageData: list,
+    total: String(list.length), totalCount: String(list.length),
+    pageNo: '1', pageSize: '10000', pageCount: '1'
+  };
 }
 
 // ===== E-098: CASCADE PERMISSIONS + per-org camera allocation ===============

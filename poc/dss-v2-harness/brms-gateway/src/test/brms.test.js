@@ -452,6 +452,32 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(dc.data.functionCodes.includes('8'), 'device grants liveView');
   });
 
+  it('E-100 white-screen fix: pageData everywhere + string counters + role.id', async () => {
+    // user/group/list must carry pageData (SPA reads data.pageData) + string totals
+    const gl = await (await fetch(`${BASE}/brms/api/v1.1/user/group/list?keyword=`)).json();
+    assert.ok(Array.isArray(gl.data.pageData), 'group/list pageData array');
+    assert.strictEqual(typeof gl.data.total, 'string', 'group/list total string');
+    // user/email/page (report-send dialog reads data.pageData -> undefined = crash)
+    const em = await (await fetch(`${BASE}/brms/api/v1.1/user/email/page?page=1&pageSize=10000&keyword=`)).json();
+    assert.ok(Array.isArray(em.data.pageData), 'email/page pageData array');
+    // role rows must carry BOTH roleId and id (SPA role combo reads e.id)
+    const rl = await (await fetch(`${BASE}/brms/api/v1.1/role/list`)).json();
+    assert.ok(rl.data.list.every((r) => r.id && r.roleId), 'role rows have id+roleId');
+    const r1 = await (await fetch(`${BASE}/brms/api/v1.1/role/1`)).json();
+    assert.strictEqual(r1.data.id, '1', 'role/1 has id');
+    // menu/available: sort must be string in every row (numeric enum crash risk)
+    const ma = await (await fetch(`${BASE}/brms/api/v1.1/menu/available/list?roleId=1`)).json();
+    assert.ok(ma.data.results.length > 10 && ma.data.results.every((m) => typeof m.sort === 'string'), 'menu sort string');
+    // organization/list: string counters + pageData
+    const ol = await (await fetch(`${BASE}/brms/api/v1.1/organization/list`)).json();
+    assert.strictEqual(typeof ol.data.totalCount, 'string');
+    assert.ok(Array.isArray(ol.data.pageData) && ol.data.pageData.some((o) => o.orgCode === 'VIGILAB'));
+    // user/page: string counters
+    const up = await (await fetch(`${BASE}/brms/api/v1.1/user/page?page=1&pageSize=20`)).json();
+    assert.strictEqual(typeof up.data.totalCount, 'string', 'user/page totalCount string');
+    assert.ok(up.data.pageData.some((u) => u.username === 'admin'), 'admin visible in user/page');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
@@ -598,8 +624,8 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const d = j.data;
     assert.ok(Array.isArray(d.list) && Array.isArray(d.results), 'dual keys list+results');
     assert.equal(d.list.length, d.results.length, 'list === results');
-    assert.equal(d.total, d.list.length, 'total');
-    assert.equal(d.count, d.list.length, 'count');
+    assert.equal(String(d.total), String(d.list.length), 'total (string per E-100)');
+    assert.equal(String(d.count), String(d.list.length), 'count (string per E-100)');
     const codes = d.list.map((o) => o.orgCode);
     assert.ok(codes.includes('001') && codes.includes('VIGILAB'), '001+VIGILAB present: ' + codes.join(','));
     const vig = d.list.find((o) => o.orgCode === 'VIGILAB');

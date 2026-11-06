@@ -117,8 +117,10 @@ export function buildGetOrganizationsPayload() {
     results: orgs,
     departments: orgs,
     items: orgs,
-    total: orgs.length,
-    totalCount: orgs.length
+    pageData: orgs,
+    total: String(orgs.length),      // E-100: string counters (E-095 lesson)
+    count: String(orgs.length),
+    totalCount: String(orgs.length)
   };
 }
 
@@ -167,9 +169,10 @@ export function buildOrganizationListPayload() {
     results: items,
     organizations: items,
     items,
-    total: items.length,
-    count: items.length,
-    totalCount: items.length
+    pageData: items,
+    total: String(items.length),      // E-100: string counters (E-095 lesson)
+    count: String(items.length),
+    totalCount: String(items.length)
   };
 }
 

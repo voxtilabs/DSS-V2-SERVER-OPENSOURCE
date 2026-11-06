@@ -207,6 +207,6 @@ describe('E-041 persistent org store (VIGILAB)', () => {
       }
     }
     assert.equal(p.list, p.organizations, 'list alias');
-    assert.equal(p.total, p.organizations.length);
+    assert.equal(String(p.total), String(p.organizations.length)); // E-100: string counter
   });
 });

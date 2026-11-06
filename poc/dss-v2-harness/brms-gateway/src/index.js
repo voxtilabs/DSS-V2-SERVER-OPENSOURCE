@@ -1644,7 +1644,7 @@ app.get('/brms/api/v1.1/role/:roleId', async (req, reply) => {
     // E-099: synthesized role keeps the E-095 string-flag contract (a numeric
     // status crashed the User Config dialog at 21:12 UTC 2026-11-06)
     || (id && !['page', 'all', 'list'].includes(id)
-      ? { roleId: id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', createTime: '2026-01-01 00:00:00' }
+      ? { roleId: id, id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', createTime: '2026-01-01 00:00:00' }
       : null);
   if (!role) return reply.code(404).send(envelope(null, 404, 'Role not found'));
   return envelope(role);
