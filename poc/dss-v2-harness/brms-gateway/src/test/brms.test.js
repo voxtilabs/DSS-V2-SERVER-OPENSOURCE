@@ -413,6 +413,45 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(names.includes('VIGILAB'), 'organization/list contains VIGILAB, got ' + JSON.stringify(names));
   });
 
+  it('E-099 role flags are STRINGS (crash fix) + org combo + live-view gate', async () => {
+    // role/page: every boolean/enum flag must be a string (E-095 strict ===)
+    const rp = await (await fetch(`${BASE}/brms/api/v1.1/role/page`)).json();
+    assert.equal(rp.code, 1000);
+    for (const r of rp.data.list) {
+      for (const k of ['status', 'level', 'roleLevel', 'default', 'editable', 'deletable', 'userCount', 'checked']) {
+        assert.strictEqual(typeof r[k], 'string', `role.${k} must be string, got ${typeof r[k]} (${r[k]})`);
+      }
+      assert.ok(r.statusName, 'role.statusName present');
+    }
+    // role detail (synthesized id) also string flags
+    const rd = await (await fetch(`${BASE}/brms/api/v1.1/role/001`)).json();
+    assert.strictEqual(rd.data.status, '1');
+    // function/available flags are strings too
+    const fa = await (await fetch(`${BASE}/brms/api/v1.1/function/available/list`)).json();
+    assert.ok(fa.data.list.every((f) => typeof f.status === 'string'), 'function flags string');
+    // Organization combo of the User Config dialog: domain/organization/list
+    const do_ = await (await fetch(`${BASE}/brms/api/v1.1/domain/organization/list`)).json();
+    const orgNames = (do_.data.list || []).map((o) => o.orgName || o.name);
+    assert.ok(orgNames.includes('VIGILAB'), 'domain org list has VIGILAB: ' + JSON.stringify(orgNames));
+    assert.ok(Array.isArray(do_.data.pageData), 'domain org list has pageData');
+    // Live-view gate: channel check grants liveView(8)/playback(9)/ptz(13)
+    const cc = await (await fetch(`${BASE}/brms/api/v1.1/account/function/channel/check?channelCode=D0238W9Q1004$1$0$0`)).json();
+    assert.ok(cc.data.functionCodes.includes('8') && cc.data.functionCodes.includes('9') && cc.data.functionCodes.includes('13'), 'channel grants liveView/playback/ptz');
+    assert.strictEqual(cc.data.checkResult, '1');
+    assert.ok(cc.data.functions.every((f) => typeof f.enable === 'string'), 'fn flags string');
+    // batch returns one row per channel
+    const cb = await (await fetch(`${BASE}/brms/api/v1.1/account/function/channel/check/batch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channelCodes: ['D0238W9Q1004$1$0$0'] }) })).json();
+    assert.equal(cb.code, 1000);
+    assert.ok(Array.isArray(cb.data.list) && cb.data.list.length >= 1 && cb.data.list[0].functionCodes.includes('8'));
+    // asset permission on a DEVICE resource id: admin checked, flags string
+    const ar = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/D0238W9Q1004/role/list`)).json();
+    assert.strictEqual(ar.data.list.find((r) => r.roleId === '1').checked, '1');
+    for (const r of ar.data.list) assert.strictEqual(typeof r.checked, 'string');
+    // device function check
+    const dc = await (await fetch(`${BASE}/brms/api/v1.1/account/function/device/check?deviceCode=D0238W9Q1004`)).json();
+    assert.ok(dc.data.functionCodes.includes('8'), 'device grants liveView');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

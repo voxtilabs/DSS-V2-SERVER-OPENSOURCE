@@ -1226,15 +1226,38 @@ export function buildTimezoneListPayload() {
   return { results: list, list, items: list, timezoneList: list, total: list.length, totalCount: list.length };
 }
 
+// E-099: E-095 lesson applied to ROLES. Live evidence 2026-11-06 21:12 UTC:
+// the User Config dialog requested role/list (200) and the client crashed
+// before issuing user/page - the previous payload served status/level/
+// default/editable/deletable/userCount as NUMBERS and the client compares
+// flags with strict === against STRING "1"/"0". Every boolean/enum flag is
+// now a STRING plus statusName; rows are a superset (parser ignores unknown
+// keys, RE-SCHEMA-DPSDK).
 export function buildRolePagePayload() {
   const list = [
-    { roleId: '1', roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: 1, status: 1, level: 1, roleLevel: 1, default: 1, editable: 0, deletable: 0, createTime: '2026-01-01 00:00:00' },
-    { roleId: '2', roleCode: 'operator', roleName: 'Operator', description: 'Built-in operator', userCount: 0, status: 1, level: 2, roleLevel: 2, default: 0, editable: 1, deletable: 0, createTime: '2026-01-01 00:00:00' }
+    { roleId: '1', roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator',
+      userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1',
+      default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1',
+      orgCode: '001', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' },
+    { roleId: '2', roleCode: 'operator', roleName: 'Operator', description: 'Built-in operator',
+      userCount: '1', status: '1', statusName: 'Enable', level: '2', roleLevel: '2',
+      default: '0', editable: '1', deletable: '1', checked: '1', permission: '1', operate: '1',
+      orgCode: 'VIGILAB', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' }
   ];
   return {
-    list, results: list, items: list, roleList: list, total: list.length, totalCount: list.length, pageNo: 1, pageSize: 20,
-    pageCount: 1
+    list, results: list, items: list, roleList: list, roles: list,
+    total: String(list.length), totalCount: String(list.length),
+    pageNo: '1', pageSize: '20', pageCount: '1'
   };
+}
+
+// E-099 helper: stringify every numeric value of a row (enum/boolean flags
+// must be STRING per the E-095 strict-=== lesson). Applied to the function /
+// subsystem / alert-type catalogs that the User Config dialog also parses.
+export function strEnum(row) {
+  const o = {};
+  for (const [k, v] of Object.entries(row)) o[k] = typeof v === 'number' ? String(v) : v;
+  return o;
 }
 
 export const DSS_FUNCTIONS_AVAILABLE = [
@@ -1257,7 +1280,8 @@ export const DSS_FUNCTIONS_AVAILABLE = [
 ];
 
 export function buildFunctionAvailablePayload() {
-  return { results: DSS_FUNCTIONS_AVAILABLE, list: DSS_FUNCTIONS_AVAILABLE, items: DSS_FUNCTIONS_AVAILABLE, functionList: DSS_FUNCTIONS_AVAILABLE, total: DSS_FUNCTIONS_AVAILABLE.length };
+  const rows = DSS_FUNCTIONS_AVAILABLE.map(strEnum); // E-099: flags as strings
+  return { results: rows, list: rows, items: rows, functionList: rows, total: String(rows.length), totalCount: String(rows.length) };
 }
 
 export const DSS_SUBSYSTEMS_AVAILABLE = [
@@ -1279,13 +1303,15 @@ export const DSS_SUBSYSTEMS_AVAILABLE = [
 ];
 
 export function buildSubsystemAvailablePayload() {
+  const rows = DSS_SUBSYSTEMS_AVAILABLE.map(strEnum); // E-099: flags as strings
   return {
-    results: DSS_SUBSYSTEMS_AVAILABLE,
-    list: DSS_SUBSYSTEMS_AVAILABLE,
-    items: DSS_SUBSYSTEMS_AVAILABLE,
-    subsystemList: DSS_SUBSYSTEMS_AVAILABLE,
+    results: rows,
+    list: rows,
+    items: rows,
+    subsystemList: rows,
     subsystemRegisterWarnings: [],
-    total: DSS_SUBSYSTEMS_AVAILABLE.length
+    total: String(rows.length),
+    totalCount: String(rows.length)
   };
 }
 
@@ -1373,7 +1399,8 @@ export const USER_GROUP_STORE = [
     id: '1', groupId: '1', groupName: 'Default', name: 'Default',
     parentId: '0', parentCode: '0', description: 'Default user group',
     remark: 'Default user group', userCount: String(USER_STORE.length),
-    sort: 1, modifyTime: '2026-01-01 00:00:00'
+    sort: '1', roleId: '1', level: '1', roleLevel: '1', status: '1', // E-099: strings
+    modifyTime: '2026-01-01 00:00:00'
   }
 ];
 
@@ -1451,25 +1478,32 @@ export function buildUserEmailListPayload(query = {}) {
 // (RE-SCHEMA-DPSDK) so rows are a superset of checked/permission/operate.
 export function buildAuthorityResourceRolesPayload(resourceId, body = {}) {
   const rid = String(resourceId ?? '').trim();
-  const isOrgResource = rid === '' || rid === '001' || rid === 'VIGILAB';
+  // E-099: a resource id can be an org code (001/VIGILAB), a device code
+  // (D0238JDG3016) or a channel code (D0238JDG3016$1$0$0). Resolve the owning
+  // org so VIGILAB assets grant the operator role too.
+  const dev = DEVICE_REGISTRY.get(rid) || [...DEVICE_REGISTRY.values()].find((d) => String(rid).startsWith(d.deviceCode));
+  const resOrg = body?.orgCode || body?.orgName || (dev ? deviceOrgCodeOf(dev) : '') || rid;
+  const isOrgResource = rid === '' || rid === '001' || resOrg === 'VIGILAB' || resOrg === '001';
   const roles = buildRolePagePayload().list || [];
   const list = roles.map((r) => {
-    // cascade: admin (roleId 1) is granted everywhere; operator only on VIGILAB
+    // cascade: admin (roleId 1) is granted everywhere; operator on 001/VIGILAB
+    // assets (orgs, devices and channels of those orgs)
     const checked = String(r.roleId) === '1' || (isOrgResource && String(r.roleId) === '2');
     return {
       roleId: String(r.roleId), roleCode: r.roleCode, roleName: r.roleName,
-      checked: checked ? '1' : '0',
+      checked: checked ? '1' : '0',           // E-099: STRING flags (E-095 lesson)
       permission: checked ? '1' : '0',
       operate: checked ? '1' : '0',
-      resourceId: rid, inputChecked: checked ? 1 : 0,
-      status: r.status, level: r.level, roleLevel: r.roleLevel,
+      resourceId: rid, inputChecked: checked ? '1' : '0',
+      orgCode: resOrg, status: r.status, statusName: r.statusName,
+      level: r.level, roleLevel: r.roleLevel,
       userCount: r.userCount, editable: r.editable, deletable: r.deletable,
       default: r.default, createTime: r.createTime
     };
   });
   return {
     list, results: list, items: list, roleList: list, roles: list,
-    total: list.length, totalCount: list.length, resourceId: rid
+    total: String(list.length), totalCount: String(list.length), resourceId: rid
   };
 }
 
@@ -1510,15 +1544,85 @@ function deviceOrgCodeOf(d) {
   return d.orgCode || d.orgName || 'VIGILAB';
 }
 
+// ===== E-099: LIVE VIEW PRIVILEGE GATE (asset permission per channel) =======
+//
+// DPSDK.dll string pool:
+//   CheckChannelFunction -> v1.1/account/function/channel/check   (@0xc9ca80)
+//   GetChannelFunctions  -> v1.1/account/function/channel/check/batch (@0xc7f0c0)
+//   CheckDeviceFunction  -> v1.1/account/function/device/check    (@0xc9c978)
+//   response keys: "functionCodes" (@0xcc9440, BRMSAccountCheckChannelFunctions)
+// The client asks WHICH FunctionType codes the logged account may use on a
+// channel BEFORE opening Live View: liveView=8, playback=9, download=10,
+// ptzOperate=13, alarm... (DSS_FUNCTION_CATALOG, e037-native-tree.js).
+// Default grant (admin cascade, E-098): EVERY function on EVERY registered
+// channel of the operator's orgs - so D0238JDG3016$1$0$0 in VIGILAB opens
+// Live View / Playback / PTZ / Alarm immediately.
+export const DSS_CHANNEL_FUNCTION_GRANTS = ['1', '2', '3', '5', '6', '8', '9', '10', '11', '13', '15', '17', '21', '23', '24', '25', '27'];
+
+const FN_NAMES = {
+  '1': 'record', '2': 'ptzOperateAndConfig', '3': 'talk', '5': 'recordLock', '6': 'recordTips',
+  '8': 'liveView', '9': 'playback', '10': 'download', '11': 'privacyMasking', '13': 'ptzOperate',
+  '15': 'syncTime', '17': 'livePreview', '21': 'deviceWeb', '23': 'broadcast', '24': 'playAudio',
+  '25': 'controlVolume', '27': 'panoramicSplicing'
+};
+
+export function channelFunctionRows() {
+  // E-099: every flag STRING (E-095 strict === lesson)
+  return DSS_CHANNEL_FUNCTION_GRANTS.map((fc) => ({
+    functionCode: fc, functionId: fc, functionName: FN_NAMES[fc] || fc,
+    enable: '1', available: '1', hasRight: '1', checked: '1', status: '1', type: '1'
+  }));
+}
+
+export function buildChannelFunctionCheckPayload(input = {}) {
+  const raw = input.channelCodes || input.channelCodeList || input.channelIds
+    || (input.channelCode ? [input.channelCode] : null)
+    || (Array.isArray(input.channels) ? input.channels.map((c) => (typeof c === 'string' ? c : c.channelCode || c.channelId)) : null)
+    || (Array.isArray(input.list) ? input.list.map((c) => (typeof c === 'string' ? c : c.channelCode || c.channelId)) : null);
+  const codes = (raw || []).map(String).filter(Boolean);
+  const all = allChannels();
+  const matched = codes.length ? all.filter((c) => codes.includes(String(c.channelCode)) || codes.includes(String(c.channelId))) : all;
+  const list = (matched.length ? matched : all).map((c) => {
+    const functions = channelFunctionRows();
+    return {
+      channelCode: c.channelCode, channelId: c.channelId || c.channelCode, deviceCode: c.deviceCode,
+      orgCode: c.orgCode || deviceOrgCodeOf(DEVICE_REGISTRY.get(c.deviceCode) || {}),
+      functionCodes: [...DSS_CHANNEL_FUNCTION_GRANTS], functions, list: functions, results: functions,
+      checkResult: '1', available: '1', hasRight: '1', hasFunction: '1', enable: '1', status: '1'
+    };
+  });
+  const single = list[0] || { functionCodes: [...DSS_CHANNEL_FUNCTION_GRANTS], functions: channelFunctionRows() };
+  return {
+    ...single,
+    list, results: list, items: list, channelList: list, channelFunctionList: list,
+    total: String(list.length), totalCount: String(list.length)
+  };
+}
+
+export function buildDeviceFunctionCheckPayload(input = {}) {
+  const codes = (input.deviceCodes || (input.deviceCode ? [input.deviceCode] : null) || []).map(String).filter(Boolean);
+  const all = [...DEVICE_REGISTRY.values()];
+  const matched = codes.length ? all.filter((d) => codes.includes(String(d.deviceCode))) : all;
+  const list = (matched.length ? matched : all).map((d) => ({
+    deviceCode: d.deviceCode, deviceId: d.deviceId || d.deviceCode, orgCode: deviceOrgCodeOf(d),
+    functionCodes: [...DSS_CHANNEL_FUNCTION_GRANTS], functions: channelFunctionRows(),
+    checkResult: '1', available: '1', hasRight: '1', enable: '1', status: '1'
+  }));
+  const single = list[0] || {};
+  return { ...single, list, results: list, items: list, deviceList: list, total: String(list.length), totalCount: String(list.length) };
+}
+
 
 export function buildAlertTypeListPayload() {
+  const rows = OMMS_ALERT_TYPES.map(strEnum); // E-099: level/enable as strings
   return {
-    results: OMMS_ALERT_TYPES,
-    list: OMMS_ALERT_TYPES,
-    items: OMMS_ALERT_TYPES,
-    alertTypeList: OMMS_ALERT_TYPES,
-    dictionaryList: OMMS_ALERT_TYPES,
-    total: OMMS_ALERT_TYPES.length
+    results: rows,
+    list: rows,
+    items: rows,
+    alertTypeList: rows,
+    dictionaryList: rows,
+    total: String(rows.length),
+    totalCount: String(rows.length)
   };
 }
 

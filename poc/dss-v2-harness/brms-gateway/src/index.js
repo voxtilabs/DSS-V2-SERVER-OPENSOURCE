@@ -72,6 +72,8 @@ import {
   buildUserEmailListPayload,
   buildAuthorityResourceRolesPayload,
   buildResourceAllocateOrgDevicesPayload,
+  buildChannelFunctionCheckPayload,
+  buildDeviceFunctionCheckPayload,
   buildServerTimezonePayload,
   buildStatisticsCategoryPayload,
   buildSubsystemAvailablePayload,
@@ -1639,8 +1641,10 @@ app.get('/brms/api/v1.1/role/:roleId', async (req, reply) => {
   const role = roles.find((r) => String(r.roleId) === id || String(r.roleCode) === id)
     // E-096: the admin role is exposed under legacy ids too (GetUserRole uses
     // level==1); synthesize so a role id of '0'/'001' still resolves.
+    // E-099: synthesized role keeps the E-095 string-flag contract (a numeric
+    // status crashed the User Config dialog at 21:12 UTC 2026-11-06)
     || (id && !['page', 'all', 'list'].includes(id)
-      ? { roleId: id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: 1, status: 1, level: 1, roleLevel: 1, default: 1, editable: 0, deletable: 0, createTime: '2026-01-01 00:00:00' }
+      ? { roleId: id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', createTime: '2026-01-01 00:00:00' }
       : null);
   if (!role) return reply.code(404).send(envelope(null, 404, 'Role not found'));
   return envelope(role);
@@ -1668,10 +1672,71 @@ app.put('/brms/api/v1.1/authority/resource/:resourceId/role', async (req) => env
 const orgDevHandler = async (req) => envelope(buildResourceAllocateOrgDevicesPayload({ ...req.query, ...(req.body || {}) }));
 app.get('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgDevHandler);
 app.post('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgDevHandler);
+
+// ===== E-099a: Organization combo of the User Config dialog ================
+// DPSDK GetDomainOrganizations (UserLogical HandleQueryDomainOrganizations
+// @0xc5720) -> v1.1/domain/organization/list. Serves the same org store as
+// organization/list (001 root + VIGILAB) with pageData for the paged variant.
+const domainOrgHandler = async () => {
+  const p = buildOrganizationListPayload();
+  return envelope({ ...p, pageData: p.list, pageNo: '1', pageSize: String(p.list.length), pageCount: '1' });
+};
+app.get('/brms/api/v1.1/domain/organization/list', domainOrgHandler);
+app.post('/brms/api/v1.1/domain/organization/list', domainOrgHandler);
+app.get('/ipms/api/v1.1/domain/organization/list', domainOrgHandler);
+app.post('/ipms/api/v1.1/domain/organization/list', domainOrgHandler);
+app.get('/brms/api/v1.1/domain/import/organization/page', domainOrgHandler);
+app.post('/brms/api/v1.1/domain/import/organization/page', domainOrgHandler);
+
+// ===== E-099b: LIVE VIEW PRIVILEGE GATE (asset permission per channel) =====
+// DPSDK CheckChannelFunction/GetChannelFunctions/CheckDeviceFunction ->
+// v1.1/account/function/{channel,device}/check[/batch] (@0xc9ca80/@0xc7f0c0/
+// @0xc9c978). The client checks the account's FunctionType codes per channel
+// BEFORE opening Live View; we grant the full catalog (liveView 8, playback
+// 9, ptzOperate 13, download 10, ...) on every registered channel, so
+// D0238JDG3016$1$0$0 (org VIGILAB) opens immediately. All flags STRING.
+const chFnCheck = async (req) => envelope(buildChannelFunctionCheckPayload({ ...req.query, ...(req.body || {}) }));
+app.get('/brms/api/v1.1/account/function/channel/check', chFnCheck);
+app.post('/brms/api/v1.1/account/function/channel/check', chFnCheck);
+app.get('/brms/api/v1.1/account/function/channel/check/batch', chFnCheck);
+app.post('/brms/api/v1.1/account/function/channel/check/batch', chFnCheck);
+app.get('/brms/api/v1.0/account/function/channel/check', chFnCheck);
+app.post('/brms/api/v1.0/account/function/channel/check/batch', chFnCheck);
+const devFnCheck = async (req) => envelope(buildDeviceFunctionCheckPayload({ ...req.query, ...(req.body || {}) }));
+app.get('/brms/api/v1.1/account/function/device/check', devFnCheck);
+app.post('/brms/api/v1.1/account/function/device/check', devFnCheck);
+// channel relation binding (resource-binding/channel/relation/page) so the
+// asset-assignment tree shows the channel bound to the org/role
+const chRelHandler = async (req) => {
+  const chans = (buildChannelFunctionCheckPayload({ ...req.query, ...(req.body || {}) }).list || []);
+  const list = chans.map((c) => ({
+    channelCode: c.channelCode, channelId: c.channelId, deviceCode: c.deviceCode, orgCode: c.orgCode,
+    resourceId: c.channelCode, resourceType: '1', relationId: c.channelCode,
+    bindingStatus: '1', status: '1', checked: '1'
+  }));
+  return envelope({ list, results: list, items: list, total: String(list.length), totalCount: String(list.length), pageData: list, pageNo: '1', pageSize: '100', pageCount: '1' });
+};
+app.get('/brms/api/v1.1/resource-binding/channel/relation/page', chRelHandler);
+app.post('/brms/api/v1.1/resource-binding/channel/relation/page', chRelHandler);
+app.post('/brms/api/v1.1/resource-binding/channel/relation/update/batch', async () => envelope({ success: true }));
+app.post('/brms/api/v1.1/resource-binding/channel/relation/delete/batch', async () => envelope({ success: true }));
 // E-035: the REAL function catalog (FunctionType enum of the server package).
 // The previous answer listed invented codes ("realtime", "playback", ...)
 // while the real DSS addresses functions by numeric code.
-app.get('/brms/api/v1.1/function/available/list', async () => envelope(buildFunctionListPayload()));
+// E-099: function/available/list serves the full available-function catalog
+// (menu entries + FunctionType codes) with STRING enum flags - this is one of
+// the calls the User Config dialog makes right before role/list (the last
+// request seen before the 21:12 UTC crash); numeric flags are crash suspects
+// per the E-095 lesson. Superset of both catalogs so every consumer binds.
+const fnAvailHandler = async () => {
+  const menus = buildFunctionAvailablePayload().list || [];
+  const fns = (buildFunctionListPayload().results || []).map((f) => ({ ...f, status: '1', enable: '1', available: '1', type: '0' }));
+  const seen = new Set(menus.map((m) => m.functionId || m.functionCode));
+  const rows = [...menus, ...fns.filter((f) => !seen.has(f.functionCode))];
+  return envelope({ results: rows, list: rows, items: rows, functionList: rows, availableList: rows, total: String(rows.length), totalCount: String(rows.length) });
+};
+app.get('/brms/api/v1.1/function/available/list', fnAvailHandler);
+app.post('/brms/api/v1.1/function/available/list', fnAvailHandler);
 app.get('/brms/api/v1.1/subsystem/available/list', async () => envelope(buildSubsystemAvailablePayload()));
 app.get('/brms/api/v1.1/subsystem/register/warning', async () => envelope({ warningList: [], list: [], total: 0 }));
 // OMMS (alarm service) previously 404'd -> "abnormal data" in the Event Center.
