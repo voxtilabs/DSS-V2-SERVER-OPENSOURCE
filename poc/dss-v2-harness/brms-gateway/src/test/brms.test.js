@@ -392,8 +392,28 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(emails.data.list.some((e) => e.username === 'admin' && e.email));
   });
 
-  it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {
-    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
+  it('E-098 authority (cascade) + resource-allocate + org list content', async () => {
+    // GetResourceRoles: v1.1/authority/resource/{id}/role/list - admin granted
+    const ar = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/VIGILAB/role/list`)).json();
+    assert.equal(ar.code, 1000);
+    assert.equal(ar.data.resourceId, 'VIGILAB');
+    const adminRole = ar.data.list.find((r) => String(r.roleId) === '1');
+    assert.strictEqual(adminRole?.checked, '1', 'admin cascade-granted on every resource');
+    // SetResourceRoles ack
+    const set = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/VIGILAB/role`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"roleIds":["1","2"]}' })).json();
+    assert.equal(set.code, 1000);
+    // ResourceAllocateGetOrgDevices: org filter + channels present
+    const oa = await (await fetch(`${BASE}/brms/api/v1.1/resource-allocate/organization/device/fetch/list?orgCode=VIGILAB`)).json();
+    assert.ok(Array.isArray(oa.data.list) && oa.data.list.length >= 1, 'org device fetch list non-empty');
+    assert.ok(oa.data.list.every((d) => Array.isArray(d.channels) && d.channels.length >= 1), 'each device carries its channels');
+    assert.ok(oa.data.list.every((d) => d.deviceCode && d.orgCode === 'VIGILAB'), 'org filter only returns that org');
+    // the org combos must list 001 + VIGILAB (empresas)
+    const orgs = await (await fetch(`${BASE}/brms/api/v1.1/organization/list`)).json();
+    const names = (orgs.data.list || []).map((o) => o.orgName || o.name);
+    assert.ok(names.includes('VIGILAB'), 'organization/list contains VIGILAB, got ' + JSON.stringify(names));
+  });
+
+  it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
     for (const raw of envs) {

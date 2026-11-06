@@ -70,6 +70,8 @@ import {
   buildUserGroupListPayload,
   buildLdapConfigPayload,
   buildUserEmailListPayload,
+  buildAuthorityResourceRolesPayload,
+  buildResourceAllocateOrgDevicesPayload,
   buildServerTimezonePayload,
   buildStatisticsCategoryPayload,
   buildSubsystemAvailablePayload,
@@ -1651,6 +1653,21 @@ app.post('/brms/api/v1.1/role/:roleId', roleWriteOk);
 app.post('/brms/api/v1.1/role/delete', roleWriteOk);
 app.delete('/brms/api/v1.1/role/:roleId', roleWriteOk);
 app.delete('/brms/api/v1.1/role', roleWriteOk);
+
+// ===== E-098: cascade permissions + per-org camera allocation (DPSDK
+// GetResourceRoles/SetResourceRoles/ResourceAllocateGetOrgDevices; see
+// e025-devices.js E-098). The permission-assignment dialog of User/Role
+// Management reads the role list per resource and the device list per org.
+const authorityRolesHandler = async (req) =>
+  envelope(buildAuthorityResourceRolesPayload(req.params?.resourceId, { ...req.query, ...(req.body || {}) }));
+app.get('/brms/api/v1.1/authority/resource/:resourceId/role/list', authorityRolesHandler);
+app.post('/brms/api/v1.1/authority/resource/:resourceId/role/list', authorityRolesHandler);
+app.get('/brms/api/v1.1/authority/resource/role/list', authorityRolesHandler);
+app.post('/brms/api/v1.1/authority/resource/:resourceId/role', async (req) => envelope({ success: true, resourceId: String(req.params?.resourceId || '') }));
+app.put('/brms/api/v1.1/authority/resource/:resourceId/role', async (req) => envelope({ success: true, resourceId: String(req.params?.resourceId || '') }));
+const orgDevHandler = async (req) => envelope(buildResourceAllocateOrgDevicesPayload({ ...req.query, ...(req.body || {}) }));
+app.get('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgDevHandler);
+app.post('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgDevHandler);
 // E-035: the REAL function catalog (FunctionType enum of the server package).
 // The previous answer listed invented codes ("realtime", "playback", ...)
 // while the real DSS addresses functions by numeric code.

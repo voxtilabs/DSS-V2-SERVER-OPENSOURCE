@@ -1434,6 +1434,83 @@ export function buildUserEmailListPayload(query = {}) {
   return { list, results: list, items: list, emailList: list, total: list.length, totalCount: list.length };
 }
 
+// ===== E-098: CASCADE PERMISSIONS + per-org camera allocation ===============
+//
+// DPSDK contract (string pool, confirmed):
+//   GetResourceRoles       -> GET/POST v1.1/authority/resource/{id}/role/list
+//                             (fragments "v1.1/authority/resource/" @0xc9c238
+//                              + "/role/list"; pResultRoleList out param)
+//   SetResourceRoles       -> PUT/POST  v1.1/authority/resource/{id}/role
+//                             (DPSDK_SetResourceRoles, UserLogical
+//                              HandleSetResourceRoleIdList @0xc4ec8)
+//   ResourceAllocateGetOrgDevices -> v1.1/resource-allocate/organization/
+//                             device/fetch/list (pOrgDevList @0xca5bd0)
+// The permission dialog binds the role rows with checked flags; the admin
+// role (roleId 1) is granted on every resource (cascade), the operator role is
+// only granted on VIGILAB resources. Parser ignores unknown keys
+// (RE-SCHEMA-DPSDK) so rows are a superset of checked/permission/operate.
+export function buildAuthorityResourceRolesPayload(resourceId, body = {}) {
+  const rid = String(resourceId ?? '').trim();
+  const isOrgResource = rid === '' || rid === '001' || rid === 'VIGILAB';
+  const roles = buildRolePagePayload().list || [];
+  const list = roles.map((r) => {
+    // cascade: admin (roleId 1) is granted everywhere; operator only on VIGILAB
+    const checked = String(r.roleId) === '1' || (isOrgResource && String(r.roleId) === '2');
+    return {
+      roleId: String(r.roleId), roleCode: r.roleCode, roleName: r.roleName,
+      checked: checked ? '1' : '0',
+      permission: checked ? '1' : '0',
+      operate: checked ? '1' : '0',
+      resourceId: rid, inputChecked: checked ? 1 : 0,
+      status: r.status, level: r.level, roleLevel: r.roleLevel,
+      userCount: r.userCount, editable: r.editable, deletable: r.deletable,
+      default: r.default, createTime: r.createTime
+    };
+  });
+  return {
+    list, results: list, items: list, roleList: list, roles: list,
+    total: list.length, totalCount: list.length, resourceId: rid
+  };
+}
+
+export function buildResourceAllocateOrgDevicesPayload(body = {}) {
+  const q = (key) => String(body?.[key] ?? '').trim();
+  const orgCode = q('orgCode') || '';
+  const keywords = q('keyword').toLowerCase();
+  const devs = [...DEVICE_REGISTRY.values()].filter((d) => {
+    // root org (001) sees everything (the client queries it with containChild);
+    // any other org only returns devices under it.
+    if (orgCode && orgCode !== '001' && deviceOrgCodeOf(d) !== orgCode) return false;
+    if (keywords && !String(d.deviceName || '').toLowerCase().includes(keywords)
+      && !String(d.deviceCode || '').toLowerCase().includes(keywords)) return false;
+    return true;
+  });
+  const list = devs.map((d) => {
+    const channels = allChannels().filter((c) => c.deviceCode === d.deviceCode);
+    return {
+      deviceId: d.deviceId || d.deviceCode, deviceCode: d.deviceCode,
+      deviceName: d.deviceName, deviceIp: d.deviceIp, devicePort: d.devicePort,
+      deviceType: d.deviceType || '1', deviceCategory: d.deviceCategory || '1',
+      orgCode: deviceOrgCodeOf(d), status: deviceOnlineOf(d) ? '1' : '0',
+      online: deviceOnlineOf(d) ? '1' : '0',
+      channels: channels.map((c) => ({
+        channelId: c.channelId || c.channelCode, channelCode: c.channelCode,
+        channelName: c.channelName || d.deviceName, channelSeq: c.channelSeq ?? 0,
+        deviceCode: d.deviceCode, orgCode: deviceOrgCodeOf(d), status: '1'
+      }))
+    };
+  });
+  return {
+    list, results: list, items: list, deviceList: list, orgDeviceList: list,
+    total: list.length, totalCount: list.length
+  };
+}
+
+function deviceOrgCodeOf(d) {
+  return d.orgCode || d.orgName || 'VIGILAB';
+}
+
+
 export function buildAlertTypeListPayload() {
   return {
     results: OMMS_ALERT_TYPES,
