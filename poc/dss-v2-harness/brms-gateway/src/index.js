@@ -1304,6 +1304,8 @@ const addDeviceHandler = async (req) => {
     setImmediate(async () => {
       try { await ensureDeviceStream(created); }
       catch (err) { console.log('[E034-STREAM] manual add failed:', err.message); }
+      // E-097: no-refresh manual refresh - status push after provisioning.
+      try { NOTIFY.deviceEvent('DEVICE_STATUS', created); } catch { /* best effort */ }
     });
   }
 

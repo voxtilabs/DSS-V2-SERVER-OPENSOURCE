@@ -373,3 +373,27 @@
   es toda 200 en 5-18 ms (cost-time/summary/device/join-batch) y el ACK MQ
   `brms.batchAddDevices` {session:'',successfulCount,failedCount} ya llega
   (toast "Successfully added the devices").
+
+
+- **Checkpoint 2026-11-06 - E-096/E-097 (User/Role Management + push sin
+  refresh), commit a523ea5**. RE: User Management nativo (UserLogical.dll
+  -> DPSDK_GetUserManagerUsers -> v1.1/user/page; mapa completo DPSDK.dll
+  @0xc9cfe0-0xc9d898 + tabla de metodos MQ @0xc711f8-0xc71840 con
+  vms.notifyDeviceStatus/notifyDevChannelStatus @0xc71358/0xc71370).
+  Implementado server-side: GET /brms/api/v1.1/user/page (pageData con
+  id/username + flags STRING "1"/"0", filtros, admin visible),
+  /user/group/list + /user/group-by-role-level/list (grupo Default),
+  /config/ldap (GET/PUT), /user/:id (GetUser), lock/unlock, Add/Save/
+  DeleteUser akcs, /user/email/associate/list + /user/email/page,
+  GET /brms/api/v1.1/role/:id (GetRole) + CRUD role acks. E-097
+  (no-refresh): e039 buildDeviceStatusNotifyEnvelopes ->
+  vms.notifyDeviceStatus + vms.notifyDevChannelStatus (status STRING "1",
+  E-095) publicados a los topics mq.* al terminar el provisioning de cada
+  funnel de add (scheduleStreamProvisioning + addDeviceHandler) y frame WS
+  eventBus para SPA. Tests: unit **51 pass / 0 fail / 1 skip** (E-096,
+  E-097 nuevos), e2e **12/12 x3**, deploy + live-verify **15/15**. En
+  vivo: user/page admin status="1" online="1", group/list Default,
+  ldap 200, role/1 Administrator, user/1 admin, y log
+  "[E039-NOTIFY] DEVICE_STATUS D0238JDG3016" (push emitido). Listo para
+  probar en cliente: User Management con admin, Role Management,
+  asignacion de camaras; Device en Online sin refresh manual.
