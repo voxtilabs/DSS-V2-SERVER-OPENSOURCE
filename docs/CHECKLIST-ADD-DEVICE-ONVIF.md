@@ -447,3 +447,18 @@
   NOTA cliente (ambiental): permitir UDP broadcast Dahua en el firewall de
   Windows o desactivar NICs virtuales (Tailscale/VMware/Hyper-V); si el
   crash persiste, capturar con procdump -ma -e 1 "DSS Client.exe".
+
+- **Checkpoint 2026-11-06 (d) - E-100 white-screen/hang Users dialog, commit
+  18f565f**. Prueba reincidente 21:58 UTC: el dialog paso role/list (200,
+  flags string - E-099 funciono) y se colgo en la ULTIMA peticion
+  GET /brms/api/v1.1/user/page (200, 7552B); Windows registro AppHangB1
+  (cuelgue UI, NO APPCRASH), cero 5xx/FALLBACK. Auditoria del bundle SPA:
+  consumidores de role/list leen e.id; email/page y group/list se leen por
+  data.pageData (ausente = undefined = throw en render). Fix: role rows
+  llevan id+roleId; email/page + group/list + group-by-role-level sirven
+  pageData y contadores STRING; menu/available sort string; organization/
+  list contadores string + pageData; user/page contadores string. Tests:
+  E-100; unit 54 pass/0 fail/1 skip; e2e 12/12 x3; live-verify 15/15;
+  desplegado y verificado en vivo (group/list con pageData, role/list con
+  id). Pendiente: reporte RE del parser nativo de user/page (roleIds como
+  array vs string CSV) - subagente reverse-engineer en curso.
