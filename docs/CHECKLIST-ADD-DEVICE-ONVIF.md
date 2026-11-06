@@ -397,3 +397,20 @@
   "[E039-NOTIFY] DEVICE_STATUS D0238JDG3016" (push emitido). Listo para
   probar en cliente: User Management con admin, Role Management,
   asignacion de camaras; Device en Online sin refresh manual.
+
+- **Checkpoint 2026-11-06 (b) - E-098 permisos en cascada + camaras por org,
+  commit 3e43083**. RE: GetResourceRoles -> v1.1/authority/resource/{id}/
+  role/list (@0xc9c238 + /role/list, pResultRoleList), SetResourceRoles ->
+  PUT/POST v1.1/authority/resource/{id}/role (UserLogical
+  HandleSetResourceRoleIdList @0xc4ec8), ResourceAllocateGetOrgDevices ->
+  v1.1/resource-allocate/organization/device/fetch/list (pOrgDevList
+  @0xca5bd0). Implementado superset con checked/permission/operate STRING:
+  admin (roleId 1) cascade-granted en todo recurso; operator solo en
+  VIGILAB. Fix filtro root 001 (ve todo). organization/list confirmada en
+  vivo con 001 (root) + VIGILAB. Logs de prueba: server ya graba
+  [REQ]/[REQ-BODY]/[RES]/[FALLBACK] de TODO (gateway always-on); cliente
+  subido a Debug: C:\DSS\DSS Client\Localcfg.ini [LogLevel] level=2 +
+  [VaxplayerLogLevel] level=6 (tomar efecto al reiniciar el cliente),
+  sdk_log sigue en C:\DSS\DSS Client\sdk_log\sdk_log.log.
+  Ventana de captura de la prueba manual: usar docker logs con --since.
+  Tests: unit 52 pass/0 fail/1 skip, e2e 12/12 x3, live-verify 15/15.
