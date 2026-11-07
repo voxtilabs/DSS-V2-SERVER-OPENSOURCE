@@ -571,7 +571,10 @@ async function authorizeHandler(req, reply) {
   // encryptType starting with "MD5" selects the digest path; anything else
   // selects RSA against publicKey. challengeKey is our legacy harness field
   // (extra keys are ignored by the client parser — dual-key strategy).
-  if (b.userName && !b.signature && !b.digestPassword) {
+  // E-106: a body carrying password/encryptPassword is the RSA second-time
+  // login (post password/check) - do NOT challenge again or the client loops.
+  const hasRsaCred = b.password || b.encryptPassword || b.encryptPwd;
+  if (b.userName && !b.signature && !b.digestPassword && !hasRsaCred) {
     purgeExpiredPending();
     const rk = genRandomKey();
     const key = 'pending-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
