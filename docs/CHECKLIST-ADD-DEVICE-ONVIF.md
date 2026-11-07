@@ -743,3 +743,32 @@
   ingestado, visible en lista, MQ publicado ([E117-ALARM]). unit 67 pass/0
   fail, e2e 12/12 x3, live-verify 15/15. En curso: subagentes RE de eventos
   IVS/tripwire + auto-register Dahua (NVR/XD/DVR/H265).
+
+- **Checkpoint 2026-11-07 (t) - E-117/E-118/E-119/E-120 (+E-120b), commits
+  89c12a4/730fa08/3c1a715/2c71fb5/8b277d0**. Modulos cerrados con evidencia
+  RE del string pool:
+  * EVENT CENTER: protocolo real del cliente -
+  /videoService/eventCenter/messages/subscribe (@0xcbba90),
+  /eventCenter/alarmTypes (@0xc97138, catalogo con IVS propietario:
+  tripwire=13 CrossLineDetection, intrusion=15, FastMove=16...),
+  /eventCenter/alarm/messages/count (@0xc97268), y GetMqConfig ahora
+  publica eventCenter/messages/subscribeAddress (@0xc96498).
+  Eventos publicados con el schema NATIVO (ParseAlarmEventNotify
+  @0xcacaf0: alarmTypeId/alarmLevel/eventSourceType/channelCode/nodeCode/
+  linkVideoChannels/gps...). Ingesta: POST alarm/general/event + bridge
+  /admin/API/GenericEvent/Report, persistente, push MQ+WS.
+  * AUTO-REGISTER DAHUA (NVR/XD/DVR/IPC): framing RE-verificado DVRIP/DHIP
+  (magic 8B + 0x19930522 + header 48/52B + JSON register con DeviceID/
+  SerialNo/DeviceType/DeviceClass/MachineName/MachineAddress/IPAddress;
+  AutoRegister.cpp @0x01366578). Servidor 9500 acepta AMBOS framings,
+  registra el device (registry + path MediaMTX + notify) y responde ACK
+  protocol-correcto (Ret:100/RegisterServer/RegisterPort). Verificado E2E
+  con NVR simulado: ARS-NVR-E119-TEST registrado.
+  * MONITORING CENTER: CRUD de vistas/dirs ya completo (E-033) + seed
+  E-120: al abrir muestra dir VIGILAB + vista \"Camara Principal\" con la
+  camara del operador (windowData resourceType 1, streamType 0).
+  * H265/H265+: RE confirma que StartVideo NO negocia codec - el server
+  devuelve la URL con el SDP ya negociado (rtpmap H265 de MediaMTX) y
+  play.dll elige decoder en runtime. Nada que agregar.
+  Verificado en vivo en todos los casos. unit 69 pass/0 fail,
+  e2e 12/12, live-verify 15/15.
