@@ -678,3 +678,16 @@
   habria abortado el boot de Fastify. unit 62 pass/0 fail/1 skip,
   e2e 12/12 x3, live-verify 15/15. Dumps de crash del 2026-11-06 (981/987MB)
   localizados en C:\Users\Public\DSS Client\Dump\ para analisis posterior.
+
+- **Checkpoint 2026-11-07 (p) - E-113, commit 6c2be40**. Cadena de video
+  verificada extremo a extremo: POST /brms/api/v1.1/MTS/Video/StartVideo
+  caia al catch-all (data:{} = el cliente NO recibia URL de video: fallo
+  silencioso de Live View) porque solo estaba registrado en v1.0. Espejado
+  en v1.1: StartVideo (RealTimeVideoVo con rtsp://10.10.20.120:9100/
+  cam_D0238JDG3016?token, session, vkId/vkValue, hlsUrl, multicast),
+  StopVideo, KeepAlive y SS/Record completo. Verificado en vivo:
+  PUBLIC_HOST=10.10.20.120 en el contenedor (no hay bug de 127.0.0.1),
+  v1.0 y v1.1 devuelven el vo completo, OPTIONS RTSP desde la red del
+  cliente = 200 (URL entregada alcanzable), updateToken rota token y el
+  nuevo es aceptado (sesion ya no muere a los ~30 min). unit 63 pass/0
+  fail/1 skip, e2e 12/12 x3, live-verify 15/15.
