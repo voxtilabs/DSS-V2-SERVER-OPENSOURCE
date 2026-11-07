@@ -1402,7 +1402,8 @@ export const USER_GROUP_STORE = [
   {
     id: '1', groupId: '1', groupName: 'Default', name: 'Default',
     parentId: '0', parentCode: '0', description: 'Default user group',
-    remark: 'Default user group', userCount: String(USER_STORE.length),
+    remark: 'Default user group', memo: 'Default user group', // E-112: client reads "memo" (GetUserGroupList error[-1] without it)
+    userCount: String(USER_STORE.length),
     sort: '1', roleId: '1', level: '1', roleLevel: '1', status: '1', // E-099: strings
     modifyTime: '2026-01-01 00:00:00'
   }
@@ -1739,7 +1740,15 @@ export function buildDeviceFunctionCheckPayload(input = {}) {
 
 
 export function buildAlertTypeListPayload() {
-  const rows = OMMS_ALERT_TYPES.map(strEnum); // E-099: level/enable as strings
+  // E-112: the client's PacketGetAlertTypes (CommonFunc.cpp:149 key check)
+  // requires alertTypeId (+ alertTypeIdName) - observed as "Invalid key:
+  // [alertTypeId]" in the client log 2026-11-07 04:44:56.
+  const rows = OMMS_ALERT_TYPES.map(strEnum).map((a) => ({
+    ...a,
+    alertTypeId: a.alertType, alertTypeName: a.alertTypeName || a.alertName,
+    alertTypeIdName: a.alertTypeName || a.alertName,
+    name: a.alertName, type: a.alertType
+  }));
   return {
     results: rows,
     list: rows,

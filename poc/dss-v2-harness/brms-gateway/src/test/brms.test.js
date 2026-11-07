@@ -672,6 +672,29 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-112 client-log key contracts: warningHappened, results, memo, alertTypeId, hasAuthority', async () => {
+    // QueryHostSpareWarning -> "Invalid key: [warningHappened]" (client log 04:44:56)
+    const hs = await (await fetch(`${BASE}/brms/api/v1.1/system/hot-spare/switch/warning`)).json();
+    assert.ok('warningHappened' in hs.data, 'warningHappened present');
+    // PacketGetMemoryOutOfServerList / BasicServiceWarm -> "Invalid key: [results]"
+    for (const p of ['/brms/api/v1.1/system/out/memory/server/list', '/brms/api/v1.1/system/only-startup-basic-service/warning', '/brms/api/v1.1/license/warning', '/brms/api/v1.1/system/warn/disk/list']) {
+      const r = await (await fetch(`${BASE}${p}`)).json();
+      assert.ok(Array.isArray(r.data.results), `${p} carries results[]`);
+    }
+    // PacketGetAlertTypes -> "Invalid key: [alertTypeId]"
+    const at = await (await fetch(`${BASE}/omms/api/v1.1/alert/rule/alert-type/list`)).json();
+    assert.ok(at.data.list.every((a) => typeof a.alertTypeId === 'string' && typeof a.alertTypeIdName === 'string'), 'alertTypeId present');
+    // PacketGetUserGroupList -> "Invalid key: [memo]"
+    const gl = await (await fetch(`${BASE}/brms/api/v1.1/user/group/list?keyword=`)).json();
+    assert.ok(gl.data.list.every((g) => typeof g.memo === 'string'), 'group rows carry memo');
+    // PacketGetParkingOrganization -> "Invalid key: [hasAuthority]"
+    const ol = await (await fetch(`${BASE}/ipms/api/v1.1/organization/list`)).json();
+    assert.ok(ol.data.list.every((o) => typeof o.hasAuthority === 'string'), 'org rows carry hasAuthority');
+    // netDisks -> "Invalid key: [abnormityType]"
+    const nd = await (await fetch(`${BASE}/brms/api/v1.1/storage/disk/net-disk/list?serverCode=`)).json();
+    assert.ok('abnormityType' in nd.data, 'net disk carries abnormityType');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

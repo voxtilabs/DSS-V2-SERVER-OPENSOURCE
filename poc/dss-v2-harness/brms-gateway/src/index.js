@@ -1276,12 +1276,15 @@ import {
 }
 
 // Licenses + system self-check warnings (all benign: no disk/license issues).
-app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [] }));
-app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [] }));
-app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [] }));
-app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [] }));
-app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ warning: 0, list: [] }));
-app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ warning: 0, list: [] }));
+// E-112: the client's key-existence check (CommonFunc.cpp:149) marked these
+// as "Invalid key" in the live log: QueryHostSpareWarning -> warningHappened,
+// PacketGetMemoryOutOfServerList / PacketGetBasicServiceWarm -> results.
+app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [], results: [] }));
+app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [], results: [] }));
+app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ warning: 0, warningHappened: '0', warningHappenedNum: 0, list: [], results: [] }));
+app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [], results: [] }));
+app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [], results: [], items: [] }));
+app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ warning: 0, list: [], results: [] }));
 
 // Access (OBMS) + parking (IPMS) empty modules.
 app.get('/obms/api/v1.1/acp/area/list', async () => envelope({ list: [], total: 0 }));

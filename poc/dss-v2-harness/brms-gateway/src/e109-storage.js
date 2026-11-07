@@ -99,9 +99,13 @@ export function buildLocalDiskListPayload() {
 }
 
 // GetNetDiskList: no network disks configured - explicit empty (not catch-all).
+// E-112: the client's netDisk packet reads `abnormityType` (observed as
+// "Invalid key: [abnormityType]") - carried at root for every row the client
+// would materialize.
 export function buildNetDiskListPayload() {
   return {
     list: [], results: [], items: [], diskList: [], netDiskList: [], pageData: [],
+    abnormityType: '0',
     total: '0', totalCount: '0', pageNo: '1', pageSize: '100', pageCount: '1'
   };
 }

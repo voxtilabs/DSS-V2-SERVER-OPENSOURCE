@@ -153,6 +153,7 @@ export function buildOrganizationListPayload() {
       // E-087 GetOrganizationsVo descriptor + tree aliases
       parentOrgCode: o.parentCode || '0',
       orgType: String(o.orgType ?? '1'),
+      hasAuthority: '1', authority: '1', // E-112: ipms organization/list key check
       sourceType: '',
       sourceId: '',
       associateId: '',
