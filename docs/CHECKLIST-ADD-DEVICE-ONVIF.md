@@ -566,3 +566,23 @@
   user/page pageData[]+totalCount string con name/enableMPT/roles[];
   authority results = array de STRINGS + PUT role/update; domain org
   nativo; ldap nativo; tree/full GET sin huerfanos; Rights/* legacy).
+
+- **Checkpoint 2026-11-07 (i) - E-106/E-106b, commits df2b96c/48d841c**.
+  CAUSA RAIZ de los toasts \"Abnormal network\" y ventana vacía: el login
+  real de segunda vez VerifyFirstTime -> GET /brms/api/v1.1/account/security/
+  public-key/generate (@0xca13d9) y VerifySecondTime -> POST /account/
+  security/password/check (@0xca1559, RSA \"Get RsaCryption\" @0xc7cbf4,
+  claves publicKey/randomKey @0xcc70a8) caían en el catch-all [FALLBACK]
+  (59B/40B) -> el proceso RSA nunca completaba -> accounts/authorize nunca
+  corría -> TODAS las llamadas del dialogo iban con x-subject-token ABSENT
+  -> \"Failed to get the LDAP configuration / role list: Abnormal network\"
+  y ventana vacía (sin crash, y sin peticiones nuevas al server: la traza
+  del cliente mostraba solo 3 peticiones). FIX: public-key/generate sirve
+  clave RSA 1024 real (PEM) + randomKey (privada en PUBKEY_PENDINGS 5 min);
+  password/check desencripta (PKCS1->OAEP) y devuelve success; authorize ya
+  NO re-challengea el body RSA (evita loop de login). Verificado en vivo
+  end-to-end: PEM OK -> password/check 1000 -> authorize 200 token 64 ->
+  role/list results=2 -> user/page admin=Administrator. Tests: E-106,
+  unit 58 pass/0 fail/1 skip, e2e 12/12, live-verify 15/15.
+  Nota: subagentes MiniMax quedaron fuera por rate-limit 429; investigación
+  cerrada localmente.
