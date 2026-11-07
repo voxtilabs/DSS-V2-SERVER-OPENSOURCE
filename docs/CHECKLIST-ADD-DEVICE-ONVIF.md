@@ -493,3 +493,25 @@
   D0238JDG3016+D7001SHX9002 y sus canales. unit 56 pass/0 fail/1 skip,
   e2e 12/12 x3, live-verify 15/15. Pendiente: reportes de mision 1 (RE
   ciclo de vida) y mision 2 (forense ventana 00:05-00:10 UTC).
+
+- **Checkpoint 2026-11-06 (g) - E-104, commit 032e262 + forense ventana
+  00:05-00:10 UTC**. Forense: la secuencia del dialogo termino en
+  role/list (00:07:56.823, 200, 4397B) y 3s despues ECONNRESET del cliente;
+  user/page NUNCA se pidio en esa ventana; sin WER AppHang esta vez. Esa
+  ventana corria con E-102 (contenedor iniciado 00:02:04) donde role/page
+  NO servia pageData. Reporte RE completo (DPSDK): contrato envelope
+  {code:int(1000), desc:string, data:objeto}; role/list nativo =
+  data.results[] con allowEdit/id/roleType/roleName/memo strings;
+  role/page = pageData[] + totalCount string; user/page = pageData[] +
+  totalCount string con username/online/name/enableMPT/id/status/userType +
+  roles[{roleId,roleName}]; authority/resource/{id}/role/list =
+  data.results ARRAY DE STRINGS (roleIds) - servir objetos ahi hace que el
+  parser nativo extraiga 0 elementos; config/ldap = data directo con
+  username/port/autoSynTime/dn/enable/enableAutoSyn/ssl/server strings
+  (enable/ssl comparados con "1"); user/group = results[] con
+  groupId/groupName/users[{userId,username}]. Aplicado E-104 (authority
+  results strings, ldap keys nativos). Verificado en vivo: role/page
+  pageData=2, ldap keys nativos, authority results ["1","2"],
+  user/email pageData, role/list rows id/roleName. unit 57 pass/0 fail,
+  e2e 12/12 x3, live-verify 15/15. Pendiente: reporte mision 1 (ciclo de
+  vida post-role/list) del reverse-engineer.
