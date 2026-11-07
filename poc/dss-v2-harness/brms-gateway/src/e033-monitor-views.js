@@ -154,6 +154,34 @@ function viewDirTreeVo(dir, isPublicTree) {
   };
 }
 
+// E-120: Monitoring Center seed. The operator's org gets a root dir + a view
+// with the operator camera, so the module opens populated (and the user can
+// then create more dirs/views from the UI - the CRUD above is complete).
+export function seedMonitoringCenter(opts = {}) {
+  const orgCode = String(opts.orgCode || 'VIGILAB');
+  const channel = String(opts.channelId || 'D0238JDG3016$1$0$0');
+  const deviceCode = String(opts.deviceCode || 'D0238JDG3016');
+  const cameraName = String(opts.cameraName || 'Camara Principal');
+  if (VIEW_DIRS.size) return { seeded: false, reason: 'store not empty' };
+  const dirCode = 'VD' + orgCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  VIEW_DIRS.set(dirCode, {
+    viewDirCode: dirCode, viewDirName: orgCode, viewDirType: VIEW_TYPE_PUBLIC, viewDirLevel: 1,
+    roleIds: [], remark: 'Organizacion ' + orgCode, viewCodes: []
+  });
+  const viewCode = nextCode('VW');
+  VIEWS.set(viewCode, {
+    viewCode, viewName: cameraName, viewDirCode,
+    viewShared: 0, viewReaded: 0, windowTotal: '1',
+    griddingRows: '1', griddingCols: '1',
+    windowLayout: [{ griddingIndex: '1', griddingEnable: '1', griddingCombine: '0', windowFromX: '0', windowToX: '1', windowFromY: '0', windowToY: '1' }],
+    windowData: [{ windowNo: '1', resourceType: '1', resourceCode: channel, resourceName: cameraName, streamType: '0', alarmWindow: '0', siteIp: '' }],
+    orgCode, deviceCode
+  });
+  VIEW_DIRS.get(dirCode).viewCodes.push(viewCode);
+  saveViewsToDisk();
+  return { seeded: true, viewDirCode: dirCode, viewCode };
+}
+
 // GET monitor/view/view-tree?viewType=N
 // -> { viewInfos: [ {viewType, viewDirs:[public]}, {viewType, viewDirs:[private]} ] }
 export function buildViewTreePayload(viewType = VIEW_TYPE_PUBLIC) {

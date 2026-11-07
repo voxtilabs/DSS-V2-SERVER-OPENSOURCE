@@ -108,6 +108,7 @@ import { ensureDeviceStream, findDeviceByChannelId } from './e025-devices.js';
 // original DSS Server V8.008 package (ViewController / ViewTreeVo / ...).
 import {
   loadViewsFromDisk,
+  seedMonitoringCenter,
   buildViewTreePayload,
   buildViewDirPayload,
   addViewDir,
@@ -138,6 +139,11 @@ import {
   buildNativeAllOrgPayload
 } from './e037-native-tree.js';
 loadViewsFromDisk();
+// E-120: Monitoring Center opens populated (VIGILAB dir + operator camera view)
+try {
+  const seeded = seedMonitoringCenter({});
+  if (seeded.seeded) console.log('[E120-VIEWS] seeded Monitoring Center:', JSON.stringify(seeded));
+} catch (err) { console.log('[E120-VIEWS] seed skipped:', err.message); }
 // E-025: the mock camera is part of the device registry so /device/page,
 // /tree/* and the statistics all report the same set of devices.
 // E-028: the seeded mock ("Test Camera" @127.0.0.1:37777, manufacturer
