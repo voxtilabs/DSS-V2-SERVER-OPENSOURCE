@@ -462,3 +462,22 @@
   desplegado y verificado en vivo (group/list con pageData, role/list con
   id). Pendiente: reporte RE del parser nativo de user/page (roleIds como
   array vs string CSV) - subagente reverse-engineer en curso.
+
+- **Checkpoint 2026-11-06 (e) - E-101 + E-102, commits eac2a28 / 42d33db**.
+  Ventana crash 22:53 UTC (contenedor confirmado corriendo E-100 por md5):
+  ultima peticion user/page 200 7556B y luego 5m38s de silencio (AppHangB1).
+  E-101: GET/POST tree/full/grade-device-tree (+search/list, v1.0/v1.1) ya no
+  cae en FALLBACK (era el arbol de permisos del dialog); POST /role devuelve
+  el rol real (no stub estatico); user rows sirven roleIds como CSV string +
+  alias roleIdArray. E-102 (RE Ghidra/REA de los descriptores nativos
+  FUN_180754c60 matcher SIN coercion de tipos: numero donde se espera string
+  = campo NULL silencioso): user/page ahora incluye name, enableMPT y
+  roles[] [{roleId,roleName}]; role/page incluye allowEdit/id/roleType/
+  roleName/memo; authority role/list results[] con id/roleName/memo; nuevo
+  PUT authority/resource/{id}/role/update (SetResourceRoles, echo roleIds);
+  domain/organization/list en forma nativa (domainOrgExceeded + results[]
+  domainOrgCode/Name/Path/Type/Dn/pId); group-by-role-level con users[].
+  Verificado en vivo: admin name=Administrator roles=[{roleId:1,...}],
+  VIGILAB en domain org results, role/update echo ["1","2"], full tree con
+  checked string. Tests: unit 56 pass/0 fail/1 skip, e2e 12/12 x3,
+  live-verify 15/15, md5 desplegado OK.
