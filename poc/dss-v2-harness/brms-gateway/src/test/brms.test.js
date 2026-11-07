@@ -763,6 +763,37 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(bridge.data.success, true);
   });
 
+  it('E-118 eventCenter protocol: subscribe + alarmTypes + count + native schema', async () => {
+    // subscribe ACK with the DPSDK params
+    const sub = await (await fetch(`${BASE}/videoService/eventCenter/messages/subscribe`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ subscribeAddress: 'https://10.10.20.120:1443/videoService/eventCenter/messages/subscribe', subscribeAddrType: 'http', subscribeUser: '', subscribePassword: '', initMessageId: '0' })
+    })).json();
+    assert.equal(sub.code, 1000);
+    assert.ok(sub.data.msgId !== undefined && sub.data.subscribeId, 'subscribe ack carries msgId+subscribeId');
+    // alarm type catalog with the proprietary IVS ids (tripwire/intrusion)
+    const at = await (await fetch(`${BASE}/videoService/eventCenter/alarmTypes`)).json();
+    const trip = at.data.list.find((a) => a.alarmType === 'CrossLineDetection');
+    assert.ok(trip && trip.alarmTypeId === '13' && trip.category === 'ivs', 'tripwire in the catalog');
+    assert.ok(at.data.list.some((a) => a.alarmType === 'Intrusion' && a.alarmTypeId === '15'));
+    // count badge
+    const cnt = await (await fetch(`${BASE}/videoService/eventCenter/alarm/messages/count`)).json();
+    assert.strictEqual(typeof cnt.data.count, 'string');
+    // GetMqConfig advertises the subscribe address (E-118) - legacy admin RPC base
+    const mq = await (await fetch(`${BASE}/admin/API/BRM/Config/GetMqConfig`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    const mqData = mq.data || mq.info || mq;
+    const addr = mqData['eventCenter/messages/subscribeAddress'] || mqData.eventCenterSubscribeAddress;
+    assert.ok(String(addr).includes('/videoService/eventCenter/messages/subscribe'), 'MqConfig advertises the eventCenter subscribe url, got ' + addr);
+    // the ingested generic event publishes the NATIVE schema over MQ
+    const ev = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ eventType: '13', eventLevel: '1', deviceCode: 'D0238JDG3016', channelId: 'D0238JDG3016$1$0$0', description: 'E-118 tripwire' })
+    })).json();
+    const det = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/${ev.data.eventId}`)).json();
+    assert.strictEqual(det.data.alarmTypeId, '13', 'stored event carries alarmTypeId');
+    assert.strictEqual(det.data.eventSourceType, '3', 'IVS event source type');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

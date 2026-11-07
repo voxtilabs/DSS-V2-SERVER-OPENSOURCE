@@ -19,6 +19,8 @@
 import fs from 'node:fs';
 import { DEVICE_REGISTRY, OMMS_ALERT_TYPES, allChannels } from './e025-devices.js';
 import { deviceOrgCode } from './e041-orgs.js';
+import { DSS_ALARM_TYPE_CATALOG } from './e118-event-center.js';
+const e118 = () => ({ toNativeAlarmEvent: (x) => x, DSS_ALARM_TYPE_CATALOG });
 
 const EVENTS_FILE = process.env.EVENTS_FILE || (fs.existsSync('/app/data') ? '/app/data/events.json' : './data/events.json');
 const MAX_EVENTS = 500;
@@ -32,20 +34,29 @@ function saveEvents(list) {
 let EVENT_STORE = loadEvents(); // newest first
 
 export function ingestGeneralEvent(body = {}) {
+  // E-118: the stored event carries the NATIVE schema too (alarmTypeId,
+  // eventSourceType, channelCode...) so the Event Center list binds it.
+  const { toNativeAlarmEvent, DSS_ALARM_TYPE_CATALOG } = e118();
+  const cat = DSS_ALARM_TYPE_CATALOG.find((a) => a.alarmTypeId === String(body.eventType ?? '99'));
   const now = new Date().toISOString();
   const event = {
     eventId: String(body.eventId || ('ge-' + Date.now())),
     alarmId: String(body.eventId || ('ge-' + Date.now())),
-    eventType: String(body.eventType ?? '1'),
-    eventTypeName: String(body.eventTypeName || body.description || 'Generic Event'),
-    eventLevel: String(body.eventLevel ?? '1'),
+    eventType: String(body.eventType ?? '99'),
+    alarmTypeId: String(body.eventType ?? '99'),
+    alarmType: cat?.alarmType || String(body.eventType ?? 'Generic'),
+    eventTypeName: cat?.alarmTypeName || String(body.eventTypeName || body.description || 'Generic Event'),
+    eventLevel: String(body.eventLevel ?? cat?.level ?? '1'),
     channelId: String(body.channelId ?? ''),
+    channelCode: String(body.channelId ?? ''),
     channelName: String(body.channelName ?? ''),
     deviceCode: String(body.deviceCode ?? ''),
     deviceName: String(body.deviceName ?? ''),
     orgCode: String(body.orgCode ?? (body.deviceCode ? (deviceOrgCodeOf(body.deviceCode) || '001') : '001')),
     eventTime: String(body.eventTime ?? now),
+    alarmTime: String(body.eventTime ?? now),
     description: String(body.description ?? ''),
+    eventSourceType: cat?.eventSourceType || '9',
     handleStatus: '0', status: '1',
     source: 'generic', createTime: now
   };

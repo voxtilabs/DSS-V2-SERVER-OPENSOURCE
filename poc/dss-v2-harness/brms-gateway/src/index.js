@@ -13,6 +13,7 @@ import {
   createMqttBroker,
   createNotifyHub,
   buildMqConfigPayload,
+  setNativeAlarmMapper,
   MQ_USER_ID
 } from './e039-mq-notify.js';
 // E-040: STOMP publisher to the REAL ActiveMQ Classic broker (OpenWire
@@ -912,7 +913,7 @@ async function brmRpcHandler(req) {
     // with mqtt "") + the real brms.notify*
     // topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0) + the DPSDK
     // descriptor keys password/addr/mqtt/enableTls/userName (FUN_1806755a0).
-    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, mqttPort: MQTT_PORT, enabled: MQ_ENABLE });
+    const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, mqttPort: MQTT_PORT, enabled: MQ_ENABLE, httpsPort: HTTPS_PORT });
     cfg.SessionId = String(b.clientPushId || cfg.SessionId);
     // dual-key: legacy envelope (info/data) AND root-level spread (the DPSDK
     // response parser may bind either layer).
@@ -1273,6 +1274,19 @@ import {
     app.get(`${host}/config/sub-oss-port`, async () => envelope(buildSubOssPortPayload()));
     app.get(`${host}/config/export-password`, async () => envelope(buildExportPasswordPayload()));
   }
+}
+
+// ===== E-118: Event Center protocol (DPSDK string pool @0xcbba90 etc.) =====
+import {
+  buildEventCenterAlarmTypesPayload, buildEventCenterAlarmCountPayload,
+  buildEventCenterSubscribePayload, toNativeAlarmEvent, DSS_ALARM_TYPE_CATALOG
+} from './e118-event-center.js';
+// The client opens the alarm pull queue here after GetMqConfig advertises it.
+for (const host of ['/videoService', '/brms/api/v1.1', '/brms/api/v1.0']) {
+  app.post(`${host}/eventCenter/messages/subscribe`, async (req) => envelope(buildEventCenterSubscribePayload({ ...req.query, ...(req.body || {}) })));
+  app.get(`${host}/eventCenter/messages/subscribe`, async (req) => envelope(buildEventCenterSubscribePayload({ ...req.query, ...(req.body || {}) })));
+  app.get(`${host}/eventCenter/alarmTypes`, async () => envelope(buildEventCenterAlarmTypesPayload()));
+  app.get(`${host}/eventCenter/alarm/messages/count`, async () => envelope(buildEventCenterAlarmCountPayload()));
 }
 
 // ===== E-117: Event Center + Generic Event ingestion =======================
@@ -2342,6 +2356,8 @@ app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/
 // + PLAY <path>. The relay makes both worlds meet - without it Live View
 // receives 400 on SETUP and never opens.
 import { startRtspRelay } from './e115-rtsp-relay.js';
+// E-118: the alarm notifier publishes the NATIVE event schema
+setNativeAlarmMapper(toNativeAlarmEvent);
 const RTSP_UPSTREAM_HOST = process.env.MEDIAMTX_HOST || 'mediamtx';
 const RTSP_UPSTREAM_PORT = parseInt(process.env.MEDIAMTX_RTSP_PORT || '8554', 10);
 if (!process.env.DISABLE_RTSP_RELAY) {

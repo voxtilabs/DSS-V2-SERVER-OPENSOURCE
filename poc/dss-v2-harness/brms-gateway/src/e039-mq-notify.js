@@ -251,9 +251,14 @@ export function buildClientNotifyEnvelopes(type, device) {
 // mq.* topics (observed "mq.event.msg.topic.1" with UserId '1').
 export const MQ_USER_ID = '1';
 
-export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1883, enabled }) {
+export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1883, enabled, httpsPort = 1443 }) {
   const mqAddr = `${publicHost}:${amqPort}`;
   const mqttAddr = `${publicHost}:${mqttPort}`;
+  // E-118: the Event Center subscription address (DPSDK string pool:
+  // eventCenter/messages/subscribeAddress @0xc96498 in VSL GetMQConfig,
+  // eventCenter/messages/subscribe @0xcbba90 in CHttpEventPullQueue).
+  // The client dials this URL to open the alarm event pull queue.
+  const eventCenterSubscribe = `https://${publicHost}:${httpsPort}/videoService/eventCenter/messages/subscribe`;
   return {
     method: 'BRM.Config.GetMqConfig',
     SessionId: '',
@@ -273,6 +278,17 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1
     password: 'admin',
     enableTls: '',
     mqtt: mqttAddr,
+    // E-118: Event Center subscription block (DPSDK descriptors @0xc96498,
+    // @0xcbba90; params subscribeAddress/subscribeAddrType/subscribeUser/
+    // subscribePassword/initMessageId/msgId @0xcd6628-0xcd6670)
+    'eventCenter/messages/subscribeAddress': eventCenterSubscribe,
+    eventCenterSubscribeAddress: eventCenterSubscribe,
+    'eventCenter/messages/subscribeAddrType': 'http',
+    subscribeAddrType: 'http',
+    'eventCenter/messages/subscribeUser': '',
+    subscribeUser: '',
+    'eventCenter/messages/subscribePassword': '',
+    subscribePassword: '',
     // lab broker credentials (ActiveMQ image defaults, lab-only - the same
     // class of lab credentials already used by the gateway/e2e admin login)
     MQUser: 'admin',
@@ -519,13 +535,25 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
 export function buildAlarmEventEnvelope(event) {
   const e = typeof event === 'object' && event !== null ? event : { eventId: String(event) };
   const ts = new Date().toISOString();
-  return JSON.stringify({
-    method: 'vms.alarm.msg',
-    eventId: e.eventId, alarmId: e.eventId,
-    alarmType: String(e.eventType ?? '1'), eventType: String(e.eventType ?? '1'),
-    level: String(e.eventLevel ?? '1'), eventLevel: String(e.eventLevel ?? '1'),
-    channelId: e.channelId || '', deviceCode: e.deviceCode || '', orgCode: e.orgCode || '',
-    eventTime: e.eventTime || ts, timestamp: ts,
-    description: e.description || '', status: '1', handleStatus: '0'
-  });
+  // E-118: native schema (ParseAlarmEventNotify) - alarmTypeId/alarmLevel/
+  // eventSourceType/channelCode/nodeCode are what the Event Center binds.
+  const ev = {
+    eventId: e.eventId || e.alarmId, deviceCode: e.deviceCode, deviceId: e.deviceId,
+    deviceName: e.deviceName, channelId: e.channelId, channelCode: e.channelCode || e.channelId,
+    channelName: e.channelName, orgCode: e.orgCode || e.nodeCode, eventType: e.eventType ?? e.alarmType,
+    eventTypeName: e.eventTypeName || e.alarmTypeName, eventLevel: e.eventLevel ?? e.alarmLevel,
+    eventTime: e.eventTime || e.alarmTime, description: e.description ?? e.strMessage ?? e.eventRemark
+  };
+  const native = toNativeAlarmEventSafe(ev);
+  return JSON.stringify({ method: 'vms.alarm.msg', timestamp: ts, ...native });
 }
+
+// late import guard: e117/e118 may not be loaded when this module is used alone
+let toNativeAlarmEventSafe = (ev) => ({
+  alarmTypeId: String(ev.eventType ?? '99'), alarmType: String(ev.eventType ?? 'Generic'),
+  alarmLevel: String(ev.eventLevel ?? '1'), eventSourceType: '9',
+  deviceCode: ev.deviceCode || '', channelCode: ev.channelCode || '',
+  eventTime: ev.eventTime || new Date().toISOString(), nodeCode: ev.orgCode || '001',
+  strMessage: ev.description || ''
+});
+export function setNativeAlarmMapper(fn) { if (typeof fn === 'function') toNativeAlarmEventSafe = fn; }
