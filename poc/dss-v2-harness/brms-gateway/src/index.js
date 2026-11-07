@@ -1615,6 +1615,21 @@ app.put('/brms/api/v1.1/config/ldap', async (req) => envelope(buildLdapConfigPay
 app.post('/brms/api/v1.1/config/ldap', async (req) => envelope(buildLdapConfigPayload()));
 app.get('/brms/api/v1.1/user/email/associate/list', async (req) => envelope(buildUserEmailListPayload(req.query)));
 app.get('/brms/api/v1.1/user/detail/list', async (req) => envelope(buildUserPagePayload({ ...req.query, ...(req.body || {}) })));
+// E-105: legacy /admin/API/ surface of the SAME native dialog
+// (DPSDK CRestLogical GetUserGroup->"Rights/Groups" @0xc9cde8,
+// GetUserBaseInfo->"Rights/Users" @0xc9ce70,
+// GetUserDetailInfo->"Rights/User" @0xc9d028) - same payload shapes.
+const rightsUsersHandler = async (req) => envelope(buildUserPagePayload({ ...req.query, ...(req.body || {}) }));
+const rightsGroupsHandler = async (req) => envelope(buildUserGroupListPayload({ ...req.query, ...(req.body || {}) }));
+for (const m of ['get', 'post']) {
+  app[m]('/admin/API/Rights/Users', rightsUsersHandler);
+  app[m]('/admin/API/Rights/User', async (req) => {
+    const id = String(req.query?.userId || req.query?.id || req.body?.userId || req.params?.userId || '1');
+    const row = buildUserDetailPayload(id);
+    return row ? envelope(row) : envelope({ list: [], results: [], items: [], pageData: [], totalCount: '0', total: '0' });
+  });
+  app[m]('/admin/API/Rights/Groups', rightsGroupsHandler);
+}
 // user/detail/list + email page (DPSDK GetUserEmailsByPage)
 app.get('/brms/api/v1.1/user/email/page', async (req) => envelope(buildUserEmailListPayload(req.query)));
 // GetUser -> v1.1/user/:id (static paths above win over this param route)

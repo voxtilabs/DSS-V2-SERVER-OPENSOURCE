@@ -153,7 +153,46 @@ Nuestro `envelope(data, code=1000, desc='Success')` cumple: `code` entero 1000, 
 6. **Espera infinita en el mutex recursivo propio de `UserLogical`** (`FUN_180014020` → `WaitForSingleObjectEx(hEvent, 0xffffffff, 0)`): sin comprobación de hilo propietario y con evento **auto-reset**, una reentrada o un *lost wake-up* deja el **hilo de UI** aparcado para siempre ⇒ **AppHangB1 sin `0xC0000005`** (§10.5). Lo toma el getter de una sola lectura `FUN_1800647d0` (`UserList` vtable `+0x58`) que el handler `FUN_180ac33a0` invoca al procesar la notificación `opcode 0xd`.
 7. Excepción (`std::bad_alloc`) dentro de la sección crítica de `CUser::HandleGetUsersList` (`FUN_18008f714` / `FUN_18004e960` / `FUN_180047d20`) ⇒ el mutex `CUser+0x68` **queda tomado** ⇒ todo acquisitions posterior cuelga en (6).
 
-## 9. Estado del gateway (post E-104)
+## 9. Ciclo de vida del diálogo (orden observado + superficie nativa completa)
+
+Orden observado en el gateway al abrir Users/Configuración (E-104 runtime):
+`role/page` → `function/available/list` → `menu/available/list?roleId=1` → `subsystem/available/list` → `user/group/list?keyword=` → `config/ldap` → `role/list` → `user/page` → (al seleccionar usuario) `user/:id`, `authority/resource/{id}/role/list`, `resource-allocate/organization/device/fetch/list`, `tree/full/grade-device-tree`.
+
+Superficie CRestLogical completa del pool de strings (file 0xc9c000–0xc9d900) para Users/Roles:
+
+| Handler DPSDK | URL |
+|---|---|
+| GetAvailableSubSystems | `v1.1/subsystem/available/list` |
+| GetSubSystemConfigWarning | `v1.1/subsystem/register/warning` |
+| GetUserRolesList | `v1.1/role/list` |
+| GetAllRolesList | `v1.1/role/all/list` |
+| GetResourceRoles | `v1.1/authority/resource/{id}/role/list` |
+| SetResourceRoles | `PUT v1.1/authority/resource/{id}/role/update` |
+| GetDomainUserList / Add / DeleteInvalid | `v1.1/domain/user/...` |
+| GetDomainOrganizations | `v1.1/domain/organization/list` |
+| GetDomainInfosByPage | `v1.1/domain/page` |
+| GetAccountMenuList | `v1.1/account/menu/list` |
+| CheckDeviceFunction | `v1.1/account/function/device/check` |
+| CheckChannelFunction | `v1.1/account/function/channel/check` |
+| GetDeviceOverview | `v1.1/account/device/overview` |
+| SearchFullGradeDeviceTree / SearchGradeDeviceTree | `v1.1/tree/{full/}grade-device-tree/search/list` |
+| GetFullGradeDeviceTree / GetGradeDeviceTree | `v1.1/tree/{full/}grade-device-tree` |
+| GetDeviceTreeInfo | `v1.1/tree/device-tree` |
+| **GetUserGroup** | **`/admin/API/Rights/Groups`** (legacy) |
+| **GetUserBaseInfo** | **`/admin/API/Rights/Users`** (legacy) |
+| GetUserManagerRoles | `v1.1/role/page` |
+| GetUserManagerUsers | `v1.1/user/page` |
+| **GetUserDetailInfo** | **`/admin/API/Rights/User`** (legacy) |
+| SaveUser | `v1.1/user/{id}` |
+| GetRole | `v1.1/role/{id}` |
+| GetUser | `v1.1/user/{id}` |
+| AddRole / UpdateRole | `v1.1/role` |
+| AddUser | `v1.1/user` |
+| LockUser / UnLockUser | `v1.1/user/{id}/lock|unlock` |
+
+E-105: las tres rutas legacy `/admin/API/Rights/*` se sirven con los mismos shapes (users page / groups / user detail).
+
+## 10. Estado del gateway (post E-104)
 
 Todos los endpoints de la secuencia sirven las claves nativas exactas (case-sensitive), flags string, arrays donde el nativo espera arrays, `results` de strings en `authority/.../role/list`, y variantes GET `/full/` del árbol. Tests de regresión: `brms.test.js` E-096…E-104.
 
