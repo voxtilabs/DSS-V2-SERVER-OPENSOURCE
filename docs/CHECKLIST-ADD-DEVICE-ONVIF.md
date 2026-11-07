@@ -599,3 +599,20 @@
   todas las variantes REAL, flujo E2E completo (PEM -> password/check ->
   authorize token 64 -> role/list -> user/page admin). unit 58 pass/0 fail,
   e2e 12/12 x3, live-verify 15/15.
+
+- **Checkpoint 2026-11-07 (k) - E-108, commit 5644594**. Barrido QA de 56
+  endpoints en vivo: 49 REAL, solo 3 genuinamente ausentes (catch-all
+  [FALLBACK] confirmado por el log interno): account/menu/list
+  (GetAccountMenuList @0xc9c8e0), config/videoIntercom y config/mail.
+  Implementados con datos reales + todas las variantes de prefijo
+  (brms v1.1/v1.0/v2.0, ipms v1.1). Verificado en vivo: menu/list 57.9KB,
+  videoIntercom 117B, config/mail 322B. unit 59 pass/0 fail/1 skip,
+  e2e 12/12 x3, live-verify 15/15.
+  ESTADO ARQUITECTONICO: secuencia completa del dialogo Users servida
+  (login RSA E-106 -> role/page pageData -> function/menu/subsystem
+  available -> user/group/list+users -> config/ldap nativo -> role/list ->
+  user/page admin -> Rights/* -> authority strings -> resource-allocate ->
+  account/function gate). RTSP 200 en ambos canales; MediaMTX/ActiveMQ/SIP
+  activos. REA/Ghidra sobre DPSDK no completó por timeout de import
+  (17MB > 330s); la evidencia RE se cerró por string-pool + reportes de
+  subagentes equivalente.
