@@ -632,3 +632,18 @@
   1568B, storage position 2793B, local-disk 2037B, journal escribiendo.
   unit 60 pass/0 fail/1 skip, e2e 12/12 x3, live-verify 15/15.
   DOCS: docs/DSS_ENDPOINT_COVERAGE.md §8 con las 12 URLs y su estadofinal.
+
+- **Checkpoint 2026-11-07 (m) - E-110, docs -18 + cfgs prefix**. Reporte RE
+  definitivo (PluginFactory.dll @0x180ac3780/@0x180ac4370): el toast
+  \"Abnormal network\" es la traduccion del ErrorId -18 (DPSDK_ABNORMAL_NETWORK
+  de BaseErrorCode.db) que SOLO produce CheckLoginValid cuando m_strToken esta
+  vacio (@0x1800d31cf); los 3 APIs del dialogo (ldap @0x1801f73f5, role/list
+  @0x18028e869, user/page @0x1802a02a4) validan login ANTES de salir a red ->
+  con token vacio devuelven -18 sin HTTP -> toasts y ventana vacia por fallo de
+  user/page (mapa [r13+0xd8] nunca se llena), no por role/list. La capa HTTP
+  trata code:1000+200 como exito (@0x18055dc19): el catch-all benigno NO es
+  error de red pero deja el handshake incompleto. Cliente manda headers
+  X-Subject-Token + X-Subject-Sequence (@0x18055cfa0). Accion: espejados los
+  config calientes en /cfgs/api (prefijo alternativo que GetLdapConfig puede
+  usar). Documentado en docs/DSS_ENDPOINT_COVERAGE.md §9. unit 60 pass/0 fail,
+  e2e 12/12 x3 (sin cambios de ruta nuevos, solo alias cfgs).

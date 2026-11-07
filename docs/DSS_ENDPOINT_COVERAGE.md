@@ -96,7 +96,32 @@ esta cosecha hubo que rescatarla de archivos `/tmp`. Ahora cada `[REQ]`/`[RES]`/
 `[FALLBACK]` se journaliza además en `/app/data/logs/requests-YYYY-MM-DD.log`
 (volumen rw), así la próxima forensía sobrevive a `docker compose up --build`.
 
-## 9. Infraestructura verificada
+## 9. Semántica del toast "Abnormal network" (RE con offsets, 2026-11-07)
+
+No es un veredicto de red: es la traducción del código **`-18`** (`DPSDK_ABNORMAL_NETWORK`)
+de `ErrorDB\BaseErrorCode.db` vía `CErrorCode::GetErroCodeInfor`, y **`-18` solo lo
+produce `CRestLogical::CheckLoginValid` cuando `m_strToken` está vacío** (@0x1800d31cf,
+"User token is invalid. m_strToken is empty"). Los tres APIs del diálogo
+(`GetLdapConfig` @0x1801f73f5, `GetUserRolesList` @0x18028e869,
+`GetUserManagerUsers` @0x1802a02a4) llaman a CheckLoginValid **antes** de salir a
+la red: con token vacío devuelven -18 sin HTTP → toasts
+("Failed to get the LDAP configuration" PluginFactory @0x180ac3780 /
+"Failed to get the role list" @0x180ac4370) y **la ventana queda vacía por el
+fallo de `user/page`** (el mapa de usuarios [r13+0xd8] nunca se llena),
+independientemente de `role/list`.
+
+Consecuencias de diseño:
+- La capa HTTP trata `code:1000` + HTTP 200 como **éxito** (@0x18055dc19): un
+  catch-all benigno NO genera error de red, pero deja el handshake incompleto.
+- Los headers que construye el cliente (@0x18055cfa0): `Content-Type:
+  application/json;charset=UTF-8`, `X-Subject-Token`, **`X-Subject-Sequence`**,
+  `Expect`, `Compress-Type` (el gateway los ignora salvo el token).
+- Los parsers devuelven 0=OK / -1=error; jamás -18 → si el toast aparece, el
+  problema es de **sesión**, no de payload.
+- E-106 (RSA login) emite el token; E-110 cubre el prefijo `/cfgs/api` que
+  GetLdapConfig puede usar para los config.
+
+## 10. Infraestructura verificada
 
 RTSP 9100 (200 en `D0238JDG3016$1$0$0` y `D00712RD0005$1$0$0`), MediaMTX, ActiveMQ
 (OpenWire 61616 + STOMP 61613 + MQTT 1883 con notify), SIP UDP 5080 (REGISTER 200),

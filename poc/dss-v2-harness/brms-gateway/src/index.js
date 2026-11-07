@@ -1180,6 +1180,26 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/brms/api/v2.0', '/ipms
   app.post(`${host}/storage/group/list`, async () => envelope(buildDiskGroupListPayload()));
 }
 
+// E-110: RE evidence (PluginFactory.dll @0x180ac3780/@0x180ac4370, DPSDK
+// CheckLoginValid @0x1800d3080) shows the client may build config URLs on the
+// /cfgs/api prefix too (GetLdapConfig 0x1801f75a7 picks the subsystem prefix).
+// "Abnormal network" = ErrorId -18 (empty m_strToken), so a config call routed
+// to an unserved prefix failed with the benign catch-all and no token context.
+// Mirror the hot config endpoints on /cfgs/api so the prefix choice cannot
+// break them.
+for (const host of ['/cfgs/api/v1.1', '/cfgs/api/v1.0']) {
+  app.get(`${host}/config/ldap`, async () => envelope(buildLdapConfigPayload()));
+  app.post(`${host}/config/ldap`, async () => envelope(buildLdapConfigPayload()));
+  app.get(`${host}/config/mail`, mailConfigHandler);
+  app.post(`${host}/config/mail`, mailConfigHandler);
+  app.get(`${host}/config/videoIntercom`, videoIntercomHandler);
+  app.get(`${host}/config/function`, async () => envelope(REAL_FUNCTION_CONFIG));
+  app.get(`${host}/config/sira`, async () => envelope({ siraEnable: 0, enable: false, status: '0' }));
+  app.get(`${host}/config/interface/common/timeout`, async () => envelope({ timeout: 300 }));
+  app.get(`${host}/account/menu/list`, accountMenuHandler);
+  app.get(`${host}/account/user/level`, async () => envelope(buildUserLevelPayload()));
+}
+
 // Licenses + system self-check warnings (all benign: no disk/license issues).
 app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [] }));
 app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [] }));
