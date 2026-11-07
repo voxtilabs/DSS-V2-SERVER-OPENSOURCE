@@ -43,6 +43,8 @@ export const MQ_TOPICS = [
 ];
 export const TOPIC_BATCH_ADD_DEVICES = 'brms.notifyBatchAddDevices';
 export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
+export const TOPIC_ALARMS = 'brms.notifyAlarms';
+export const TOPIC_VMS_ALARM_MSG = 'vms.alarm.msg';
 
 // E-088 (lab evidence 2026-11-04 ~22:00 UTC, Jolokia on the live broker):
 // MSG.exe connects OpenWire ssl://61616 and subscribes ONLY to its hardcoded
@@ -481,5 +483,49 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
     }
     console.log(`[E039-NOTIFY] ${type} ${d.deviceCode || ''}`);
   }
-  return { deviceEvent };
+  function alarmEvent(event) {
+    if (!event) return;
+    const body = buildAlarmEventEnvelope(event);
+    const stamp = new Date().toISOString();
+    if (mqttPublish) mqttPublish(TOPIC_ALARMS || 'brms.notifyAlarms', body);
+    if (amqPublish) {
+      try {
+        amqPublish('brms.notifyAlarms', body);
+        amqPublish('vms.alarm.msg', body);
+        // the native pool MSG.exe really consumes
+        for (const t of clientMqTopics(mqUserId)) {
+          if (t.startsWith('mq.alarm.msg.topic.') || t.startsWith('mq.event.msg.topic.')) amqPublish(t, body);
+        }
+      } catch (err) { console.log('[E040-NOTIFY] alarm publish failed:', err.message); }
+    }
+    if (wsClients) {
+      for (const ws of wsClients) {
+        if (ws.readyState !== 1) continue;
+        try {
+          ws.send(body);
+          ws.send(JSON.stringify({ type: 'vms.alarm.msg', method: 'vms.alarm.msg', data: event, timestamp: stamp }));
+        } catch { /* socket gone */ }
+      }
+    }
+    console.log('[E117-ALARM] event published:', event.eventId || event.description || '(no id)');
+  }
+
+  return { deviceEvent, alarmEvent };
+}
+
+// E-117: alarm event envelope for the Event Center. The native client listens
+// on brms.notifyAlarms + the mq.alarm.msg.topic.* pool (E-088 evidence); the
+// SPA subscribes on the WS eventBus. One alarm -> all three channels.
+export function buildAlarmEventEnvelope(event) {
+  const e = typeof event === 'object' && event !== null ? event : { eventId: String(event) };
+  const ts = new Date().toISOString();
+  return JSON.stringify({
+    method: 'vms.alarm.msg',
+    eventId: e.eventId, alarmId: e.eventId,
+    alarmType: String(e.eventType ?? '1'), eventType: String(e.eventType ?? '1'),
+    level: String(e.eventLevel ?? '1'), eventLevel: String(e.eventLevel ?? '1'),
+    channelId: e.channelId || '', deviceCode: e.deviceCode || '', orgCode: e.orgCode || '',
+    eventTime: e.eventTime || ts, timestamp: ts,
+    description: e.description || '', status: '1', handleStatus: '0'
+  });
 }

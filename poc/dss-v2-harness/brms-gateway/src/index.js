@@ -1275,6 +1275,57 @@ import {
   }
 }
 
+// ===== E-117: Event Center + Generic Event ingestion =======================
+import {
+  buildGeneralEventPagePayload, buildGeneralEventConfigPayload, buildAlertSubscribePayload,
+  buildAlarmOverviewTopSourcePayload, buildAlarmOverviewTopTypePayload, buildAlarmOverviewTrendPayload,
+  buildPrerecordChannelPagePayload, buildDisarmConfigPagePayload, buildStormRestrainAlarmTypePayload,
+  buildCombinationSourcePagePayload, ingestGeneralEvent
+} from './e117-alarm-events.js';
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  // Generic Event ingest (DSS custom-event channel): the client lists events,
+  // the operator/system creates them; every created event is pushed live to
+  // the Event Center over MQ (brms.notifyAlarms + mq.alarm.msg.topic.*).
+  app.get(`${host}/alarm/general/event/list`, async (req) => envelope(buildGeneralEventPagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/alarm/general/event/list`, async (req) => envelope(buildGeneralEventPagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/alarm/general/event`, async (req) => {
+    const ev = ingestGeneralEvent({ ...req.query, ...(req.body || {}) });
+    try { NOTIFY.alarmEvent(ev); } catch { /* hub not ready */ }
+    return envelope({ success: true, eventId: ev.eventId, alarmId: ev.eventId });
+  });
+  app.get(`${host}/alarm/general/event/:eventId`, async (req, reply) => {
+    const rows = buildGeneralEventPagePayload({}).pageData;
+    const row = rows.find((e) => e.eventId === String(req.params?.eventId));
+    return row ? envelope(row) : reply.code(404).send(envelope(null, 404, 'event not found'));
+  });
+  app.put(`${host}/alarm/general/event/:eventId`, async (req) => envelope({ success: true, eventId: String(req.params?.eventId || '') }));
+  app.delete(`${host}/alarm/general/event/:eventId`, async (req) => envelope({ success: true }));
+  app.get(`${host}/config/general/event`, async () => envelope(buildGeneralEventConfigPayload()));
+  app.put(`${host}/config/general/event`, async () => envelope(buildGeneralEventConfigPayload()));
+  // Event Center stats + config
+  app.get(`${host}/alarm/overview/top/alarm-source/list`, async () => envelope(buildAlarmOverviewTopSourcePayload()));
+  app.get(`${host}/alarm/overview/top/alarm-type/list`, async () => envelope(buildAlarmOverviewTopTypePayload()));
+  app.get(`${host}/alarm/overview/trend`, async () => envelope(buildAlarmOverviewTrendPayload()));
+  app.get(`${host}/alarm/config/prerecord/channel/page`, async (req) => envelope(buildPrerecordChannelPagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/alarm/config/prerecord/channel/page`, async (req) => envelope(buildPrerecordChannelPagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/alarm/config/prerecord/channel/update/batch`, async () => envelope({ success: true }));
+  app.get(`${host}/alarm/disarm/config/page`, async (req) => envelope(buildDisarmConfigPagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/alarm/disarm/config/update/batch`, async () => envelope({ success: true }));
+  app.get(`${host}/alarm/storm/restrain/alarm-type/list`, async () => envelope(buildStormRestrainAlarmTypePayload()));
+  app.get(`${host}/alarm/combination/source/page`, async (req) => envelope(buildCombinationSourcePagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/alarm/combination/source/page`, async (req) => envelope(buildCombinationSourcePagePayload({ ...req.query, ...(req.body || {}) })));
+}
+// alert subscription (OMMS) - what the Event Center subscribes to
+app.get('/omms/api/v1.1/alert/subscribe', async () => envelope(buildAlertSubscribePayload()));
+app.post('/omms/api/v1.1/alert/subscribe', async (req) => envelope({ success: true, subscribe: '1' }));
+app.get('/brms/api/v1.1/omms/alert/subscribe', async () => envelope(buildAlertSubscribePayload()));
+// generic-event ingest bridge (no session token required for external systems)
+app.post('/admin/API/GenericEvent/Report', async (req) => {
+  const ev = ingestGeneralEvent(req.body || {});
+  try { NOTIFY.alarmEvent(ev); } catch { /* hub not ready */ }
+  return envelope({ success: true, eventId: ev.eventId });
+});
+
 // Licenses + system self-check warnings (all benign: no disk/license issues).
 // E-112: the client's key-existence check (CommonFunc.cpp:149) marked these
 // as "Invalid key" in the live log: QueryHostSpareWarning -> warningHappened,

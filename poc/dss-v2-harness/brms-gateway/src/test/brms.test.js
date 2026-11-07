@@ -733,6 +733,36 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(ka2.data.token, 'token/keepalive renews');
   });
 
+  it('E-117 generic event ingest + Event Center endpoints (no catch-all)', async () => {
+    // ingest a generic event (the DSS custom-event channel)
+    const ingest = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ eventType: '13', eventLevel: '1', deviceCode: 'D0238JDG3016', channelId: 'D0238JDG3016$1$0$0', description: 'E-117 test tripwire event' })
+    })).json();
+    assert.strictEqual(ingest.data.success, true);
+    assert.ok(ingest.data.eventId, 'eventId issued');
+    // it must show in the Event Center list
+    const list = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/list?page=1&pageSize=20`)).json();
+    assert.ok(list.data.pageData.some((e) => e.eventId === ingest.data.eventId), 'event visible in the list');
+    assert.strictEqual(typeof list.data.totalCount, 'string');
+    assert.ok(list.data.pageData[0].orgCode, 'event carries orgCode');
+    // detail by id
+    const det = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/${ingest.data.eventId}`)).json();
+    assert.strictEqual(det.data.description, 'E-117 test tripwire event');
+    // config + subscription + stats + prerecord/disarm/storm/combination
+    const cfg = await (await fetch(`${BASE}/brms/api/v1.1/config/general/event`)).json();
+    assert.strictEqual(cfg.data.enable, '1');
+    const sub = await (await fetch(`${BASE}/omms/api/v1.1/alert/subscribe`)).json();
+    assert.ok(sub.data.list.length >= 10 && sub.data.subscribe === '1');
+    for (const p of ['/brms/api/v1.1/alarm/overview/top/alarm-source/list', '/brms/api/v1.1/alarm/overview/top/alarm-type/list', '/brms/api/v1.1/alarm/overview/trend', '/brms/api/v1.1/alarm/config/prerecord/channel/page', '/brms/api/v1.1/alarm/disarm/config/page', '/brms/api/v1.1/alarm/storm/restrain/alarm-type/list', '/brms/api/v1.1/alarm/combination/source/page']) {
+      const r = await (await fetch(`${BASE}${p}`)).json();
+      assert.ok(Array.isArray(r.data.list ?? r.data.results ?? r.data.pageData), p + ' list array');
+    }
+    // admin bridge ingest (external systems)
+    const bridge = await (await fetch(`${BASE}/admin/API/GenericEvent/Report`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ description: 'bridge test', eventType: '1' }) })).json();
+    assert.strictEqual(bridge.data.success, true);
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
