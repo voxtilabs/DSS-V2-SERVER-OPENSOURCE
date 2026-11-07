@@ -359,9 +359,16 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(admin, 'admin visible in User Management');
     assert.strictEqual(admin.status, '1', 'admin status must be STRING "1"');
     assert.strictEqual(admin.online, '1');
-    assert.strictEqual(admin.locked, '0');
-    assert.strictEqual(admin.roleIds, '1', 'E-101: roleIds is CSV string');
-    assert.ok(Array.isArray(admin.roleIdArray) && admin.roleIdArray.includes('1'), 'roleIdArray alias keeps the array');
+    assert.strictEqual(admin.enableMPT, '0');
+    // E-105: user/page rows are the STRICT native descriptor (DPSDK
+    // FUN_1806c8d20): id/username/name/online/enableMPT/status/userType are
+    // STRING leaves and roles[] is the only array. No alias keys, no JSON
+    // array leaves (the E-100 roleIds array payload was the AppHang suspect).
+    assert.ok(Array.isArray(admin.roles) && admin.roles[0].roleId === '1', 'E-105: roles[] array of {roleId,roleName}');
+    assert.ok(!('roleIds' in admin) && !('roleIdArray' in admin), 'E-105: no alias/array keys in the native row');
+    for (const k of ['id', 'username', 'name', 'online', 'enableMPT', 'status', 'userType']) {
+      assert.strictEqual(typeof admin[k], 'string', 'user.' + k + ' must be a STRING');
+    }
     assert.ok(
       typeof admin.id !== 'undefined' && typeof admin.username !== 'undefined',
       'userGroupView reads {value:e.id,label:e.username}'
@@ -494,10 +501,12 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(rw.data.roleId && rw.data.id === rw.data.roleId, 'role write returns id');
     assert.strictEqual(rw.data.status, '1');
     assert.strictEqual(rw.data.roleName, 'TestRole');
-    // user rows: roleIds as CSV string (Dahua convention), arrays under aliases
+    // user rows: STRICT native pageData row (roles[] objects, no array leaves)
     const up = await (await fetch(`${BASE}/brms/api/v1.1/user/page?page=1&pageSize=20`)).json();
-    assert.strictEqual(up.data.pageData[0].roleIds, '1', 'roleIds CSV string');
-    assert.deepStrictEqual(up.data.pageData[0].roleIdArray, ['1'], 'roleIdArray alias');
+    assert.strictEqual(up.data.pageData[0].roles[0].roleId, '1', 'roles[].roleId (native)');
+    assert.strictEqual(typeof up.data.pageData[0].roles[0].roleName, 'string', 'roles[].roleName is STRING');
+    assert.ok(!('roleIdArray' in up.data.pageData[0]), 'E-105: no roleIdArray alias');
+    // user detail keeps the CSV aliases (own native descriptor + SPA)
     const ud = await (await fetch(`${BASE}/brms/api/v1.1/user/1`)).json();
     assert.strictEqual(ud.data.roleIds, '1');
   });
@@ -509,7 +518,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(admin.name, 'Administrator', 'native key name present');
     assert.strictEqual(admin.enableMPT, '0');
     assert.ok(Array.isArray(admin.roles) && admin.roles[0].roleId === '1' && typeof admin.roles[0].roleName === 'string', 'roles[] array of {roleId,roleName}');
-    assert.strictEqual(admin.roleIds, '1', 'roleIds CSV string kept');
+    assert.ok(!('roleIds' in admin), 'E-105: user/page row has no roleIds alias (strict native row)');
     // user detail same shape
     const ud = await (await fetch(`${BASE}/brms/api/v1.1/user/1`)).json();
     assert.ok(Array.isArray(ud.data.roles) && typeof ud.data.name === 'string');

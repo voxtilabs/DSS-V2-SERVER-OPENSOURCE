@@ -515,3 +515,37 @@
   user/email pageData, role/list rows id/roleName. unit 57 pass/0 fail,
   e2e 12/12 x3, live-verify 15/15. Pendiente: reporte mision 1 (ciclo de
   vida post-role/list) del reverse-engineer.
+
+- **Checkpoint 2026-11-07 (h) - E-105, payload ESTRICTO de `v1.1/user/page` +
+  causa del AppHangB1**. Forense (21:58:38.273 -> 21:58:39.934Z): la
+  secuencia nativa termina en `GET /brms/api/v1.1/user/page?...` -> **200,
+  7552 B** y **no hay ninguna peticion posterior**; 6.7 s despues el WER
+  registra `AppHangB1`/`AppHangXProcB1` (EventTime 21:58:46.625Z) **sin
+  0xC0000005** => el hilo de UI queda BLOQUEADO (no es un crash). El cuerpo
+  servido en esa ventana (E-100, 7556 B) era un superset de 36 claves/fila
+  con `roleIds`/`roleNames` como ARRAYS JSON, sin `name`/`enableMPT`/`roles[]`
+  y con 5 arrays duplicados (`list/results/items/userList`) +
+  `total/page/pageSize/pageCount`. RE binario (UserLogical/PluginFactory):
+  el descriptor nativo `FUN_1806c8d20` exige **kind=2 (string) en todas las
+  hojas** de la fila y sólo admite dos arrays (`data.pageData` y
+  `data.pageData[].roles`); el matcher hace type-check ESTRICTO y deja el
+  campo NULL/0 en silencio. El dialogo de Usuarios es NATIVO
+  (`CUserManagerUserCtrl`): `OnNotifyUserManagerState` (`FUN_180ac8f90`)
+  case `0xd` -> `FUN_180ac33a0` -> getter `UserList` vtable `+0x58` =
+  `FUN_1800647d0` (UserLogical) que **toma el mutex `CUser+0x68`** (mutex
+  recursivo PROPIO sin comprobacion de hilo propietario: `FUN_180014020` ->
+  `WaitForSingleObjectEx(hEvent, 0xffffffff, 0)` sobre un evento
+  AUTO-RESET) y **borra** el nodo del mapa; despues
+  `SetTotalCount(notify+0x30)` y el bucle de filas acotado por
+  `(end-begin)/0x88` (**nunca** por totalCount). La columna dibujada es
+  **`username`** (no `name`); `name` va en col 1 rol 0x101; la col 2
+  concatena `roles[].roleId` con ",". Aplicado E-105 en
+  `brms-gateway/src/e025-devices.js`: `serializeUserPageRow()` (fila
+  estricta: id/username/name/online/enableMPT/status/userType string +
+  `roles:[{roleId,roleName}]`) y `buildUserPagePayload()` (`data` =
+  `{pageData,totalCount}` y nada mas; `totalCount` = TOTAL de usuarios que
+  casan, string). Body 7556 B -> **386 B**. El detalle `/user/:id` conserva
+  los alias CSV (`roleIds:"1"`) y ya no tiene hojas-array. Tests
+  `brms.test.js` E-096/E-101/E-102 actualizados: **57 pass / 0 fail**.
+  Doc ampliada: `docs/DPSDK_USER_MANAGEMENT_CONTRACTS.md` §3.1, §8 y §10
+  (pipeline completo, mapa columna->campo, mutex, 5 respuestas).

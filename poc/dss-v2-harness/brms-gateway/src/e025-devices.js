@@ -1408,26 +1408,73 @@ export const USER_GROUP_STORE = [
   }
 ];
 
-// E-101: Dahua REST serves id/name lists as CSV STRINGS ("1,2") in user rows;
-// the native parser may split(',') on them - a JSON array there is the prime
-// AppHang suspect after user/page. Arrays are kept under roleIdArray/roleNameArray.
-function serializeUserRow(u) {
-  // E-102 native contract (DPSDK.dll FUN_1806c8d20 response descriptor):
-  // pageData[] items bind username/online/name/enableMPT/id/status/userType
-  // (all STRING) + roles[] array of {roleId, roleName} (strings).
-  const roles = (u.roleIds || []).map((rid, i) => ({
-    roleId: String(rid),
-    roleName: String((u.roleNames || [])[i] ?? u.roleName ?? '')
-  }));
+// E-105: EXACT native contract of GET /brms/api/v1.1/user/page.
+// Evidence (DPSDK.dll, response descriptor FUN_1806c8d20 / DAT_180f77d50):
+//   data.pageData[] -> { username, online, name, enableMPT, id, status,
+//                        userType, roles:[ {roleName, roleId} ] }
+//   data.totalCount  -> STRING, consumed with atoi() by
+//                        DPSDK::CRestLogical::GetUserManagerUsers (FUN_1802a01c0)
+// Every leaf of the row descriptor has native kind=2 (STRING); the ONLY
+// arrays allowed in the whole payload are data.pageData and
+// data.pageData[].roles. A JSON array used as a leaf value (the E-100 payload
+// served roleIds:["1"] / roleNames:["Super Administrator"]) is the prime
+// AppHangB1 suspect: the native matcher does a STRICT type check and a
+// mismatching node leaves the field NULL/0, so the logical row the UI
+// renders is structurally incomplete (roles empty, name empty).
+// The SPA consumer (index-BQObycDy.js, userGroupView) only reads
+// data.pageData[].id and data.pageData[].username, both native keys, so the
+// strict payload does not break the web UI.
+function serializeUserPageRow(u) {
+  const ids = Array.isArray(u.roleIds) ? u.roleIds : (u.roleId != null ? [u.roleId] : []);
+  const names = Array.isArray(u.roleNames) ? u.roleNames : (u.roleName != null ? [u.roleName] : []);
   return {
-    ...u,
-    name: u.realName || u.username,          // native parser reads "name" (+0x10)
-    enableMPT: u.enableMPT || '0',           // native parser reads "enableMPT" (+0x18)
-    roles,                                   // native parser reads roles[] (+0x28)
+    id: String(u.id ?? ''),
+    username: String(u.username ?? ''),
+    name: String(u.realName || u.employeeName || u.username || ''), // native draws "name"
+    online: String(u.online ?? '0'),
+    enableMPT: String(u.enableMPT ?? '0'),
+    status: String(u.status ?? '1'),
+    userType: String(u.userType ?? '0'),
+    roles: ids.map((rid, i) => ({
+      roleId: String(rid),
+      roleName: String(names[i] ?? u.roleName ?? '')
+    }))
+  };
+}
+
+// E-101/E-105: the user DETAIL endpoint (v1.1/user/:id) has its own native
+// descriptor (0xd00-byte native row, DPSDK_GetUser) and is also consumed by
+// the SPA, so it keeps a superset - but NO JSON array leaf values: role id /
+// role name lists are CSV STRINGS ("1,2") as real Dahua REST does.
+function serializeUserRow(u) {
+  const base = serializeUserPageRow(u);
+  return {
+    ...base,
+    userId: String(u.userId ?? u.id ?? ''),
+    loginName: String(u.loginName ?? u.username ?? ''),
+    realName: String(u.realName ?? base.name),
+    employeeName: String(u.employeeName ?? u.realName ?? base.name),
+    userTypeName: String(u.userTypeName ?? ''),
+    adminFlag: String(u.adminFlag ?? '0'),
+    statusName: String(u.statusName ?? ''),
+    enable: String(u.enable ?? '1'),
+    locked: String(u.locked ?? u.lock ?? '0'),
+    lock: String(u.lock ?? u.locked ?? '0'),
     roleIds: Array.isArray(u.roleIds) ? u.roleIds.join(',') : String(u.roleIds ?? ''),
     roleNames: Array.isArray(u.roleNames) ? u.roleNames.join(',') : String(u.roleNames ?? ''),
-    roleIdArray: Array.isArray(u.roleIds) ? u.roleIds : [],
-    roleNameArray: Array.isArray(u.roleNames) ? u.roleNames : []
+    roleId: String(u.roleId ?? (Array.isArray(u.roleIds) ? u.roleIds[0] ?? '' : u.roleIds ?? '')),
+    roleName: String(u.roleName ?? (Array.isArray(u.roleNames) ? u.roleNames[0] ?? '' : u.roleNames ?? '')),
+    groupId: String(u.groupId ?? ''),
+    groupName: String(u.groupName ?? ''),
+    orgCode: String(u.orgCode ?? ''),
+    domainId: String(u.domainId ?? '0'),
+    email: String(u.email ?? ''),
+    telephone: String(u.telephone ?? ''),
+    mobile: String(u.mobile ?? ''),
+    createTime: String(u.createTime ?? ''),
+    modifyTime: String(u.modifyTime ?? ''),
+    remark: String(u.remark ?? u.remarks ?? ''),
+    deletable: String(u.deletable ?? '1')
   };
 }
 
@@ -1450,18 +1497,34 @@ export function buildUserPagePayload(query = {}) {
   });
   const totalCount = rows.length;
   const start = (page - 1) * pageSize;
-  const pageData = rows.slice(start, start + pageSize).map(serializeUserRow);
+  const pageData = rows.slice(start, start + pageSize).map(serializeUserPageRow);
+  // E-105: strict native envelope of v1.1/user/page.
+  //   data.pageData[]  = the rows of the requested page
+  //   data.totalCount  = TOTAL number of matching users (STRING).
+  // PROVEN (UserLogical.dll):
+  //   * FUN_18005fa00 (DPSDK callback) -> FUN_180070530 writes
+  //     *(u32*)(out+8) = native.totalCount (atoi of this STRING) into the
+  //     logical container COUNT field, and that field is copied verbatim to
+  //     the notify payload (+0x30) -> PluginFactory
+  //     DSNumberPageCtrl::SetTotalCount(param_2+0x30) => it is the PAGER
+  //     total, NOT the number of rendered rows.
+  //   * the number of rendered rows comes from the vector itself:
+  //     FUN_180047d20 computes (end-begin)/0x88 and PluginFactory
+  //     FUN_180ac33a0 loops (end-begin)/0x88 - the UI loop is bounded by
+  //     pageData.length, so totalCount may (and must) exceed it when the
+  //     user store is bigger than pageSize.
+  // No list/results/items/userList aliases and no total/page/pageSize/
+  // pageCount duplicates: they are not part of the native descriptor and
+  // only enlarge the body the native binder has to walk.
   return {
-    pageData, list: pageData, results: pageData, items: pageData, userList: pageData,
-    totalCount: String(totalCount), total: String(totalCount), // E-100: string counters
-    pageNo: String(page), page: String(page),
-    pageSize: String(pageSize), pageCount: String(Math.max(1, Math.ceil(totalCount / pageSize)))
+    pageData,
+    totalCount: String(totalCount)
   };
 }
 
 export function buildUserDetailPayload(userId) {
   const row = USER_STORE.find((u) => String(userId) === u.id || String(userId) === u.userId);
-  return row ? serializeUserRow(row) : null; // E-101: CSV roleIds + array aliases
+  return row ? serializeUserRow(row) : null; // E-105: native keys + CSV aliases, no array leaves
 }
 
 export function buildUserGroupListPayload(query = {}) {
