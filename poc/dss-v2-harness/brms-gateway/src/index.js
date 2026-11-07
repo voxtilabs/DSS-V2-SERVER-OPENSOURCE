@@ -1766,6 +1766,21 @@ app.post('/brms/api/v1.1/device/unauthorized/delete/batch', async () => envelope
 // E-036: EVERY registration funnel (Discover join, Discover init, manual
 // add, Dahua auto-register) persists the device AND provisions its own
 // MediaMTX path, so the device is visible in every tree and playable.
+// E-116: STREAM GUARDIAN. MediaMTX dynamic paths are lost whenever the
+// mediamtx container is recreated or its config is reloaded (observed live
+// 2026-11-07: `docker compose up -d --build mediamtx` dropped
+// cam_D0238JDG3016 -> relay SETUP 400 -> Live View dead). Provisioning only
+// ran at device-add time, so nothing healed. Now every 60s each registered
+// device gets ensureDeviceStream (idempotent: ADD then PATCH), plus one
+// pass 8s after boot.
+function provisionAllDevices() {
+  for (const d of [...DEVICE_REGISTRY.values()]) {
+    if (d && d.deviceIp) scheduleStreamProvisioning(d);
+  }
+}
+setTimeout(provisionAllDevices, 8000);
+setInterval(provisionAllDevices, 60000);
+
 function scheduleStreamProvisioning(devices) {
   const list = Array.isArray(devices) ? devices : [devices];
   for (const d of list) {
