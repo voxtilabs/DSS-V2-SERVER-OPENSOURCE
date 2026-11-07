@@ -586,3 +586,16 @@
   unit 58 pass/0 fail/1 skip, e2e 12/12, live-verify 15/15.
   Nota: subagentes MiniMax quedaron fuera por rate-limit 429; investigación
   cerrada localmente.
+
+- **Checkpoint 2026-11-07 (j) - E-107, commit 746df4d**. Reporte final del
+  log-analyzer confirmando E-106: el build que fallaba (md5 3b55e3e2) no
+  tenia public-key/generate ni password/check -> [FALLBACK] 59B/40B ->
+  DPSDK lee code:1000 del catch-all como \"Abnormal network\" -> sin
+  authorize -> token ABSENT -> toasts LDAP/role list y ventana vacía.
+  Riesgo residual cerrado: v1.0/role/list, v1.0/config/ldap e
+  ipms/v1.1/role/list eran FALLBACK -> ahora handlers reales (5256B/351B);
+  POST /admin/API/accounts/updateToken (refresh de token, observado
+  08:14:56Z en FALLBACK 40B) -> 407B login envelope. Verificado en vivo:
+  todas las variantes REAL, flujo E2E completo (PEM -> password/check ->
+  authorize token 64 -> role/list -> user/page admin). unit 58 pass/0 fail,
+  e2e 12/12 x3, live-verify 15/15.
