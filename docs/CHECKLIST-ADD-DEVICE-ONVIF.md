@@ -709,3 +709,23 @@
   vive en localStorage/CEF. unit 64 pass/0 fail/1 skip, e2e 12/12 x3,
   live-verify 15/15. QUEDA PENDIENTE solo el subagente de la cadena
   video/ONVIF ( correiendo ).
+
+- **Checkpoint 2026-11-07 (r) - E-115/E-115c/E-116, commits 10522fe/8e85440/
+  65cb701**. CADENA DE VIDEO CERRADA (la prioridad del operador):
+  1) E-115 relay RTSP (e115-rtsp-relay.js, puerto 9100 del gateway): traduce
+  el handshake agregado del Dahua (SETUP+PLAY misma URL, interleaved 0-1,
+  sin DESCRIBE, sin Session) a SETUP <path>/trackID=0 + PLAY <path> contra
+  MediaMTX, remapea canales 0-1<->2-3 y valida token. Compose: gateway
+  publica 9100; mediamtx pasa a 127.0.0.1:9554; hlsSegmentCount 7.
+  2) E-115c: el relay inyecta el Session del upstream en PLAY/TEARDOWN
+  (sin eso MediaMTX devolvia 501).
+  3) E-116 stream guardian: re-provisiona los paths MediaMTX de todos los
+  devices cada 60s + 8s post-boot (los paths dinamicos se perdian al
+  recrear mediamtx -> Live View muerta).
+  4) Ruta HLS /brms/api/v1.1/video/live/channel/{id}/hls (proxy del m3u8
+  con URLs reescritas) + POST monitor/view/view-tree.
+  VERIFICADO EN VIVO: patron Dahua via relay contra cam_D0238JDG3016
+  (camara del operador, ONVIF 200) => setup=200 play=200 RTP 7360B en
+  0.2s; cam1 idem. unit 66 pass/0 fail, e2e 12/12, live-verify 15/15.
+  Nota: cam_D7001SHX9002 (placeholder, rtspUri 127.0.0.1) queda
+  ready=false honestamente - no inventa video.
