@@ -772,3 +772,24 @@
   play.dll elige decoder en runtime. Nada que agregar.
   Verificado en vivo en todos los casos. unit 69 pass/0 fail,
   e2e 12/12, live-verify 15/15.
+
+- **Checkpoint 2026-11-07 (u) - E-121, commit 57a921f**. Ultima lista de
+  huecos del forense (1074 llamadas DPSDK + 37 REST + diff SPA) cerrada:
+  P0 alarm/plan/alarm-type/list con catalogo REAL (10KB, antes {list:[]}) y
+  alarm/plan/fetch/page con plan por defecto ligado a los canales
+  (incl. D0238JDG3016); P0 PUT/POST alarm/general/event/{id}
+  PERSISTE (events.json) - la edicion ANPR_EBA del 11-05 ya no se pierde;
+  P1 ids numericos 1/2/3 resuelven; P2 sub-rutas alarm/plan (custom/
+  soft-trigger/transparence/pos/template/status/source), templates
+  mail/vacation/time, device/ivss/list, alarm-output/control,
+  overview/report/export, OMMS alert rule/list+statistics+handle/collect/
+  procedure, TVWall GetTvWalls/GetTvWall; P3 event/subscription GET +
+  overview/summary v1.0. Auditoria de duplicados + boot limpio antes de
+  desplegar (Fastify aborta con rutas repetidas). Verificado en vivo:
+  11 endpoints REAL, edicion persistida, id numerico resuelve. unit 70
+  pass/0 fail, e2e 12/12 x3, live-verify 15/15.
+  ESTADO FINAL: los 4 subagentes de la ronda cerraron sus frentes (login/
+  sesion E-114, cadena de video E-115/E-116, Event Center E-117/E-118,
+  auto-register E-119, Monitoring E-120, Event Config E-121). Cobertura
+  completa del inventario SPA (887 URLs) + string pool DPSDK (351
+  literales) documentada en docs/DSS_ENDPOINT_COVERAGE.md.
