@@ -794,6 +794,42 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(det.data.eventSourceType, '3', 'IVS event source type');
   });
 
+  it('E-119 DVRIP/DHIP auto-register framing (RE-verified binary+JSON)', async () => {
+    // E-119: netsdk AutoRegister.cpp @0x01366578 - the real device sends an
+    // 8B magic + 0x19930522 header and a JSON register payload with
+    // DeviceID/SerialNo/MachineAddress/IPAddress; the server must ACK with
+    // the same framing. Frame-level parsing + ACK building:
+    const { parseDahuaFrame, parseRegisterJson, buildDahuaAck } = await import('../e119-ars-protocol.js');
+    const json = JSON.stringify({ DeviceID: 'NVR-TEST-01', SerialNo: 'SN123', MachineName: 'NVR Sala', MachineAddress: '192.168.1.50', IPAddress: '192.168.1.50', DeviceType: '51', DeviceClass: 'NVR', ChannelNum: '16', UserName: 'admin', Password: 'admin123' });
+    const payload = Buffer.from(json, 'utf8');
+    const header = Buffer.alloc(0x30);
+    header.write('DVRIP\0\0\0', 0, 8, 'latin1');
+    header.writeUInt32LE(0x19930522, 8);
+    header.writeUInt32LE(0x0001, 12);
+    header.writeUInt32LE(0x2a, 16);
+    header.writeUInt32LE(payload.length, 20);
+    const frame = Buffer.concat([header, payload]);
+    const parsed = parseDahuaFrame(frame);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.magic, 'DVRIP');
+    assert.equal(parsed.version, 0x19930522);
+    const info = parseRegisterJson(parsed.payload);
+    assert.equal(info.deviceId, 'NVR-TEST-01');
+    assert.equal(info.ip, '192.168.1.50');
+    assert.equal(info.channelCount, '16');
+    const ack = buildDahuaAck('DVRIP', 0x0001, 0x2a, { Ret: 100, RetMsg: 'OK' });
+    assert.ok(ack.subarray(0, 8).toString('latin1').startsWith('DVRIP'));
+    assert.ok(ack.includes(Buffer.from('"Ret":100')));
+    // DHIP framing parses too
+    const h2 = Buffer.alloc(0x34);
+    h2.write('DHIP\0\0\0', 0, 8, 'latin1');
+    h2.writeUInt32LE(0, 8);
+    h2.writeUInt32LE(0x19930522, 12);
+    const p2 = parseDahuaFrame(Buffer.concat([h2, payload]));
+    assert.equal(p2.ok, true);
+    assert.equal(p2.magic, 'DHIP');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

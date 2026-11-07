@@ -2931,6 +2931,9 @@ function createWebSocketServer(httpsServer) {
 }
 
 // ===== ARS TCP Binary Server (DVRIP/DHIP) =====
+// E-119: accept BOTH framings - the RE-verified binary header + JSON payload
+// (Dahua AutoRegister.cpp @0x01366578) and the legacy 32B string framing.
+import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson } from './e119-ars-protocol.js';
 function createARSTCPServer() {
   console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
   const server = net.createServer((socket) => {
@@ -2953,6 +2956,45 @@ function createARSTCPServer() {
     socket.on('data', (data) => {
       session.lastActivity = Date.now();
       buffer = Buffer.concat([buffer, data]);
+
+      // E-119: RE-verified DVRIP/DHIP framing (8B magic + 0x19930522 + JSON)
+      // takes precedence when the peer speaks it.
+      const frame = parseDahuaFrame(buffer);
+      if (frame.ok) {
+        const totalLen = frame.jsonAt >= 0 ? frame.jsonAt + (frame.payloadLen || 0) : buffer.length;
+        if (frame.jsonAt === -1 || buffer.length < totalLen) return; // wait for the full JSON
+        const packet = buffer.subarray(0, totalLen);
+        buffer = buffer.subarray(totalLen);
+        const info = parseRegisterJson(packet.subarray(frame.jsonAt));
+        console.log('[ARS TCP] DVRIP/DHIP frame', frame.magic, 'json ' + (info ? 'parsed' : 'unparsed'), 'len ' + packet.length, 'from', socket.remoteAddress);
+        if (info && (info.deviceId || info.machineAddress)) {
+          const deviceId = info.deviceId || info.serialNo || ('NVR-' + Date.now());
+          session.sequence = frame.sequence;
+          session.deviceId = deviceId;
+          session.authenticated = true;
+          ARS_DEVICES.set(deviceId, {
+            deviceId: 'ARS-' + deviceId, originalId: deviceId, serialNo: info.serialNo,
+            deviceName: info.deviceName || ('NVR ' + deviceId), ip: info.ip,
+            port: info.port, username: info.username, password: info.password,
+            deviceType: info.deviceType, channelNum: info.channelCount,
+            deviceClass: info.deviceClass, protocol: 'Dahua', source: 'auto-register',
+            status: 1, registeredAt: Date.now(), lastSeen: Date.now()
+          });
+          try {
+            const registered = registerArsDevice({
+              deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
+              ip: info.ip, port: info.port, username: info.username, password: info.password,
+              deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua'
+            });
+            scheduleStreamProvisioning(registered);
+          } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
+          try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
+          socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
+        } else {
+          socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, { Ret: 400, RetMsg: 'Bad register payload' }));
+        }
+        return;
+      }
 
       // Process complete DVRIP packets (32-byte header + payload)
       while (buffer.length >= 32) {
