@@ -549,3 +549,20 @@
   `brms.test.js` E-096/E-101/E-102 actualizados: **57 pass / 0 fail**.
   Doc ampliada: `docs/DPSDK_USER_MANAGEMENT_CONTRACTS.md` §3.1, §8 y §10
   (pipeline completo, mapa columna->campo, mutex, 5 respuestas).
+
+- **Checkpoint 2026-11-07 (h) - E-105, commit 01126b2**. Mision 1 (ciclo de
+  vida) completada por audit del string pool DPSDK file 0xc9c000-0xc9d900:
+  tabla completa CRestLogical de Users/Roles documentada en
+  docs/DPSDK_USER_MANAGEMENT_CONTRACTS.md §9 (incluye orden observado del
+  dialogo). Encontradas 3 rutas legacy SIN servir del mismo dialogo:
+  /admin/API/Rights/Groups (GetUserGroup @0xc9cde8), /admin/API/Rights/Users
+  (GetUserBaseInfo @0xc9ce70), /admin/API/Rights/User (GetUserDetailInfo
+  @0xc9d028) -> servidas con los mismos shapes (user page/groups/user
+  detail). Verificado en vivo: pageData=2 con admin, groups con users,
+  detail con roles. unit 57 pass/0 fail/1 skip, e2e 12/12 x3,
+  live-verify 15/15, md5 desplegado OK.
+  RESUMEN arquitectura final Users/Roles: contratos nativos firmados en el
+  doc (envelope code:int 1000; role/list results[] strings; role/page+
+  user/page pageData[]+totalCount string con name/enableMPT/roles[];
+  authority results = array de STRINGS + PUT role/update; domain org
+  nativo; ldap nativo; tree/full GET sin huerfanos; Rights/* legacy).
