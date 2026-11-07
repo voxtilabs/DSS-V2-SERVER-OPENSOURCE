@@ -663,3 +663,18 @@
   parking-lot, vtalk sip, time-template - el catch-all benigno ya los cubre
   con code:1000 y el cliente los muestra vacios (no hay datos reales que
   inventar).
+
+- **Checkpoint 2026-11-07 (o) - E-112, commit 9cc5e8b**. Forensia del log
+  PROPIO del cliente (C:\Users\Public\DSS Client\log\, sesion 04:28-06:41):
+  -18 reproducido 54x cada 5 min desde los ~30 min post-login (token REST
+  vaciado por el updateToken del catch-all - YA FIXADO por E-107), mientras
+  NetSDK (push) seguia sano y VerifyUserPassword OK -> confirma que era
+  sesion, no credenciales. Ademas el cliente reporta ""Invalid key"" en su
+  check CommonFunc.cpp:149: warningHappened (hot-spare), results
+  (memory-out/basic-service/license/disk-warn), alertTypeId (alert types),
+  memo (user groups - GetUserGroupList error[-1]), hasAuthority
+  (ipms organization/list), abnormityType (net disks). TODOSimplementados y
+  verificado en vivo; tambien se corrigio una ruta duplicada (hot-spare) que
+  habria abortado el boot de Fastify. unit 62 pass/0 fail/1 skip,
+  e2e 12/12 x3, live-verify 15/15. Dumps de crash del 2026-11-06 (981/987MB)
+  localizados en C:\Users\Public\DSS Client\Dump\ para analisis posterior.
