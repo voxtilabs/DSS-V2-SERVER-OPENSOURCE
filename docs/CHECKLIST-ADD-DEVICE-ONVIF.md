@@ -647,3 +647,19 @@
   config calientes en /cfgs/api (prefijo alternativo que GetLdapConfig puede
   usar). Documentado en docs/DSS_ENDPOINT_COVERAGE.md §9. unit 60 pass/0 fail,
   e2e 12/12 x3 (sin cambios de ruta nuevos, solo alias cfgs).
+
+- **Checkpoint 2026-11-07 (n) - E-111, commit cc375af**. Cobertura FULL de
+  modulos: cruce del inventario SPA (887 URLs en web-module/js) contra las
+  rutas del gateway encontro los endpoints de apertura de submódulo sin
+  registro (abrian vacios por el catch-all). Implementados con shapes reales:
+  Log (system-log/page, operate-log, event-type/list 6.2KB, client-config),
+  Alarm (plan CRUD + fetch/page + resource config-status con VIGILAB +
+  record/fetch/page), License (item/list, used/list, detail, components,
+  exports), TVWall (window + GetTvWallCapacity), System config
+  (message-storage, time-sync, quick/command/list, tls/cert/detail,
+  sub-oss-port, export-password). Verificado en vivo (todos REAL, 15
+  endpoints), unit 61 pass/0 fail, e2e 12/12 x3, live-verify 15/15.
+  Pendientes menores por diseno (vacios honestos): face repository, acp/acs,
+  parking-lot, vtalk sip, time-template - el catch-all benigno ya los cubre
+  con code:1000 y el cliente los muestra vacios (no hay datos reales que
+  inventar).
