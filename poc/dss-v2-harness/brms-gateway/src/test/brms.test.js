@@ -634,6 +634,44 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-111 module coverage: logs, alarm, license, tvwall, config', async () => {
+    // Log module
+    const sl = await (await fetch(`${BASE}/brms/api/v1.1/log/system-log/page`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"page":1,"pageSize":20}' })).json();
+    assert.equal(sl.code, 1000);
+    assert.ok(Array.isArray(sl.data.pageData) && typeof sl.data.totalCount === 'string', 'log page shape');
+    const et = await (await fetch(`${BASE}/brms/api/v1.1/log/system-log/event-type/list`)).json();
+    assert.ok(et.data.list.length >= 10, 'event types listed');
+    const lc = await (await fetch(`${BASE}/brms/api/v1.1/log/client-config`)).json();
+    assert.strictEqual(typeof lc.data.logLevel, 'string');
+    // Alarm module
+    const ap = await (await fetch(`${BASE}/brms/api/v1.1/alarm/plan/fetch/page`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(Array.isArray(ap.data.pageData), 'alarm plan pageData');
+    const ar = await (await fetch(`${BASE}/brms/api/v1.1/alarm/plan/resource/config-status/fetch/batch/list`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(ar.data.list.some((r) => r.resourceId === 'VIGILAB'), 'VIGILAB resource config status');
+    // License module
+    const li = await (await fetch(`${BASE}/brms/api/v1.1/license/item/list`)).json();
+    assert.ok(li.data.list.some((i) => i.itemCode === 'channel'), 'license channels item');
+    const ld = await (await fetch(`${BASE}/brms/api/v1.1/license/detail`)).json();
+    assert.strictEqual(ld.data.status, '1');
+    // TVWall
+    const tw = await (await fetch(`${BASE}/admin/API/VMS/TvWall/GetTvWallCapacity`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.strictEqual(tw.data.capacity, '9');
+    // Config pages
+    const ms = await (await fetch(`${BASE}/brms/api/v1.1/config/message-storage`)).json();
+    assert.strictEqual(typeof ms.data.keepDays, 'string');
+    const ts = await (await fetch(`${BASE}/brms/api/v1.1/config/time-sync`)).json();
+    assert.strictEqual(typeof ts.data.interval, 'string');
+    const qc = await (await fetch(`${BASE}/brms/api/v1.1/config/quick/command/list`)).json();
+    assert.ok(qc.data.list.some((c) => c.commandCode === 'reboot'), 'quick commands');
+    const tls = await (await fetch(`${BASE}/brms/api/v1.1/config/tls/cert/detail`)).json();
+    assert.strictEqual(tls.data.status, '1');
+    // none of these may fall back to the catch-all
+    for (const p of ['/brms/api/v1.1/log/operate-log', '/brms/api/v1.1/license/components', '/cfgs/api/v1.1/config/time-sync', '/admin/API/tvwall/window']) {
+      const t = await (await fetch(`${BASE}${p}`)).text();
+      assert.ok(t.length > 60, `${p} explicit route, got ${t.length}B`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

@@ -1200,6 +1200,81 @@ for (const host of ['/cfgs/api/v1.1', '/cfgs/api/v1.0']) {
   app.get(`${host}/account/user/level`, async () => envelope(buildUserLevelPayload()));
 }
 
+// ===== E-111: module coverage (Log / Alarm / License / TVWall / Config) =====
+// Endpoints the SPA calls when opening each submenu that had no registration
+// (SPA API inventory cross-check) - they now return real shapes instead of the
+// benign catch-all, so every submenu opens populated.
+import {
+  buildSystemLogPagePayload, buildOperateLogPagePayload, buildSystemLogEventTypeListPayload,
+  buildServiceStatusPayload, buildOmcServiceTypeListPayload, buildLogClientConfigPayload,
+  buildAlarmPlanPagePayload, buildAlarmRecordPagePayload, buildAlarmPlanResourceConfigStatusPayload,
+  buildLicenseItemListPayload, buildLicenseUsedListPayload, buildLicenseDetailPayload, buildLicenseComponentsPayload,
+  buildTvWallWindowPayload, buildTvWallCapacityPayload,
+  buildMessageStorageConfigPayload, buildTimeSyncConfigPayload, buildQuickCommandListPayload,
+  buildTlsCertDetailPayload, buildSubOssPortPayload, buildExportPasswordPayload
+} from './e111-modules.js';
+{
+  // --- Log module (useLogApi-BPm4Cd0K.js) ---
+  const logPage = async (req) => envelope(buildSystemLogPagePayload({ ...req.query, ...(req.body || {}) }));
+  const opLog = async (req) => envelope(buildOperateLogPagePayload({ ...req.query, ...(req.body || {}) }));
+  for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+    app.post(`${host}/log/system-log/page`, logPage);
+    app.get(`${host}/log/system-log/page`, logPage);
+    app.post(`${host}/log/operate-log`, opLog);
+    app.get(`${host}/log/operate-log`, opLog);
+    app.get(`${host}/log/system-log/event-type/list`, async () => envelope(buildSystemLogEventTypeListPayload()));
+    app.post(`${host}/log/system-log/event-type/list`, async () => envelope(buildSystemLogEventTypeListPayload()));
+    app.get(`${host}/log/omc/service/type/list`, async () => envelope(buildOmcServiceTypeListPayload()));
+    app.get(`${host}/log/service-log/service/:serviceId/status`, async () => envelope(buildServiceStatusPayload()));
+    app.post(`${host}/log/service-log/service/:serviceId/status`, async () => envelope(buildServiceStatusPayload()));
+    app.get(`${host}/log/client-config`, async () => envelope(buildLogClientConfigPayload()));
+    app.post(`${host}/log/client-config`, async () => envelope(buildLogClientConfigPayload()));
+  }
+  // --- Alarm module (useEventApi-DiKk_pnU.js) ---
+  for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+    app.post(`${host}/alarm/plan/fetch/page`, async (req) => envelope(buildAlarmPlanPagePayload({ ...req.query, ...(req.body || {}) })));
+    app.get(`${host}/alarm/plan/fetch/page`, async (req) => envelope(buildAlarmPlanPagePayload({ ...req.query, ...(req.body || {}) })));
+    app.post(`${host}/alarm/plan`, async () => envelope({ success: true, planId: '1', id: '1' }));
+    app.get(`${host}/alarm/plan/:planId`, async (req) => envelope({ planId: String(req.params?.planId || '1'), id: String(req.params?.planId || '1'), planName: 'Default Plan', enable: '1', status: '1' }));
+    app.put(`${host}/alarm/plan/:planId`, async () => envelope({ success: true }));
+    app.delete(`${host}/alarm/plan/:planId`, async () => envelope({ success: true }));
+    app.post(`${host}/alarm/plan/delete/batch`, async () => envelope({ success: true, failedList: [] }));
+    app.post(`${host}/alarm/plan/resource/config-status/fetch/batch/list`, async () => envelope(buildAlarmPlanResourceConfigStatusPayload()));
+    app.post(`${host}/alarm/record/fetch/page`, async (req) => envelope(buildAlarmRecordPagePayload({ ...req.query, ...(req.body || {}) })));
+    app.get(`${host}/alarm/record/fetch/page`, async (req) => envelope(buildAlarmRecordPagePayload({ ...req.query, ...(req.body || {}) })));
+  }
+  // --- License module (useLicenseApi) ---
+  for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+    app.get(`${host}/license/item/list`, async () => envelope(buildLicenseItemListPayload()));
+    app.get(`${host}/license/used/list`, async () => envelope(buildLicenseUsedListPayload()));
+    app.get(`${host}/license/detail`, async () => envelope(buildLicenseDetailPayload()));
+    app.get(`${host}/license/components`, async () => envelope(buildLicenseComponentsPayload()));
+    for (const f of ['express-to-pro/active/file/export', 'care/active/file/export', 'deactivate/file/export', 'reactive/file/export']) {
+      app.post(`${host}/license/${f}`, async () => envelope({ success: true, fileUrl: '', taskId: '1' }));
+    }
+  }
+  // --- TVWall (useTVWallApi admin base) ---
+  app.get('/admin/API/tvwall/window', async () => envelope(buildTvWallWindowPayload()));
+  app.post('/admin/API/tvwall/window', async () => envelope(buildTvWallWindowPayload()));
+  app.post('/admin/API/VMS/TvWall/GetTvWallCapacity', async () => envelope(buildTvWallCapacityPayload()));
+  app.get('/brms/api/v1.1/tvwall/page', async (req) => envelope(buildAlarmPlanPagePayload({ ...req.query, ...(req.body || {}) })));
+  // --- System config pages (index-BhDUzoCV.js) ---
+  for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/cfgs/api/v1.1']) {
+    app.get(`${host}/config/message-storage`, async () => envelope(buildMessageStorageConfigPayload()));
+    app.put(`${host}/config/message-storage`, async () => envelope(buildMessageStorageConfigPayload()));
+    app.get(`${host}/config/time-sync`, async () => envelope(buildTimeSyncConfigPayload()));
+    app.put(`${host}/config/time-sync`, async () => envelope(buildTimeSyncConfigPayload()));
+    app.post(`${host}/config/time-sync/immediate`, async () => envelope({ success: true }));
+    app.get(`${host}/config/quick/command/list`, async () => envelope(buildQuickCommandListPayload()));
+    app.get(`${host}/config/tls/cert/detail`, async () => envelope(buildTlsCertDetailPayload()));
+    app.post(`${host}/config/tls/cert/generate`, async () => envelope({ success: true, certId: '1' }));
+    app.post(`${host}/config/tls/cert/import`, async () => envelope({ success: true, certId: '1' }));
+    app.get(`${host}/config/tls/cert/export`, async () => envelope({ success: true, fileUrl: '' }));
+    app.get(`${host}/config/sub-oss-port`, async () => envelope(buildSubOssPortPayload()));
+    app.get(`${host}/config/export-password`, async () => envelope(buildExportPasswordPayload()));
+  }
+}
+
 // Licenses + system self-check warnings (all benign: no disk/license issues).
 app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [] }));
 app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [] }));
