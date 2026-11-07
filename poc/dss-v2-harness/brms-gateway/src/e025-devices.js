@@ -1481,11 +1481,20 @@ export function buildUserGroupListPayload(query = {}) {
 }
 
 export function buildLdapConfigPayload() {
+  // E-104: NATIVE contract (DPSDK.dll FUN_18064d140 - no wrapper key, reads
+  // data directly): username/port/autoSynTime/dn/enable/enableAutoSyn/ssl/
+  // server, ALL STRING (port via atoi). enable/enableAutoSyn/ssl are
+  // compared with the literal "1" (FUN_18076f010 vs "1" @0xc7cb2c). SPA
+  // (index-BiUvY3rV.js@0xad65) reads the same keys with string "1"/"0".
   return {
-    enable: '0', enableLdap: '0', status: '0',
-    ip: '', address: '', port: '', baseDn: '', baseDN: '',
-    userName: '', password: '', useSsl: '0', useSSL: '0', encryptType: '0',
-    usernameAttribute: 'uid', remark: ''
+    // native keys (no underscore spelling - case-sensitive bind)
+    username: '', port: '389', autoSynTime: '00:00:00', dn: '',
+    enable: '0', enableAutoSyn: '0', ssl: '0', server: '',
+    // SPA/legacy aliases kept as superset
+    enableLdap: '0', status: '0',
+    ip: '', address: '', useSsl: '0', useSSL: '0', encryptType: '0',
+    baseDn: '', baseDN: '', userName: '', userDn: '',
+    password: '', usernameAttribute: 'uid', remark: ''
   };
 }
 
@@ -1547,8 +1556,15 @@ export function buildAuthorityResourceRolesPayload(resourceId, body = {}) {
       default: r.default, createTime: r.createTime
     };
   });
+  // E-104: NATIVE contract (DPSDK.dll FUN_18028f220, descriptor built inline
+  // @0x28f220): data.results is an ARRAY OF STRINGS (roleIds, each -> char
+  // [0x40]). Serving objects there makes the native parser (type=2 vs JSON
+  // object node 6) extract ZERO elements -> empty permission dialog. The
+  // role OBJECTS live in list/roleList/items (SPA/legacy consumers).
+  const roleIds = list.map((r) => String(r.roleId));
   return {
-    list, results: list, items: list, roleList: list, roles: list,
+    list, results: roleIds, roleIds, items: list, roleList: list, roles: list,
+    checkedRoles: roleIds,
     total: String(list.length), totalCount: String(list.length), resourceId: rid
   };
 }

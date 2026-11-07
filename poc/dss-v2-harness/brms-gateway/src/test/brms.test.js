@@ -521,9 +521,12 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
         assert.strictEqual(typeof r[k], 'string', `role.${k} string, got ${typeof r[k]}`);
       }
     }
-    // authority resource role list: results[] items bind id/roleName/memo
+    // authority resource role list: results is an ARRAY OF STRINGS (native),
+    // the role OBJECTS live in list/roleList
     const ar = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/VIGILAB/role/list`)).json();
-    for (const r of ar.data.results) {
+    assert.ok(Array.isArray(ar.data.results) && ar.data.results.every((r) => typeof r === 'string'), 'E-104: authority results = string roleIds');
+    assert.ok(ar.data.results.includes('1'), 'admin role id in results');
+    for (const r of ar.data.list) {
       assert.strictEqual(typeof r.id, 'string'); assert.strictEqual(typeof r.roleName, 'string'); assert.strictEqual(typeof r.memo, 'string');
     }
     // SetResourceRoles: PUT .../role/update echoes roleIds array
@@ -537,6 +540,21 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     // group-by-role-level: results[] {groupName, groupId, users[]}
     const gb = await (await fetch(`${BASE}/brms/api/v1.1/user/group-by-role-level/list?keyword=`)).json();
     assert.ok(Array.isArray(gb.data.results[0].users) && gb.data.results[0].users.some((u) => u.username === 'admin'), 'group carries users[]');
+  });
+
+  it('E-104 ldap native keys + authority results strings', async () => {
+    // config/ldap: native parser binds username/port/autoSynTime/dn/enable/
+    // enableAutoSyn/ssl/server directly on data (FUN_18064d140) - strings
+    const ld = await (await fetch(`${BASE}/brms/api/v1.1/config/ldap`)).json();
+    for (const k of ['username', 'port', 'autoSynTime', 'dn', 'enable', 'enableAutoSyn', 'ssl', 'server']) {
+      assert.strictEqual(typeof ld.data[k], 'string', `ldap.${k} must be string, got ${typeof ld.data[k]}`);
+    }
+    assert.strictEqual(ld.data.enable, '0');
+    assert.strictEqual(ld.data.port, '389');
+    // authority results strings (repeat check for the fixed E-098 payload)
+    const ar = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/001/role/list`)).json();
+    assert.ok(ar.data.results.every((r) => typeof r === 'string') && ar.data.results.includes('1'));
+    assert.ok(ar.data.list.some((r) => r.roleId === '1' && r.checked === '1'), 'role objects keep checked in list');
   });
 
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
