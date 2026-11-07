@@ -170,7 +170,7 @@ export function seedMonitoringCenter(opts = {}) {
   });
   const viewCode = nextCode('VW');
   VIEWS.set(viewCode, {
-    viewCode, viewName: cameraName, viewDirCode,
+    viewCode, viewName: cameraName, viewDirCode: dirCode,
     viewShared: 0, viewReaded: 0, windowTotal: '1',
     griddingRows: '1', griddingCols: '1',
     windowLayout: [{ griddingIndex: '1', griddingEnable: '1', griddingCombine: '0', windowFromX: '0', windowToX: '1', windowFromY: '0', windowToY: '1' }],
