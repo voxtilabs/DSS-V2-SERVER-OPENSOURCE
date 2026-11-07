@@ -1671,7 +1671,20 @@ const roleHandler = async () => envelope(buildRolePagePayload());
 app.get('/brms/api/v1.1/role/page', roleHandler);
 app.post('/brms/api/v1.1/role/page', roleHandler);
 app.get('/brms/api/v1.1/role/list', roleHandler);
+app.post('/brms/api/v1.1/role/list', roleHandler); // E-107: client may POST list endpoints
 app.get('/brms/api/v1.1/role/all/list', roleHandler);
+app.post('/brms/api/v1.1/role/all/list', roleHandler);
+// E-107: version/prefix fallback variants observed as [FALLBACK] hits (the
+// generic catch-all answer code:1000 {list:[],total:0} is read as "Abnormal
+// network" by DPSDK): v1.0 + the ipms prefix.
+for (const host of ['/brms/api/v1.0', '/ipms/api/v1.1', '/ipms/api/v1.0', '/brms/api/v2.0']) {
+  app.get(`${host}/role/list`, roleHandler);
+  app.post(`${host}/role/list`, roleHandler);
+  app.get(`${host}/role/all/list`, roleHandler);
+  app.post(`${host}/role/all/list`, roleHandler);
+  app.get(`${host}/role/page`, roleHandler);
+  app.post(`${host}/role/page`, roleHandler);
+}
 
 // ===== E-096: User Management + Role Management (native UserLogical.dll path)
 // Live evidence gw-last40m.log 02:55-02:58 UTC: /user/page, /user/group/list
@@ -1686,6 +1699,18 @@ app.get('/brms/api/v1.1/user/group-by-role-level/list', async (req) => envelope(
 app.get('/brms/api/v1.1/config/ldap', async () => envelope(buildLdapConfigPayload()));
 app.put('/brms/api/v1.1/config/ldap', async (req) => envelope(buildLdapConfigPayload()));
 app.post('/brms/api/v1.1/config/ldap', async (req) => envelope(buildLdapConfigPayload()));
+// E-107: v1.0 + ipms variants of the LDAP config (FALLBACK hits)
+for (const host of ['/brms/api/v1.0', '/ipms/api/v1.1', '/brms/api/v2.0']) {
+  app.get(`${host}/config/ldap`, async () => envelope(buildLdapConfigPayload()));
+  app.put(`${host}/config/ldap`, async () => envelope(buildLdapConfigPayload()));
+  app.post(`${host}/config/ldap`, async () => envelope(buildLdapConfigPayload()));
+}
+// E-107: token refresh - observed live 08:14:56Z as POST /admin/API/accounts/
+// updateToken hitting [FALLBACK] (40B) which breaks the session renew.
+const updateTokenHandler = async (req) => envelope(buildLoginSuccess(String(req.body?.userName || 'admin')));
+app.post('/brms/api/v1.0/accounts/updateToken', updateTokenHandler);
+app.post('/admin/API/accounts/updateToken', updateTokenHandler);
+app.post('/admin/api/accounts/updateToken', updateTokenHandler);
 app.get('/brms/api/v1.1/user/email/associate/list', async (req) => envelope(buildUserEmailListPayload(req.query)));
 app.get('/brms/api/v1.1/user/detail/list', async (req) => envelope(buildUserPagePayload({ ...req.query, ...(req.body || {}) })));
 // E-105: legacy /admin/API/ surface of the SAME native dialog
