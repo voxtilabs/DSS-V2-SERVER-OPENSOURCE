@@ -1133,8 +1133,8 @@ app.get('/brms/api/v1.1/config/sira', async () => envelope({ siraEnable: 0, enab
 app.get('/brms/api/v1.1/config/feature-analyse', async () => envelope({ enable: false, list: [] }));
 app.get('/brms/api/v1.1/config/device-login-model', async () => envelope({ list: [], total: 0 }));
 app.get('/brms/api/v1.1/config/interface/common/timeout', async () => envelope({ timeout: 300 }));
-app.get('/brms/api/v1.1/time-template/list', async () => envelope({ list: [], total: 0 }));
-app.get('/brms/api/v1.1/alarm/plan/alarm-type/list', async () => envelope({ list: [] }));
+// (E-121: time-template/list + alarm/plan/alarm-type/list moved below with
+// the real payloads)
 app.get('/brms/api/v1.1/vtalk/sip/online/list', async () => envelope({ list: [] }));
 app.get('/admin/API/config/videoIntercom', async () => envelope({ enable: 0, openState: '0' }));
 
@@ -1238,9 +1238,8 @@ import {
     app.post(`${host}/log/client-config`, async () => envelope(buildLogClientConfigPayload()));
   }
   // --- Alarm module (useEventApi-DiKk_pnU.js) ---
+  // (E-121: alarm/plan/fetch/page moved there with the default plan payload)
   for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
-    app.post(`${host}/alarm/plan/fetch/page`, async (req) => envelope(buildAlarmPlanPagePayload({ ...req.query, ...(req.body || {}) })));
-    app.get(`${host}/alarm/plan/fetch/page`, async (req) => envelope(buildAlarmPlanPagePayload({ ...req.query, ...(req.body || {}) })));
     app.post(`${host}/alarm/plan`, async () => envelope({ success: true, planId: '1', id: '1' }));
     app.get(`${host}/alarm/plan/:planId`, async (req) => envelope({ planId: String(req.params?.planId || '1'), id: String(req.params?.planId || '1'), planName: 'Default Plan', enable: '1', status: '1' }));
     app.put(`${host}/alarm/plan/:planId`, async () => envelope({ success: true }));
@@ -1295,12 +1294,72 @@ for (const host of ['/videoService', '/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/eventCenter/alarm/messages/count`, async () => envelope(buildEventCenterAlarmCountPayload()));
 }
 
+// ===== E-121: Event Config completion + TVWall + OMMS alert + subscription ===
+import {
+  buildAlarmPlanListPayload, buildAlarmTypeListPayload,
+  buildMailTemplateListPayload, buildVacationTemplateListPayload, buildTimeTemplateListPayload,
+  buildTvWallsPayload, buildTvWallDetailPayload,
+  buildOmmsAlertListPayload, buildOmmsAlertRuleListPayload, buildOmmsAlertStatisticsPayload,
+  buildIvssListPayload, buildEventSubscriptionPayload, buildAlarmOverviewSummaryPayload
+} from './e121-modules-b.js';
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  // P0: the alarm-plan panel needs the REAL type catalog + a default plan
+  app.get(`${host}/alarm/plan/alarm-type/list`, async () => envelope(buildAlarmTypeListPayload()));
+  app.post(`${host}/alarm/plan/alarm-type/list`, async () => envelope(buildAlarmTypeListPayload()));
+  app.post(`${host}/alarm/plan/fetch/page`, async (req) => envelope(buildAlarmPlanListPayload({ ...req.query, ...(req.body || {}) })));
+  app.get(`${host}/alarm/plan/fetch/page`, async (req) => envelope(buildAlarmPlanListPayload({ ...req.query, ...(req.body || {}) })));
+  // P2: alarm/plan sub-routes (templates, soft-trigger, transparence, pos, batch)
+  for (const sub of ['alarm-type/custom', 'alarm-type/soft-trigger', 'alarm-type/transparence', 'alarm-type/pos', 'template']) {
+    app.get(`${host}/alarm/plan/${sub}`, async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0', enable: '1', status: '1' }));
+    app.post(`${host}/alarm/plan/${sub}`, async () => envelope({ success: true, id: '1' }));
+    app.put(`${host}/alarm/plan/${sub}/:id`, async () => envelope({ success: true }));
+    app.delete(`${host}/alarm/plan/${sub}/:id`, async () => envelope({ success: true }));
+  }
+  app.get(`${host}/alarm/plan/alarm-type/transparence/list`, async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
+  app.post(`${host}/alarm/plan/alarm-type/:typeId/source/list`, async () => envelope(buildAlarmPlanResourceConfigStatusPayload()));
+  app.post(`${host}/alarm/plan/status/update/batch`, async () => envelope({ success: true, results: [] }));
+  app.post(`${host}/alarm/plan/source/delete/batch`, async () => envelope({ success: true, results: [] }));
+  // templates (mail / vacation / time)
+  app.get(`${host}/mail-template/list`, async () => envelope(buildMailTemplateListPayload()));
+  app.get(`${host}/vacation-template/list`, async () => envelope(buildVacationTemplateListPayload()));
+  app.get(`${host}/time-template/list`, async (req) => envelope(buildTimeTemplateListPayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/time-template`, async () => envelope({ success: true, templateId: '1' }));
+  app.get(`${host}/time-template/:templateId`, async (req) => envelope({ templateId: String(req.params?.templateId || '1'), templateName: 'All Day', enable: '1', status: '1' }));
+  // device ivss + alarm output + report export
+  app.get(`${host}/device/ivss/list`, async () => envelope(buildIvssListPayload()));
+  app.post(`${host}/device/channel/alarm-output/control`, async () => envelope({ success: true }));
+  app.post(`${host}/alarm/overview/report/export`, async () => envelope({ success: true, taskId: '1', fileUrl: '' }));
+  // P3: event subscription GET + overview summary v1.0 (v1.1 is served by the
+  // bootstrap route below)
+  if (host === '/brms/api/v1.0') {
+    app.get(`${host}/event/subscription`, async () => envelope(buildEventSubscriptionPayload()));
+    app.post(`${host}/event/subscription`, async () => envelope(buildEventSubscriptionPayload()));
+    app.get(`${host}/alarm/overview/summary`, async (req) => envelope(buildAlarmOverviewSummaryPayload({ ...req.query, ...(req.body || {}) })));
+  }
+}
+// P1/P2: TVWall SPA routes + RPC mirrors
+app.get('/brms/api/v1.1/tvwalls', async () => envelope(buildTvWallsPayload()));
+app.get('/brms/api/v1.0/tvwalls', async () => envelope(buildTvWallsPayload()));
+app.get('/brms/api/v1.1/tvwall/:tvWallId', async (req) => envelope(buildTvWallDetailPayload(req.params?.tvWallId || '1')));
+app.post('/admin/API/BRM/TvWall/GetTvWalls', async () => envelope({ method: 'BRM.TvWall.GetTvWalls', tvWalls: buildTvWallsPayload().list, list: buildTvWallsPayload().list, results: buildTvWallsPayload().list, info: buildTvWallsPayload(), data: buildTvWallsPayload() }));
+app.post('/admin/API/BRM/TvWall/GetTvWall', async (req) => envelope({ method: 'BRM.TvWall.GetTvWall', ...buildTvWallDetailPayload(req.body?.tvWallId || '1'), info: buildTvWallDetailPayload(req.body?.tvWallId || '1'), data: buildTvWallDetailPayload(req.body?.tvWallId || '1') }));
+// P2: OMMS alert routes (list / rules / statistics / handle-collect-procedure)
+for (const host of ['/omms/api/v1.1', '/omms/api/v1.0']) {
+  app.get(`${host}/alert/rule/list`, async () => envelope(buildOmmsAlertRuleListPayload()));
+  app.post(`${host}/alert/rule/list`, async () => envelope(buildOmmsAlertRuleListPayload()));
+  app.get(`${host}/alert/statistics`, async () => envelope(buildOmmsAlertStatisticsPayload()));
+  app.get(`${host}/alert/message/list`, async () => envelope(buildOmmsAlertListPayload()));
+  app.post(`${host}/alert/handle`, async (req) => envelope({ success: true, alertId: String(req.body?.alertId || '') }));
+  app.post(`${host}/alert/collect`, async (req) => envelope({ success: true, alertId: String(req.body?.alertId || '') }));
+  app.post(`${host}/alert/procedure`, async (req) => envelope({ success: true, procedureId: '1' }));
+}
+
 // ===== E-117: Event Center + Generic Event ingestion =======================
 import {
   buildGeneralEventPagePayload, buildGeneralEventConfigPayload, buildAlertSubscribePayload,
   buildAlarmOverviewTopSourcePayload, buildAlarmOverviewTopTypePayload, buildAlarmOverviewTrendPayload,
   buildPrerecordChannelPagePayload, buildDisarmConfigPagePayload, buildStormRestrainAlarmTypePayload,
-  buildCombinationSourcePagePayload, ingestGeneralEvent
+  buildCombinationSourcePagePayload, ingestGeneralEvent, findEventById, updateEventById
 } from './e117-alarm-events.js';
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   // Generic Event ingest (DSS custom-event channel): the client lists events,
@@ -1314,11 +1373,18 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
     return envelope({ success: true, eventId: ev.eventId, alarmId: ev.eventId });
   });
   app.get(`${host}/alarm/general/event/:eventId`, async (req, reply) => {
-    const rows = buildGeneralEventPagePayload({}).pageData;
-    const row = rows.find((e) => e.eventId === String(req.params?.eventId));
+    const row = findEventById(req.params?.eventId);
     return row ? envelope(row) : reply.code(404).send(envelope(null, 404, 'event not found'));
   });
-  app.put(`${host}/alarm/general/event/:eventId`, async (req) => envelope({ success: true, eventId: String(req.params?.eventId || '') }));
+  // P0: the edit must PERSIST (the client lost its edits silently before)
+  app.put(`${host}/alarm/general/event/:eventId`, async (req, reply) => {
+    const ev = updateEventById(req.params?.eventId, { ...req.query, ...(req.body || {}) });
+    return ev ? envelope({ success: true, eventId: ev.eventId, alarmId: ev.alarmId, ...ev }) : reply.code(404).send(envelope(null, 404, 'event not found'));
+  });
+  app.post(`${host}/alarm/general/event/:eventId`, async (req, reply) => {
+    const ev = updateEventById(req.params?.eventId, { ...req.query, ...(req.body || {}) });
+    return ev ? envelope({ success: true, eventId: ev.eventId }) : reply.code(404).send(envelope(null, 404, 'event not found'));
+  });
   app.delete(`${host}/alarm/general/event/:eventId`, async (req) => envelope({ success: true }));
   app.get(`${host}/config/general/event`, async () => envelope(buildGeneralEventConfigPayload()));
   app.put(`${host}/config/general/event`, async () => envelope(buildGeneralEventConfigPayload()));
@@ -2667,7 +2733,7 @@ app.post('/brms/api/v1.0/SS/Record/QueryLock', { preHandler: auth }, async () =>
 app.post('/brms/api/v1.0/SS/Record/DeleteRecord', { preHandler: auth }, async () => envelope({ success: true }));
 
 // ===== EVENTS =====
-app.post('/brms/api/v1.0/event/subscription', { preHandler: auth }, async () => envelope({ subscriptionId: 'sub-' + genToken().slice(0, 8) }));
+// (E-121: event/subscription POST moved into the E-121 loop above)
 app.post('/brms/api/v1.0/event/query', { preHandler: auth }, async () => envelope({ events: [] }));
 app.post('/brms/api/v1.0/event/push', async (req) => {
   const { raw, from } = req.body;

@@ -746,9 +746,21 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(list.data.pageData.some((e) => e.eventId === ingest.data.eventId), 'event visible in the list');
     assert.strictEqual(typeof list.data.totalCount, 'string');
     assert.ok(list.data.pageData[0].orgCode, 'event carries orgCode');
-    // detail by id
+    // detail by id (numeric ids from older clients resolve too)
     const det = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/${ingest.data.eventId}`)).json();
     assert.strictEqual(det.data.description, 'E-117 test tripwire event');
+    // P0/E-121: the edit must persist
+    const put = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/${ingest.data.eventId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ description: 'E-121 editada', eventLevel: '2' })
+    })).json();
+    assert.strictEqual(put.data.success, true);
+    const det2 = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/${ingest.data.eventId}`)).json();
+    assert.strictEqual(det2.data.description, 'E-121 editada');
+    assert.strictEqual(det2.data.eventLevel, '2');
+    // numeric id resolution (clients that stored 1/2/3)
+    const det3 = await (await fetch(`${BASE}/brms/api/v1.1/alarm/general/event/1`)).json();
+    assert.ok(det3.data.eventId, 'numeric id 1 resolves to the newest event');
     // config + subscription + stats + prerecord/disarm/storm/combination
     const cfg = await (await fetch(`${BASE}/brms/api/v1.1/config/general/event`)).json();
     assert.strictEqual(cfg.data.enable, '1');
@@ -828,6 +840,36 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const p2 = parseDahuaFrame(Buffer.concat([h2, payload]));
     assert.equal(p2.ok, true);
     assert.equal(p2.magic, 'DHIP');
+  });
+
+  it('E-121 Event Config completion: plan types, plans, templates, tvwall, omms', async () => {
+    // P0: the plan panel needs the REAL type catalog (was {list:[]})
+    const at = await (await fetch(`${BASE}/brms/api/v1.1/alarm/plan/alarm-type/list`)).json();
+    assert.ok(at.data.list.length >= 10, 'plan alarm-type catalog served');
+    assert.ok(at.data.list.some((a) => a.alarmTypeId === '13'), 'tripwire in the plan catalog');
+    // P0: a default plan so the panel is operable
+    const pl = await (await fetch(`${BASE}/brms/api/v1.1/alarm/plan/fetch/page`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(Array.isArray(pl.data.pageData) && pl.data.pageData.length >= 1, 'default plan present');
+    assert.ok(pl.data.pageData[0].channelIds.length >= 1, 'plan bound to channels');
+    // P2: plan sub-routes + templates must not hit the catch-all
+    for (const p of ['/brms/api/v1.1/alarm/plan/alarm-type/custom', '/brms/api/v1.1/alarm/plan/alarm-type/soft-trigger', '/brms/api/v1.1/alarm/plan/template', '/brms/api/v1.1/mail-template/list', '/brms/api/v1.1/vacation-template/list', '/brms/api/v1.1/time-template/list', '/brms/api/v1.1/device/ivss/list', '/brms/api/v1.1/alarm/plan/status/update/batch']) {
+      const r = await fetch(`${BASE}${p}`, { method: p.includes('update') ? 'POST' : 'GET', headers: { 'content-type': 'application/json' }, body: p.includes('update') ? '{}' : undefined });
+      const t = await r.text();
+      assert.ok(t.length > 60, `${p} explicit route, got ${t.length}B`);
+    }
+    // P1/P2: TVWall
+    const tw = await (await fetch(`${BASE}/brms/api/v1.1/tvwalls`)).json();
+    assert.ok(tw.data.list.some((w) => w.tvWallCode === 'wall-1'), 'tvwall seeded');
+    const rpc = await (await fetch(`${BASE}/admin/API/BRM/TvWall/GetTvWalls`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(Array.isArray(rpc.data.tvWalls) && rpc.data.tvWalls.length >= 1, 'GetTvWalls RPC payload');
+    // P2: OMMS alert routes
+    const rule = await (await fetch(`${BASE}/omms/api/v1.1/alert/rule/list`)).json();
+    assert.ok(rule.data.list.length >= 10, 'omms alert rules');
+    // P3: event subscription + v1.0 summary
+    const es = await (await fetch(`${BASE}/brms/api/v1.0/event/subscription`)).json();
+    assert.strictEqual(es.data.subscribe, '1');
+    const s10 = await (await fetch(`${BASE}/brms/api/v1.0/alarm/overview/summary`)).json();
+    assert.strictEqual(typeof s10.data.total, 'string');
   });
 
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');

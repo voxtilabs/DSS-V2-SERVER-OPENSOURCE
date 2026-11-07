@@ -87,6 +87,39 @@ export function buildGeneralEventPagePayload(query = {}) {
   };
 }
 
+// Resolve an event by its id: exact match first, then NUMERIC resolution (the
+// client stored ids 1/2/3 from before the ge-<epoch> scheme - P1 regression)
+export function findEventById(id) {
+  const key = String(id ?? '');
+  let hit = EVENT_STORE.find((e) => e.eventId === key);
+  if (hit) return hit;
+  if (/^\d+$/.test(key)) {
+    // ids assigned before the ge- scheme were 1-based ordinals (newest first)
+    const idx = Number(key) - 1;
+    if (idx >= 0 && idx < EVENT_STORE.length) hit = EVENT_STORE[idx];
+  }
+  return hit || null;
+}
+
+// PUT/PATCH: persist the edit the client sends (it used to be a silent no-op -
+// the "ANPR_EBA" edit of 11-05 was lost)
+export function updateEventById(id, body = {}) {
+  const ev = findEventById(id);
+  if (!ev) return null;
+  if (body.description !== undefined) { ev.description = String(body.description); ev.strMessage = ev.description; ev.eventRemark = ev.description; }
+  if (body.eventName !== undefined) ev.eventTypeName = String(body.eventName);
+  if (body.eventLevel !== undefined) ev.eventLevel = String(body.eventLevel);
+  if (body.eventType !== undefined) {
+    ev.eventType = String(body.eventType);
+    const cat = DSS_ALARM_TYPE_CATALOG.find((a) => a.alarmTypeId === ev.eventType);
+    ev.alarmTypeId = ev.eventType; ev.eventSourceType = cat?.eventSourceType || '9';
+  }
+  if (body.handleStatus !== undefined) ev.handleStatus = String(body.handleStatus);
+  if (body.status !== undefined) ev.status = String(body.status);
+  saveEvents(EVENT_STORE);
+  return ev;
+}
+
 export function buildGeneralEventConfigPayload() {
   return {
     enable: '1', status: '1', eventEnable: '1',
