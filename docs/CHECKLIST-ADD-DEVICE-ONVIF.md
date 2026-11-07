@@ -729,3 +729,17 @@
   0.2s; cam1 idem. unit 66 pass/0 fail, e2e 12/12, live-verify 15/15.
   Nota: cam_D7001SHX9002 (placeholder, rtspUri 127.0.0.1) queda
   ready=false honestamente - no inventa video.
+
+- **Checkpoint 2026-11-07 (s) - E-117, commit 89c12a4**. EVENT CENTER +
+  GENERIC EVENTS: ingesta via POST alarm/general/event (+ bridge
+  /admin/API/GenericEvent/Report sin token para sistemas externos), store
+  en data/events.json (persistente), push MQ a brms.notifyAlarms /
+  vms.alarm.msg / mq.alarm.msg.topic.* + WS (alarmEvent en el notify hub) ->
+  el evento aparece VIVO en el Event Center. Endpoints del modulo servidos:
+  alarm/general/event list+CRUD, config/general/event, omms alert/subscribe
+  (15 tipos), overview/top alarm-source+alarm-type, overview/trend (7 dias),
+  prerecord channel page, disarm config, storm restrain, combination
+  source. Verificado en vivo: evento TRIPWIRE de D0238JDG3016 (org VIGILAB)
+  ingestado, visible en lista, MQ publicado ([E117-ALARM]). unit 67 pass/0
+  fail, e2e 12/12 x3, live-verify 15/15. En curso: subagentes RE de eventos
+  IVS/tripwire + auto-register Dahua (NVR/XD/DVR/H265).
