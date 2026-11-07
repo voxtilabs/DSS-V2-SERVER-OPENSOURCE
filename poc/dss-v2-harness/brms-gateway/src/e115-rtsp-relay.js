@@ -92,6 +92,7 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     let upReady = false;
     const pending = []; // client messages buffered until upstream is connected
     let basePath = '';
+    let upSession = null; // Session id from the upstream SETUP response
     let cseq = 1;
 
     function log(...a) { console.log('[E115-RTSP]', clientKey, ...a); }
@@ -132,6 +133,10 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
             const body = ubuf.subarray(i + 4, i + 4 + bodyLen);
             ubuf = ubuf.subarray(i + 4 + bodyLen);
             let outHead = head;
+            // capture the upstream Session id (PLAY/TEARDOWN need it, and the
+            // Dahua client may not echo it back)
+            const sessM = /Session:\s*([^\r\n;]+)/i.exec(outHead);
+            if (sessM && /Transport:\s*/i.test(outHead)) upSession = sessM[1].trim();
             // rewrite the upstream Transport back to the client's channels
             const tr = /Transport:\s*(.+)/i.exec(outHead);
             if (tr) outHead = outHead.replace(/Transport:\s*.+/i, 'Transport: ' + rewriteTransport(tr[1], CL_CH.from, CL_CH.to));
@@ -180,16 +185,18 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
       if (method === 'PLAY' || method === 'RECORD' || method === 'PAUSE') {
         const p = parseRtspUrl(rawUrl);
         const c = cseq++;
-        const sessionH = headers.session ? `${CRLF}Session: ${headers.session}` : '';
+        const sess = headers.session || upSession;
+        const sessionH = sess ? `${CRLF}Session: ${sess}` : '';
         const rangeH = headers.range ? `${CRLF}Range: ${headers.range}` : '';
         up.write(`${method} rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: DSSCClient${sessionH}${rangeH}${CRLF}${CRLF}`);
-        log(method, p.path || basePath);
+        log(method, p.path || basePath, 'session=' + (sess || 'none'));
         return;
       }
       if (method === 'TEARDOWN') {
         const p = parseRtspUrl(rawUrl);
         const c = cseq++;
-        const sessionH = headers.session ? `${CRLF}Session: ${headers.session}` : '';
+        const sess = headers.session || upSession;
+        const sessionH = sess ? `${CRLF}Session: ${sess}` : '';
         up.write(`TEARDOWN rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: DSSCClient${sessionH}${CRLF}${CRLF}`);
         setTimeout(() => { try { up.destroy(); } catch {} try { client.destroy(); } catch {} }, 250);
         log('TEARDOWN');
