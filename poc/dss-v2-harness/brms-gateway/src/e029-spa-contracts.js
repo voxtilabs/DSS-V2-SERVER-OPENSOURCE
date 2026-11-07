@@ -207,7 +207,13 @@ function treeResult(orgs, devices, channels, requestedOrg) {
 export function buildGradeDeviceTreePayload(body = {}) {
   const requestedOrg = String(body.orgCode ?? ROOT_ORG_CODE).trim() || ROOT_ORG_CODE;
   const registry = [...DEVICE_REGISTRY.values()];
-  const channels = allChannels().map(channelTreeNode);
+  // E-103: channels must belong to the requested org (root orgCode=001 used
+  // to return ALL channels as orphans with no parent device in the same
+  // payload -> tree renderer binds channel.pId -> devices:[null], E-039
+  // regression vector). Lazy-load: orgs list devices+channels of the org
+  // asked, root only lists sub-orgs.
+  const orgDeviceCodes = new Set(registry.filter((d) => deviceOrgCode(d) === requestedOrg).map((d) => d.deviceCode));
+  const channels = allChannels().filter((c) => orgDeviceCodes.has(c.deviceCode)).map(channelTreeNode);
 
   // Sub-organizations come from the PERSISTENT org store (E-041: root '001'
   // + 'VIGILAB') plus every orgCode present in the registry.

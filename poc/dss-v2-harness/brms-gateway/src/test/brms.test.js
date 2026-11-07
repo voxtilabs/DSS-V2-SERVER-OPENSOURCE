@@ -515,7 +515,8 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(ud.data.roles) && typeof ud.data.name === 'string');
     // role/page rows bind native keys: allowEdit, id, roleType, roleName, memo
     const rp = await (await fetch(`${BASE}/brms/api/v1.1/role/page`)).json();
-    for (const r of rp.data.pageData ?? rp.data.list) {
+    assert.ok(Array.isArray(rp.data.pageData), 'E-103: role/page serves pageData[]');
+    for (const r of rp.data.pageData) {
       for (const k of ['id', 'roleName', 'memo', 'roleType', 'allowEdit']) {
         assert.strictEqual(typeof r[k], 'string', `role.${k} string, got ${typeof r[k]}`);
       }

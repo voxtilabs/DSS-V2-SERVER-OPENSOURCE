@@ -1249,7 +1249,7 @@ export function buildRolePagePayload() {
       orgCode: 'VIGILAB', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' }
   ];
   return {
-    list, results: list, items: list, roleList: list, roles: list,
+    list, results: list, items: list, roleList: list, roles: list, pageData: list, // E-103: pageData alias (native contract)
     total: String(list.length), totalCount: String(list.length),
     pageNo: '1', pageSize: '20', pageCount: '1'
   };
@@ -1374,7 +1374,7 @@ export const USER_STORE = [
     realName: 'Administrator', employeeName: 'Administrator',
     userType: '1', userTypeName: 'Administrator', adminFlag: '1', isAdmin: '1',
     status: '1', statusName: 'Normal', online: '1', enable: '1', locked: '0', lock: '0',
-    roleIds: ['1'], roleId: '1', roleNames: ['Super Administrator'], roleName: 'Super Administrator',
+    roleIds: ['1'], roleId: '1', roleNames: ['Administrator'], roleName: 'Administrator',
     groupId: '1', groupName: 'Default', userGroupName: 'Default',
     orgCode: '001', domainId: '0',
     email: 'admin@vigilab.local', telephone: '', mobile: '',
