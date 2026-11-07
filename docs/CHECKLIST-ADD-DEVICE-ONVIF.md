@@ -616,3 +616,19 @@
   activos. REA/Ghidra sobre DPSDK no completó por timeout de import
   (17MB > 330s); la evidencia RE se cerró por string-pool + reportes de
   subagentes equivalente.
+
+- **Checkpoint 2026-11-07 (l) - E-109, commit 57d1268**. Cosecha historica de
+  [FALLBACK] del cliente real (2.782 requests, 12 URLs distintas): 8 ya estaban
+  cubiertas (E-025/E-107 rutas explicitas) y 5 eran huecos reales que ahora se
+  sirven: v1.1/server/list (GetServersList @0xc913a8 - servidor video#local
+  dueno de cada device), storage/position/device/page (@0xc991d5, pageData real
+  del registry), storage/disk/local-disk/list (@0xc987cd, disco real via
+  statfs de /app/data), storage/disk/net-disk/list (@0xc9843d) y
+  storage/group/list (@0xc98d75) vacios explicitos. Todos con variantes
+  brms v1.1/v1.0/v2.0 + ipms. Ademas E-109b: journal persistente de
+  [REQ]/[RES]/[FALLBACK] en /app/data/logs/requests-YYYY-MM-DD.log (volumen rw)
+  para que la forensia sobreviva a docker compose up --build (la cosecha
+  historica hubo que rescatarla de /tmp). Verificado en vivo: server/list
+  1568B, storage position 2793B, local-disk 2037B, journal escribiendo.
+  unit 60 pass/0 fail/1 skip, e2e 12/12 x3, live-verify 15/15.
+  DOCS: docs/DSS_ENDPOINT_COVERAGE.md §8 con las 12 URLs y su estadofinal.

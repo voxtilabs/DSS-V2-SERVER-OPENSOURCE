@@ -71,16 +71,43 @@ Todo lo no registrado cae en `app.get(PREFIX + '/*')` → `{code:1000,data:{list
 versión (v1.0/v1.1/v2.0) y de prefijo (brms/ipms/admin) se registran juntas
 (E-107). Ver en vivo: `docker logs … | grep FALLBACK` = 0 para rutas del cliente.
 
-## 7. Infraestructura verificada
+## 8. Harvest histórico de FALLBACK del cliente real (2026-11-07)
+
+Cosecha de todos los `[FALLBACK]` del cliente real (Mozilla/Chrome, remote LAN)
+sobre 2.782 requests deduplicados: **12 URLs distintas**. Estado tras E-025/E-107/E-109:
+
+| # | URL | Eventos | Estado actual |
+|---|---|---|---|
+| 1 | `/brms/api/v1.1/server/list` | 4 | ✅ **E-109** — servidor `video#local` (dueño de cada device) |
+| 2 | `/brms/api/v1.0/tree/orgs` | 3 | ✅ E-025 — GET registrado |
+| 3 | `/brms/api/v1.0/tree/devices` | 3 | ✅ E-025 — GET registrado |
+| 4 | `/brms/api/v1.0/tree/channels` | 3 | ✅ E-025 — GET registrado |
+| 5 | `/brms/api/v1.1/device/statistics/count-by-device-category/list` | 3 | ✅ ruta explícita (buildStatisticsCategoryPayload) |
+| 6 | `/brms/api/v1.1/system/network/list` | 1 | ✅ ruta explícita (2648 B) |
+| 7 | `/brms/api/v1.1/config/ai/privacy` | 1 | ✅ ruta explícita (77 B, `privacyMask:[]`) |
+| 8 | `/admin/API/accounts/updateToken` (POST) | 1 | ✅ **E-107** — refresh de token |
+| 9 | `/brms/api/v1.1/storage/position/device/page` | 1 | ✅ **E-109** — pageData real del registry |
+| 10 | `/brms/api/v1.1/storage/disk/local-disk/list?serverCode=` | 1 | ✅ **E-109** — disco real vía statfs |
+| 11 | `/brms/api/v1.1/storage/disk/net-disk/list?serverCode=` | 1 | ✅ **E-109** — vacío explícito (sin NAS) |
+| 12 | `/brms/api/v1.1/storage/group/list?serverCode=` | 1 | ✅ **E-109** — vacío explícito |
+
+**Persistencia de logs (E-109b):** `docker logs` muere con el contenedor — por eso
+esta cosecha hubo que rescatarla de archivos `/tmp`. Ahora cada `[REQ]`/`[RES]`/
+`[FALLBACK]` se journaliza además en `/app/data/logs/requests-YYYY-MM-DD.log`
+(volumen rw), así la próxima forensía sobrevive a `docker compose up --build`.
+
+## 9. Infraestructura verificada
 
 RTSP 9100 (200 en `D0238JDG3016$1$0$0` y `D00712RD0005$1$0$0`), MediaMTX, ActiveMQ
 (OpenWire 61616 + STOMP 61613 + MQTT 1883 con notify), SIP UDP 5080 (REGISTER 200),
 ARS TCP 9500, WebSocket eventBus en 1443.
 
-## 8. Pendiente conocido
+## 10. Pendiente conocido
 
 - Import completo de Ghidra sobre DPSDK.dll (17 MB) excede el deadline de REA
   (330 s); la evidencia de contratos se obtuvo por string pool + decompilación
   dirigida (equivalente, documentada en `docs/DPSDK_USER_MANAGEMENT_CONTRACTS.md`).
 - Endpoints fuera de Users/Config (face, acceso, parking, attendance) mantienen
   el catch-all benigno; solo se implementarán si el cliente los pide en vivo.
+- Con E-109 las 12 URLs del harvest histórico quedaron cubiertas: **0 FALLBACK
+  pendientes del cliente real** dentro de lo observado.
