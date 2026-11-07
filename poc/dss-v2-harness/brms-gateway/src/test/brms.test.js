@@ -695,6 +695,25 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok('abnormityType' in nd.data, 'net disk carries abnormityType');
   });
 
+  it('E-113 StartVideo v1.1 mirrors the real RealTimeVideoVo (no empty data:{})', async () => {
+    for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+      const sv = await (await fetch(`${BASE}${host}/MTS/Video/StartVideo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+        body: JSON.stringify({ channelId: '1000171$1$0$0', streamType: '1', protocol: 'RTSP' })
+      })).json();
+      assert.equal(sv.code, 1000, host + ' code');
+      assert.ok(sv.data.url && sv.data.url.includes('rtsp://'), host + ' url');
+      assert.ok(sv.data.url.includes(`${sv.data.ip}:${sv.data.port}`), host + ' url carries ip+port');
+      assert.ok(sv.data.session && sv.data.token && sv.data.vkId, host + ' session/token/vkId');
+      assert.ok(sv.data.port === 9100, host + ' rtsp port');
+      // stop + keepalive must not fall to the catch-all either
+      const stop = await (await fetch(`${BASE}${host}/MTS/Video/StopVideo`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ token: sv.data.token }) })).json();
+      assert.strictEqual(stop.data.success, true, host + ' stop');
+      const ka = await (await fetch(`${BASE}${host}/MTS/Video/KeepAlive`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: '{}' })).json();
+      assert.strictEqual(ka.data.success, true, host + ' keepalive');
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

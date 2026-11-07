@@ -2456,6 +2456,47 @@ app.post('/brms/api/v1.0/MTS/Video/StopVideo', { preHandler: auth }, async (req)
   return envelope({ success: true });
 });
 app.post('/brms/api/v1.0/MTS/Video/KeepAlive', { preHandler: auth }, async () => envelope({ success: true }));
+// E-113: the same media/session routes on the v1.1 base. The client's web
+// stack (and future native probes) call MTS/SS on v1.1 - an unserved verb
+// returns the 40B catch-all {data:{}} which the Live View reads as "no
+// video URL" (verified live: v1.1 StartVideo -> data:{}).
+app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
+  const { channelId, streamType, trackId, extend, fakeSdp, forceSynPlay, keyCode } = req.body || {};
+  const token = genToken();
+  const session = genToken().slice(0, 16);
+  const vkId = 'vk-' + genToken().slice(0, 8);
+  const device = findDeviceByChannelId(channelId);
+  const pathName = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
+  const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
+  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
+  return envelope({
+    connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
+    port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
+    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
+    hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
+  });
+});
+app.post('/brms/api/v1.1/MTS/Video/StopVideo', { preHandler: auth }, async (req) => {
+  if (req.body?.token) RTSP_SESSIONS.delete(String(req.body.token));
+  return envelope({ success: true });
+});
+app.post('/brms/api/v1.1/MTS/Video/KeepAlive', { preHandler: auth }, async () => envelope({ success: true }));
+for (const m of ['QueryRecord', 'StartRecord', 'StopRecord', 'LockRecord', 'UnLockRecord', 'QueryLock', 'DeleteRecord']) {
+  app.post(`/brms/api/v1.1/SS/Record/${m}`, { preHandler: auth }, async (req) => {
+    // delegate to the v1.0 handler by reusing the same builders via a local fetch-free shim
+    const map = {
+      QueryRecord: () => envelope({ pageCount: 1, session: genToken().slice(0, 16), records: [] }),
+      StartRecord: () => envelope({ now: new Date().toISOString().slice(0, 19).replace('T', ' '), planId: '' }),
+      StopRecord: () => envelope({ success: true }),
+      LockRecord: () => envelope({ id: genToken().slice(0, 8) }),
+      UnLockRecord: () => envelope({ success: true }),
+      QueryLock: () => envelope({ lockInfos: [] }),
+      DeleteRecord: () => envelope({ success: true })
+    };
+    return map[m]();
+  });
+}
 
 // ===== SS RECORD =====
 app.post('/brms/api/v1.0/SS/Record/QueryRecord', { preHandler: auth }, async (req) => envelope({
