@@ -691,3 +691,21 @@
   cliente = 200 (URL entregada alcanzable), updateToken rota token y el
   nuevo es aceptado (sesion ya no muere a los ~30 min). unit 63 pass/0
   fail/1 skip, e2e 12/12 x3, live-verify 15/15.
+
+- **Checkpoint 2026-11-07 (q) - E-114, commit 96ddc7a + cierre RE**. Reporte RE
+  final (Ghidra sobre DPSDK/PluginFactory): cabeceras exactas del cliente
+  (Connection: keep-alive, Accept-Language: en, Time-Zone, Compress-Type *
+  (pide comprimir RESPUESTA, zlib), Content-Type, Expect, X-Subject-Token,
+  X-Subject-Sequence (correlacion de BRMS.Common.CancelRequest)); envelope
+  code:int(1000)/desc:string/data:objeto; sin coercion de tipos (clave
+  ausente = slot NULL silencioso; results y pageData NO intercambiables);
+  usuarios -> columnas username/name/roles[]/online + status/displayable;
+  permisos -> 4 arboles Qt (Menu/Func/Device/SubSystem); heartbeat =
+  RENOVACION DE TOKEN (\"Heartbeat is success, m_strToken = %s\" @0xc95670)
+  -> NUESTRO keepalive devolvia {success:true} y VACIABA el token: es la
+  causa real del -18 a los ~30 min. E-114: keepalive devuelve login
+  envelope con token nuevo (verificado 3 ciclos consecutivos + VSL
+  token/keepalive). BD local: cero sqlite/leveldb en las DLL; el estado
+  vive en localStorage/CEF. unit 64 pass/0 fail/1 skip, e2e 12/12 x3,
+  live-verify 15/15. QUEDA PENDIENTE solo el subagente de la cadena
+  video/ONVIF ( correiendo ).
