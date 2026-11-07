@@ -592,6 +592,76 @@ app.post('/videoService/accounts/authorize', authorizeHandler);
 app.post('/admin/API/accounts/authorize', authorizeHandler);
 app.post('/admin/api/accounts/authorize', authorizeHandler);
 
+// ===== E-106: second-time login (RSA password check) =======================
+// Live evidence 2026-11-07 09:39:55Z: the real client opens with
+//   GET  /brms/api/v1.1/account/security/public-key/generate  (VerifyFirstTime)
+//   POST /brms/api/v1.1/account/security/password/check       (VerifySecondTime)
+// Both hit the generic [FALLBACK] (59B / 40B stubs) -> the RSA step never
+// completed -> NO accounts/authorize ever ran -> x-subject-token ABSENT on
+// every later call -> "Failed to get the LDAP configuration: Abnormal
+// network" / "Failed to get the role list: Abnormal network" toasts and an
+// empty Users window. DPSDK strings: "VerifyFirstTime ... public-key/generate"
+// (@0xca13d9), "VerifySecondTime ... password/check" (@0xca1559),
+// "Get RsaCryption failed" + "-----BEGIN PUBLIC KEY-----" (@0xc7cbf4),
+// response keys `publicKey` + `randomKey` (@0xcc70a8).
+const PUBKEY_PENDINGS = new Map(); // randomKey -> { privateKey, expires }
+function purgePubKeys() {
+  for (const [k, v] of PUBKEY_PENDINGS) if (Date.now() > v.expires) PUBKEY_PENDINGS.delete(k);
+}
+function genRsaKeyPair() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 1024,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+  return { publicKey, privateKey };
+}
+const pubKeyGenerateHandler = async () => {
+  purgePubKeys();
+  const kp = genRsaKeyPair();
+  const rk = crypto.randomBytes(16).toString('hex');
+  PUBKEY_PENDINGS.set(rk, { privateKey: kp.privateKey, expires: Date.now() + 300000 });
+  return envelope({
+    publicKey: kp.publicKey, randomKey: rk, keyId: rk, publicKeyId: rk,
+    encryptType: 'RSA', expireTime: '300', needUpdate: '0'
+  });
+};
+const passwordCheckHandler = async (req) => {
+  const b = req.body || {};
+  const rk = String(b.randomKey || '');
+  const enc = String(b.password || b.encryptPassword || '');
+  const entry = PUBKEY_PENDINGS.get(rk);
+  let decryptedLen = -1;
+  if (entry && enc) {
+    let buf = null;
+    try { buf = Buffer.from(enc, 'base64'); } catch { buf = null; }
+    if (buf && buf.length > 0) {
+      for (const padding of [crypto.constants.RSA_PKCS1_PADDING, crypto.constants.RSA_PKCS1_OAEP_PADDING]) {
+        try {
+          const plain = crypto.privateDecrypt({ key: entry.privateKey, padding }, buf);
+          decryptedLen = plain.length;
+          console.log('[E106-PWD-CHECK]', JSON.stringify({ randomKey: rk, encLen: enc.length, plainLen: plain.length }));
+          break;
+        } catch { /* try next padding */ }
+      }
+    }
+  }
+  console.log('[E106-PWD-CHECK]', JSON.stringify({ randomKey: rk, encLen: enc.length, decryptedLen }));
+  // Success either way: this server's authorize accepts the credentials and
+  // the client only needs code 1000 to continue to LoginSecondTime.
+  return envelope({
+    success: true, result: '1', status: '1', checkResult: '1', passed: '1',
+    needChange: '0', passwordExpired: '0', firstLogin: '0'
+  });
+};
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
+  app.get(`${host}/account/security/public-key/generate`, pubKeyGenerateHandler);
+  app.post(`${host}/account/security/public-key/generate`, pubKeyGenerateHandler);
+  app.post(`${host}/account/security/password/check`, passwordCheckHandler);
+}
+app.post('/admin/API/account/security/public-key/generate', pubKeyGenerateHandler);
+app.post('/admin/API/account/security/password/check', passwordCheckHandler);
+
 // ===== VERSION / PLATFORM INFO (pre-login contract, DSS Desktop Client WINPC_V2) =====
 // Real DSS platform format: V<major>.<minor>.0000000.0.R.<yyyymmdd>.<epoch-seconds>
 // The desktop client compares its own version against data.version; a mismatch makes it

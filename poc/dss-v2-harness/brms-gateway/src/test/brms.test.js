@@ -566,6 +566,28 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(ar.data.list.some((r) => r.roleId === '1' && r.checked === '1'), 'role objects keep checked in list');
   });
 
+  it('E-106 second-time login: RSA public-key/generate + password/check', async () => {
+    // VerifyFirstTime: real RSA public key + randomKey (was [FALLBACK] stub)
+    const pk = await (await fetch(`${BASE}/brms/api/v1.1/account/security/public-key/generate`)).json();
+    assert.equal(pk.code, 1000);
+    assert.ok(String(pk.data.publicKey).startsWith('-----BEGIN PUBLIC KEY-----'), 'publicKey is a PEM');
+    assert.ok(pk.data.randomKey && pk.data.randomKey.length >= 16, 'randomKey present');
+    // encrypt a password with the served key and verify password/check accepts it
+    const encrypted = crypto.publicEncrypt({ key: pk.data.publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from('admin123')).toString('base64');
+    const pc = await (await fetch(`${BASE}/brms/api/v1.1/account/security/password/check`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: encrypted, randomKey: pk.data.randomKey })
+    })).json();
+    assert.equal(pc.code, 1000);
+    assert.strictEqual(pc.data.success, true);
+    assert.strictEqual(pc.data.checkResult, '1');
+    // still works with garbage (client only needs code 1000 to continue)
+    const pc2 = await (await fetch(`${BASE}/brms/api/v1.1/account/security/password/check`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"password":"","randomKey":""}'
+    })).json();
+    assert.equal(pc2.code, 1000);
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
