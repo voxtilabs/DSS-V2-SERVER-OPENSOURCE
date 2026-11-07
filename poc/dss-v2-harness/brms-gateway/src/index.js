@@ -2124,6 +2124,10 @@ app.get('/brms/api/v1.1/account/favorite/organization/share/unread/list', async 
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/monitor/view/view-tree`, async (req) =>
     envelope(buildViewTreePayload(req.query?.viewType ?? 1)));
+  // E-115b: the SPA web module POSTs the view tree too (POST used to fall to
+  // the catch-all {data:{}} and the Monitor view opened empty).
+  app.post(`${host}/monitor/view/view-tree`, async (req) =>
+    envelope(buildViewTreePayload(req.query?.viewType ?? req.body?.viewType ?? 1)));
   app.post(`${host}/monitor/view/view-dir`, async (req) => {
     const r = addViewDir(req.body || {});
     if (r.error) return envelope(null, 1001, r.error);
@@ -2265,6 +2269,27 @@ app.get('/web/client-module/*', async (req, reply) => {
   return 'not found';
 });
 app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/client-module/'); });
+
+// ===== E-115: RTSP relay (Dahua client handshake <-> MediaMTX) =============
+// The real DSS Client does SETUP+PLAY on the SAME url with interleaved TCP
+// and zero DESCRIBE (pcap evidence); MediaMTX requires SETUP <path>/trackID=0
+// + PLAY <path>. The relay makes both worlds meet - without it Live View
+// receives 400 on SETUP and never opens.
+import { startRtspRelay } from './e115-rtsp-relay.js';
+const RTSP_UPSTREAM_HOST = process.env.MEDIAMTX_HOST || 'mediamtx';
+const RTSP_UPSTREAM_PORT = parseInt(process.env.MEDIAMTX_RTSP_PORT || '8554', 10);
+if (!process.env.DISABLE_RTSP_RELAY) {
+  startRtspRelay({
+    port: RTSP_PORT,
+    upstreamHost: RTSP_UPSTREAM_HOST,
+    upstreamPort: RTSP_UPSTREAM_PORT,
+    // token validation: permissive during bring-up, logged for audit
+    validateToken: (token, path, from) => {
+      const known = RTSP_SESSIONS.has(token);
+      if (!known) console.log('[E115-RTSP] unknown token', (token || '').slice(0, 12) + '...', 'path=' + path, 'from=' + from);
+    }
+  });
+}
 
 // Catch-all benign responders for the rest of the microservice families
 // (172-path client inventory: accessControl, alarm-host, alarmBusiness,
@@ -2472,6 +2497,27 @@ app.post('/brms/api/v1.0/MTS/Video/StopVideo', { preHandler: auth }, async (req)
   return envelope({ success: true });
 });
 app.post('/brms/api/v1.0/MTS/Video/KeepAlive', { preHandler: auth }, async () => envelope({ success: true }));
+// E-115b: HLS fallback path. The client's StartVideo hands hlsUrl
+// (https://<host>:1443/brms/api/v1.1/video/live/channel/<id>/hls); it must
+// proxy the MediaMTX HLS m3u8 (it was a 59B catch-all before = dead fallback).
+const MEDIAMTX_HLS = process.env.MEDIAMTX_HLS_URL || 'http://mediamtx:8888';
+app.get('/brms/api/v1.1/video/live/channel/:channelId/hls', async (req, reply) => {
+  const ch = String(req.params?.channelId || '');
+  const device = findDeviceByChannelId(ch);
+  const path = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const sub = String(req.query?.sub || '');
+  const file = String(req.query?.file || 'index.m3u8');
+  try {
+    const r = await fetch(`${MEDIAMTX_HLS}/${path}${sub ? '_sub' : ''}/${file}`);
+    if (!r.ok) return reply.code(502).send(envelope(null, 502, 'hls upstream ' + r.status));
+    const body = await r.text();
+    // rewrite segment/playlist URLs so the client keeps hitting us
+    const rewritten = body.replace(/(^|["'\s])([A-Za-z0-9_.\-]+\.(?:m3u8|ts))/g, (m0, pre, f) => `${pre}${req.url.split('?')[0]}?file=${f}`);
+    return reply.type(r.headers.get('content-type') || 'application/vnd.apple.mpegurl').send(rewritten);
+  } catch (e) {
+    return reply.code(502).send(envelope(null, 502, 'hls upstream unreachable'));
+  }
+});
 // E-113: the same media/session routes on the v1.1 base. The client's web
 // stack (and future native probes) call MTS/SS on v1.1 - an unserved verb
 // returns the 40B catch-all {data:{}} which the Live View reads as "no
