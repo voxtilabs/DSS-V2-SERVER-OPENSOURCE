@@ -20,7 +20,7 @@ import {
 // module header for the pcap + MSG.exe MQInit evidence).
 import { createStompPublisher } from './e040-amq-notify.js';
 // E-041: persistent org store (root '001' + 'VIGILAB' in data/orgs.json).
-import { loadOrgsFromDisk, buildGetOrganizationsPayload, buildOrganizationListPayload, deviceOrgCode, orgName } from './e041-orgs.js';
+import { loadOrgsFromDisk, buildGetOrganizationsPayload, buildOrganizationListPayload, deviceOrgCode, orgName, listOrgs } from './e041-orgs.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 // E-024: Dahua DSS v1.1 catalog contracts (device categories, access
@@ -1658,7 +1658,7 @@ app.get('/brms/api/v1.1/role/:roleId', async (req, reply) => {
     // E-099: synthesized role keeps the E-095 string-flag contract (a numeric
     // status crashed the User Config dialog at 21:12 UTC 2026-11-06)
     || (id && !['page', 'all', 'list'].includes(id)
-      ? { roleId: id, id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', createTime: '2026-01-01 00:00:00' }
+      ? { roleId: id, id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', memo: 'Built-in administrator', roleType: '1', allowEdit: '0', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', createTime: '2026-01-01 00:00:00' }
       : null);
   if (!role) return reply.code(404).send(envelope(null, 404, 'Role not found'));
   return envelope(role);
@@ -1705,6 +1705,16 @@ app.post('/brms/api/v1.1/authority/resource/:resourceId/role/list', authorityRol
 app.get('/brms/api/v1.1/authority/resource/role/list', authorityRolesHandler);
 app.post('/brms/api/v1.1/authority/resource/:resourceId/role', async (req) => envelope({ success: true, resourceId: String(req.params?.resourceId || '') }));
 app.put('/brms/api/v1.1/authority/resource/:resourceId/role', async (req) => envelope({ success: true, resourceId: String(req.params?.resourceId || '') }));
+// E-102: SetResourceRoles native contract is PUT .../role/update with body
+// { roleIds: [string...], resourceId, resourceType } (DPSDK.dll FUN_1806e3420)
+const roleUpdateHandler = async (req) => envelope({
+  success: true,
+  resourceId: String(req.params?.resourceId || req.body?.resourceId || ''),
+  resourceType: String(req.body?.resourceType || '1'),
+  roleIds: Array.isArray(req.body?.roleIds) ? req.body.roleIds.map(String) : []
+});
+app.put('/brms/api/v1.1/authority/resource/:resourceId/role/update', roleUpdateHandler);
+app.post('/brms/api/v1.1/authority/resource/:resourceId/role/update', roleUpdateHandler);
 const orgDevHandler = async (req) => envelope(buildResourceAllocateOrgDevicesPayload({ ...req.query, ...(req.body || {}) }));
 app.get('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgDevHandler);
 app.post('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgDevHandler);
@@ -1713,9 +1723,23 @@ app.post('/brms/api/v1.1/resource-allocate/organization/device/fetch/list', orgD
 // DPSDK GetDomainOrganizations (UserLogical HandleQueryDomainOrganizations
 // @0xc5720) -> v1.1/domain/organization/list. Serves the same org store as
 // organization/list (001 root + VIGILAB) with pageData for the paged variant.
+// E-102 native contract (DPSDK.dll FUN_1806ccde0, GetDomainOrganizations):
+// root domainOrgExceeded + results[] items bind domainOrgType/domainOrgDn/
+// pId/domainOrgPath/domainOrgName/domainOrgCode - ALL strings (tipo 2).
+// Org aliases (orgCode/orgName/id) are kept as superset for the SPA.
 const domainOrgHandler = async () => {
   const p = buildOrganizationListPayload();
-  return envelope({ ...p, pageData: p.list, pageNo: '1', pageSize: String(p.list.length), pageCount: '1' });
+  const results = p.list.map((o) => ({
+    domainOrgCode: o.orgCode, domainOrgName: o.orgName, domainOrgPath: o.orgCode,
+    domainOrgType: o.orgType || '1', domainOrgDn: `ou=${o.orgCode}`, pId: o.parentOrgCode || '0',
+    orgCode: o.orgCode, orgName: o.orgName, id: o.id, code: o.code, name: o.name,
+    hasChild: o.hasChild, checked: o.checked, parentOrgCode: o.parentOrgCode || '0'
+  }));
+  return envelope({
+    ...p, results, list: results, pageData: results,
+    domainOrgExceeded: '0',
+    pageNo: '1', pageSize: String(results.length), pageCount: '1'
+  });
 };
 app.get('/brms/api/v1.1/domain/organization/list', domainOrgHandler);
 app.post('/brms/api/v1.1/domain/organization/list', domainOrgHandler);

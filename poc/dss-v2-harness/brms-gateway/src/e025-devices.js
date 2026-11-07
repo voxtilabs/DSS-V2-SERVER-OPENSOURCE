@@ -1234,12 +1234,16 @@ export function buildTimezoneListPayload() {
 // now a STRING plus statusName; rows are a superset (parser ignores unknown
 // keys, RE-SCHEMA-DPSDK).
 export function buildRolePagePayload() {
+  // E-102 native contract (DPSDK.dll FUN_1806c6280, role/page pageData[]):
+  // items bind allowEdit/id/roleType/roleName/memo - ALL strings (tipo 2).
   const list = [
     { roleId: '1', id: '1', roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator',
+      memo: 'Built-in administrator', roleType: '1', allowEdit: '0',
       userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1',
       default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1',
       orgCode: '001', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' },
     { roleId: '2', id: '2', roleCode: 'operator', roleName: 'Operator', description: 'Built-in operator',
+      memo: 'Built-in operator', roleType: '2', allowEdit: '1',
       userCount: '1', status: '1', statusName: 'Enable', level: '2', roleLevel: '2',
       default: '0', editable: '1', deletable: '1', checked: '1', permission: '1', operate: '1',
       orgCode: 'VIGILAB', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' }
@@ -1408,8 +1412,18 @@ export const USER_GROUP_STORE = [
 // the native parser may split(',') on them - a JSON array there is the prime
 // AppHang suspect after user/page. Arrays are kept under roleIdArray/roleNameArray.
 function serializeUserRow(u) {
+  // E-102 native contract (DPSDK.dll FUN_1806c8d20 response descriptor):
+  // pageData[] items bind username/online/name/enableMPT/id/status/userType
+  // (all STRING) + roles[] array of {roleId, roleName} (strings).
+  const roles = (u.roleIds || []).map((rid, i) => ({
+    roleId: String(rid),
+    roleName: String((u.roleNames || [])[i] ?? u.roleName ?? '')
+  }));
   return {
     ...u,
+    name: u.realName || u.username,          // native parser reads "name" (+0x10)
+    enableMPT: u.enableMPT || '0',           // native parser reads "enableMPT" (+0x18)
+    roles,                                   // native parser reads roles[] (+0x28)
     roleIds: Array.isArray(u.roleIds) ? u.roleIds.join(',') : String(u.roleIds ?? ''),
     roleNames: Array.isArray(u.roleNames) ? u.roleNames.join(',') : String(u.roleNames ?? ''),
     roleIdArray: Array.isArray(u.roleIds) ? u.roleIds : [],
@@ -1452,7 +1466,13 @@ export function buildUserDetailPayload(userId) {
 
 export function buildUserGroupListPayload(query = {}) {
   const kw = String(query?.keyword ?? '').trim().toLowerCase();
-  const list = USER_GROUP_STORE.filter((g) => !kw || g.groupName.toLowerCase().includes(kw));
+  // E-102 native contract (FUN_1806f6a10, group-by-role-level/list):
+  // results[] { groupName, groupId, users[] { userId, username } } - strings.
+  const list = USER_GROUP_STORE.filter((g) => !kw || g.groupName.toLowerCase().includes(kw)).map((g) => ({
+    ...g,
+    users: USER_STORE.filter((u) => u.groupId === g.groupId)
+      .map((u) => ({ userId: u.userId, id: u.id, username: u.username, userName: u.username, name: u.realName }))
+  }));
   return {
     list, results: list, items: list, userGroupList: list, groupList: list, pageData: list,
     total: String(list.length), totalCount: String(list.length),
@@ -1512,7 +1532,11 @@ export function buildAuthorityResourceRolesPayload(resourceId, body = {}) {
     // assets (orgs, devices and channels of those orgs)
     const checked = String(r.roleId) === '1' || (isOrgResource && String(r.roleId) === '2');
     return {
-      roleId: String(r.roleId), roleCode: r.roleCode, roleName: r.roleName,
+      // E-102 native contract (FUN_1806d99f0): results[] items bind
+      // id/roleName/memo (strings). checked/permission only exist in the
+      // TREE contract, kept here as harmless superset.
+      id: String(r.roleId), roleId: String(r.roleId), roleCode: r.roleCode,
+      roleName: r.roleName, memo: r.memo || r.description || '',
       checked: checked ? '1' : '0',           // E-099: STRING flags (E-095 lesson)
       permission: checked ? '1' : '0',
       operate: checked ? '1' : '0',

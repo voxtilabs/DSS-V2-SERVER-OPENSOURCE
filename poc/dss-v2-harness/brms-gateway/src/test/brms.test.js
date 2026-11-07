@@ -502,6 +502,42 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(ud.data.roleIds, '1');
   });
 
+  it('E-102 native contracts: user roles[]/name, role memo/allowEdit, domain org, role/update', async () => {
+    // user/page rows bind native keys: name, enableMPT, roles[] {roleId,roleName}
+    const up = await (await fetch(`${BASE}/brms/api/v1.1/user/page?page=1&pageSize=20`)).json();
+    const admin = up.data.pageData.find((u) => u.username === 'admin');
+    assert.strictEqual(admin.name, 'Administrator', 'native key name present');
+    assert.strictEqual(admin.enableMPT, '0');
+    assert.ok(Array.isArray(admin.roles) && admin.roles[0].roleId === '1' && typeof admin.roles[0].roleName === 'string', 'roles[] array of {roleId,roleName}');
+    assert.strictEqual(admin.roleIds, '1', 'roleIds CSV string kept');
+    // user detail same shape
+    const ud = await (await fetch(`${BASE}/brms/api/v1.1/user/1`)).json();
+    assert.ok(Array.isArray(ud.data.roles) && typeof ud.data.name === 'string');
+    // role/page rows bind native keys: allowEdit, id, roleType, roleName, memo
+    const rp = await (await fetch(`${BASE}/brms/api/v1.1/role/page`)).json();
+    for (const r of rp.data.pageData ?? rp.data.list) {
+      for (const k of ['id', 'roleName', 'memo', 'roleType', 'allowEdit']) {
+        assert.strictEqual(typeof r[k], 'string', `role.${k} string, got ${typeof r[k]}`);
+      }
+    }
+    // authority resource role list: results[] items bind id/roleName/memo
+    const ar = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/VIGILAB/role/list`)).json();
+    for (const r of ar.data.results) {
+      assert.strictEqual(typeof r.id, 'string'); assert.strictEqual(typeof r.roleName, 'string'); assert.strictEqual(typeof r.memo, 'string');
+    }
+    // SetResourceRoles: PUT .../role/update echoes roleIds array
+    const ru = await (await fetch(`${BASE}/brms/api/v1.1/authority/resource/VIGILAB/role/update`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roleIds: ['1', '2'], resourceId: 'VIGILAB', resourceType: '1' }) })).json();
+    assert.deepStrictEqual(ru.data.roleIds, ['1', '2']);
+    // domain/organization/list native shape: domainOrgExceeded + results[].domainOrg*
+    const do_ = await (await fetch(`${BASE}/brms/api/v1.1/domain/organization/list`)).json();
+    assert.strictEqual(do_.data.domainOrgExceeded, '0');
+    const vig = (do_.data.results || []).find((o) => o.domainOrgCode === 'VIGILAB');
+    assert.ok(vig && vig.domainOrgName === 'VIGILAB' && typeof vig.pId === 'string', 'VIGILAB in domain org results with native keys');
+    // group-by-role-level: results[] {groupName, groupId, users[]}
+    const gb = await (await fetch(`${BASE}/brms/api/v1.1/user/group-by-role-level/list?keyword=`)).json();
+    assert.ok(Array.isArray(gb.data.results[0].users) && gb.data.results[0].users.some((u) => u.username === 'admin'), 'group carries users[]');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
