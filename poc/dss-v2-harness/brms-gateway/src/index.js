@@ -1117,6 +1117,37 @@ app.get('/brms/api/v1.1/alarm/plan/alarm-type/list', async () => envelope({ list
 app.get('/brms/api/v1.1/vtalk/sip/online/list', async () => envelope({ list: [] }));
 app.get('/admin/API/config/videoIntercom', async () => envelope({ enable: 0, openState: '0' }));
 
+// ===== E-108: the three genuinely-missing routes (live QA sweep 2026-11-07)
+// 1) account/menu/list (DPSDK GetAccountMenuList, string pool @0xc9c8e0) - the
+//    native menu list of the logged account. GetMenuRights already carries the
+//    full 86-menu grant; serve the menu catalog with native string flags.
+const accountMenuHandler = async (req) => {
+  const payload = buildMenuAvailablePayload(String(req.query?.roleId || '1'));
+  return envelope({ ...payload, menus: payload.results, menuList: payload.results });
+};
+// 2) config/videoIntercom - the /admin/API variant (66B) works; alias it on
+//    the brms base the SPA calls (index-BhDUzoCV.js getVideoIntercom).
+const videoIntercomHandler = async () => envelope({
+  enable: '0', openState: '0', enableVideoIntercom: '0', status: '0', list: []
+});
+// 3) config/mail (SPA getMailConfig/updateMailConfig) - mail server config,
+//    disabled by default, all string flags.
+const mailConfigHandler = async () => envelope({
+  enable: '0', enableMail: '0', status: '0', ssl: '0', useSsl: '0', useSSL: '0',
+  server: '', host: '', ip: '', port: '25', userName: '', username: '', password: '',
+  sender: '', senderName: '', senderAddress: '', address: '', nickName: '',
+  encryptType: '0', testResult: '', remark: ''
+});
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/brms/api/v2.0', '/ipms/api/v1.1']) {
+  app.get(`${host}/account/menu/list`, accountMenuHandler);
+  app.post(`${host}/account/menu/list`, accountMenuHandler);
+  app.get(`${host}/config/videoIntercom`, videoIntercomHandler);
+  app.post(`${host}/config/videoIntercom`, videoIntercomHandler);
+  app.get(`${host}/config/mail`, mailConfigHandler);
+  app.post(`${host}/config/mail`, mailConfigHandler);
+  app.put(`${host}/config/mail`, mailConfigHandler);
+}
+
 // Licenses + system self-check warnings (all benign: no disk/license issues).
 app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [] }));
 app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [] }));

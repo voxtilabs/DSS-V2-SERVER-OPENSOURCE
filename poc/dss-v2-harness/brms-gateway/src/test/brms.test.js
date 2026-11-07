@@ -588,6 +588,27 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.equal(pc2.code, 1000);
   });
 
+  it('E-108 account/menu/list + config/videoIntercom + config/mail served', async () => {
+    // the three endpoints the live QA sweep found in the catch-all
+    const am = await (await fetch(`${BASE}/brms/api/v1.1/account/menu/list?roleId=1`)).json();
+    assert.equal(am.code, 1000);
+    assert.ok(Array.isArray(am.data.results) && am.data.results.length > 10, 'account menu list populated');
+    assert.strictEqual(typeof am.data.results[0].menuCode, 'string');
+    const vi = await (await fetch(`${BASE}/brms/api/v1.1/config/videoIntercom`)).json();
+    assert.strictEqual(vi.data.enable, '0');
+    assert.strictEqual(vi.data.openState, '0');
+    const mc = await (await fetch(`${BASE}/brms/api/v1.1/config/mail`)).json();
+    for (const k of ['enable', 'ssl', 'server', 'port', 'username', 'sender']) {
+      assert.strictEqual(typeof mc.data[k], 'string', `mail.${k} string`);
+    }
+    // variants must not fall to the catch-all either
+    for (const p of ['/brms/api/v1.0/account/menu/list', '/brms/api/v1.1/config/mail', '/ipms/api/v1.1/account/menu/list']) {
+      const r = await fetch(`${BASE}${p}`);
+      const t = await r.text();
+      assert.ok(t.length > 60, `${p} must be real, got ${t.length}B`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
