@@ -481,3 +481,15 @@
   VIGILAB en domain org results, role/update echo ["1","2"], full tree con
   checked string. Tests: unit 56 pass/0 fail/1 skip, e2e 12/12 x3,
   live-verify 15/15, md5 desplegado OK.
+
+- **Checkpoint 2026-11-06 (f) - E-103, commit f63917e** (hallazgos QA de la
+  secuencia E-102): role/page era el UNICO endpoint de la secuencia Users sin
+  pageData[] (contrato nativo FUN_1806c6280) -> agregado; grade-device-tree
+  filtra channels por org pedida (root 001 devolvia canales huerfanos sin
+  device padre); roleName de admin unificado a \"Administrator\" (antes
+  \"Super Administrator\" vs \"Administrator\" entre role/page y user/page);
+  test E-102 endurecido. Verificado en vivo: role/page pageData=2,
+  root 001 orgs=[VIGILAB] devices=0 channels=0 (sin huerfanos), VIGILAB con
+  D0238JDG3016+D7001SHX9002 y sus canales. unit 56 pass/0 fail/1 skip,
+  e2e 12/12 x3, live-verify 15/15. Pendiente: reportes de mision 1 (RE
+  ciclo de vida) y mision 2 (forense ventana 00:05-00:10 UTC).
