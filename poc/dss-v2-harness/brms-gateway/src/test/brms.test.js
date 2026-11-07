@@ -714,6 +714,25 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-114 keepalive renews the token (session never dies ~30min)', async () => {
+    // RE evidence: CRestLogicalImplPro::Heartbeat stores the token from the
+    // keepalive response ("Heartbeat is success, m_strToken = %s" @0xc95670) -
+    // a {success:true} answer empties m_strToken -> -18 ~30min after login.
+    const before = token;
+    for (const host of ['/brms/api/v1.0', '/brms/api/v1.1']) {
+      const ka = await (await fetch(`${BASE}${host}/accounts/keepalive`, { method: 'POST', headers: { 'X-Subject-Token': before }, body: '{}' })).json();
+      assert.equal(ka.code, 1000, host + ' code');
+      assert.ok(typeof ka.data.token === 'string' && ka.data.token.length >= 32, host + ' renewed token');
+      assert.ok(ka.data.duration || ka.data.expire, host + ' ttl fields');
+      // the renewed token must be accepted immediately
+      const rl = await (await fetch(`${BASE}/brms/api/v1.1/role/list`, { headers: { 'x-subject-token': ka.data.token } })).json();
+      assert.equal(rl.code, 1000, host + ' renewed token works');
+    }
+    // VSL heartbeat base too
+    const ka2 = await (await fetch(`${BASE}/brms/api/v1.0/accounts/token/keepalive`, { method: 'POST', headers: { 'X-Subject-Token': before }, body: '{}' })).json();
+    assert.ok(ka2.data.token, 'token/keepalive renews');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

@@ -2301,7 +2301,25 @@ function auth(req, reply, done) {
   req.user = t; done();
 }
 
-async function keepaliveHandler() { return envelope({ success: true }); }
+// E-114: the heartbeat is the token RENEWAL, not a ping. RE evidence
+// (DPSDK CRestLogicalImplPro::Heartbeat 0x20f290 -> "Heartbeat is success,
+// m_strToken = %s" @0xc95670): the client stores the token from the
+// keepalive response. Our old {success:true} left m_strToken empty and the
+// session died with -18 exactly ~30 min after login (observed 54x every 5 min
+// in the client log 2026-11-07 05:14-06:40). Keepalive now returns a fresh
+// login envelope (new token, 24h TTL) so the session never expires; the VSL
+// heartbeat base (accounts/token/keepalive) is registered too.
+async function keepaliveHandler(req) {
+  const userName = req.user?.userName || String(req.body?.userName || 'admin');
+  return envelope(buildLoginSuccess(userName));
+}
+app.post('/brms/api/v1.0/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
+app.get('/brms/api/v1.1/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
+app.post('/brms/api/v1.1/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
+app.post('/brms/api/v1.0/accounts/token/keepalive', { preHandler: auth }, keepaliveHandler);
+app.post('/brms/api/v1.1/accounts/token/keepalive', { preHandler: auth }, keepaliveHandler);
+app.post('/admin/API/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
+app.post('/admin/API/accounts/token/keepalive', { preHandler: auth }, keepaliveHandler);
 async function currentHandler(req) {
   return envelope({
     token: req.headers['x-subject-token'],
@@ -2313,11 +2331,9 @@ async function currentHandler(req) {
 }
 async function unauthorizeHandler(req) { TOKENS.delete(req.headers['x-subject-token']); return envelope({ success: true }); }
 
-app.post('/brms/api/v1.0/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
 app.get('/brms/api/v1.0/accounts/current', { preHandler: auth }, currentHandler);
 app.post('/brms/api/v1.0/accounts/unauthorize', { preHandler: auth }, unauthorizeHandler);
 // Mirrors on the admin API base (client Qt stack may call these after login).
-app.post('/admin/API/accounts/keepalive', { preHandler: auth }, keepaliveHandler);
 app.get('/admin/API/accounts/current', { preHandler: auth }, currentHandler);
 app.post('/admin/API/accounts/unauthorize', { preHandler: auth }, unauthorizeHandler);
 
