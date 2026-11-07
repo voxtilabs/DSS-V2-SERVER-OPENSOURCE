@@ -609,6 +609,31 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-109 server/list + storage endpoints (client FALLBACK hits)', async () => {
+    // server/list: the video server owning every device record
+    const sl = await (await fetch(`${BASE}/brms/api/v1.1/server/list`)).json();
+    assert.equal(sl.code, 1000);
+    assert.ok(sl.data.list.some((s) => s.serverCode === 'video#local'), 'video#local server listed');
+    assert.strictEqual(typeof sl.data.totalCount, 'string');
+    // storage/position/device/page: pageData of the real registry
+    const sp = await (await fetch(`${BASE}/brms/api/v1.1/storage/position/device/page?page=1&pageSize=20&orgCode=&keyword=`)).json();
+    assert.ok(Array.isArray(sp.data.pageData) && sp.data.pageData.length >= 1, 'storage position pageData non-empty');
+    assert.ok(sp.data.pageData.every((d) => d.deviceCode && d.serverCode), 'rows carry deviceCode+serverCode');
+    // local disk: real statfs numbers, string fields
+    const ld = await (await fetch(`${BASE}/brms/api/v1.1/storage/disk/local-disk/list?serverCode=`)).json();
+    assert.ok(ld.data.list.length >= 1 && typeof ld.data.list[0].totalSpace === 'string');
+    // net-disk + group: explicit empty (not catch-all shape)
+    const nd = await (await fetch(`${BASE}/brms/api/v1.1/storage/disk/net-disk/list?serverCode=`)).json();
+    assert.ok(Array.isArray(nd.data.list) && typeof nd.data.totalCount === 'string');
+    const dg = await (await fetch(`${BASE}/brms/api/v1.1/storage/group/list?serverCode=`)).json();
+    assert.ok(Array.isArray(dg.data.list) && typeof dg.data.totalCount === 'string');
+    // variants must be explicit routes too
+    for (const p of ['/brms/api/v1.0/server/list', '/ipms/api/v1.1/server/list', '/brms/api/v2.0/storage/group/list']) {
+      const t = await (await fetch(`${BASE}${p}`)).text();
+      assert.ok(t.length > 60, `${p} explicit, got ${t.length}B`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

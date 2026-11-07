@@ -176,11 +176,23 @@ setInterval(() => {
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 
+// E-109b: persistent request journal. `docker logs` die with the container -
+// the 2026-11-07 forensics of client FALLBACK hits had to be recovered from
+// /tmp files. The /app/data volume is rw, so every [REQ]/[RES]/[FALLBACK] line
+// is appended there (best-effort; never breaks a request).
+const JOURNAL_DIR = '/app/data/logs';
+function journal(line) {
+  try {
+    fs.mkdirSync(JOURNAL_DIR, { recursive: true });
+    fs.appendFileSync(`${JOURNAL_DIR}/requests-${new Date().toISOString().slice(0, 10)}.log`, line + '\n');
+  } catch { /* journal is best-effort */ }
+}
+
 // ===== REQUEST INSPECTOR MIDDLEWARE (Catch-All) =====
 app.addHook('onRequest', async (req, reply) => {
   const start = Date.now();
   req.startTime = start;
-  
+
   // Log incoming request
   const logEntry = {
     timestamp: new Date().toISOString(),
@@ -199,8 +211,9 @@ app.addHook('onRequest', async (req, reply) => {
   const url = req.url || '';
   const isDictReq = /dictionary|category|protocol|manufacturer|device.type|channel.type|encode|connect.mode|alarm.type|protocol.type|device.status/i.test(url);
   const prefix = isDictReq ? '[DICT-REQ]' : '[REQ]';
-  
+
   console.log(prefix, JSON.stringify(logEntry));
+  journal(prefix + ' ' + JSON.stringify(logEntry));
 
   // Store for response logging
   req.logEntry = logEntry;
@@ -228,6 +241,7 @@ app.addHook('onResponse', async (req, reply) => {
     responseHeaders: reply.getHeaders()
   };
   console.log('[RES]', JSON.stringify(logEntry));
+  journal('[RES] ' + JSON.stringify(logEntry)); // E-109b
 });
 
 const REALM = process.env.REALM || 'DSS-V2-LAB';
@@ -1146,6 +1160,24 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/brms/api/v2.0', '/ipms
   app.get(`${host}/config/mail`, mailConfigHandler);
   app.post(`${host}/config/mail`, mailConfigHandler);
   app.put(`${host}/config/mail`, mailConfigHandler);
+}
+
+// ===== E-109: server list + storage endpoints (client FALLBACK hits) =======
+import {
+  buildServerListPayload, buildStoragePositionDevicePagePayload,
+  buildLocalDiskListPayload, buildNetDiskListPayload, buildDiskGroupListPayload
+} from './e109-storage.js';
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/brms/api/v2.0', '/ipms/api/v1.1']) {
+  app.get(`${host}/server/list`, async () => envelope(buildServerListPayload()));
+  app.post(`${host}/server/list`, async () => envelope(buildServerListPayload()));
+  app.get(`${host}/storage/position/device/page`, async (req) => envelope(buildStoragePositionDevicePagePayload({ ...req.query, ...(req.body || {}) })));
+  app.post(`${host}/storage/position/device/page`, async (req) => envelope(buildStoragePositionDevicePagePayload({ ...req.query, ...(req.body || {}) })));
+  app.get(`${host}/storage/disk/local-disk/list`, async () => envelope(buildLocalDiskListPayload()));
+  app.post(`${host}/storage/disk/local-disk/list`, async () => envelope(buildLocalDiskListPayload()));
+  app.get(`${host}/storage/disk/net-disk/list`, async () => envelope(buildNetDiskListPayload()));
+  app.post(`${host}/storage/disk/net-disk/list`, async () => envelope(buildNetDiskListPayload()));
+  app.get(`${host}/storage/group/list`, async () => envelope(buildDiskGroupListPayload()));
+  app.post(`${host}/storage/group/list`, async () => envelope(buildDiskGroupListPayload()));
 }
 
 // Licenses + system self-check warnings (all benign: no disk/license issues).
@@ -2145,7 +2177,9 @@ app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/
 // unknown route returns code 1000 instead of the 404 that produced the
 // "network abnormal / abnormal data" toasts (observed: /omms/api 404).
 function fallbackLog(req) {
-  console.log('[FALLBACK]', JSON.stringify({ timestamp: new Date().toISOString(), method: req.method, url: req.url, code: 1000 }));
+  const line = '[FALLBACK] ' + JSON.stringify({ timestamp: new Date().toISOString(), method: req.method, url: req.url, code: 1000 });
+  console.log(line);
+  journal(line); // E-109b: survive container recreation
 }
 const SERVICE_PREFIXES = [
   '/admin/API', '/admin/api',
