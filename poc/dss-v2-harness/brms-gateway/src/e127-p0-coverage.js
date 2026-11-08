@@ -51,7 +51,7 @@ const P0 = [
   'common/request/', 'v1.1/inspect/plan/page', 'v1.1/inspect/plan/'
 ];
 
-const DEFAULT_DATA = {
+export const DEFAULT_DATA = {
   success: true, list: [], results: [], items: [], records: [], pageData: [],
   total: '0', totalCount: '0', pageNo: '1', pageSize: '20', pageCount: '0'
 };
@@ -82,7 +82,7 @@ function customData(base) {
   }
 }
 
-function urlsFor(p) {
+export function urlsFor(p) {
   const out = new Set();
   const vers = /^v\d\.\d\//.test(p);
   const bases = vers ? [p, p.replace(/^v\d\.\d\//, '')] : [p, 'v1.1/' + p];

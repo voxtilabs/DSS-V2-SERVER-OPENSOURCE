@@ -1018,6 +1018,37 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(ARS_MAX_PAYLOAD === 1024 * 1024);
   });
 
+  it('E-129 P1 residual: login-recovery, domain/license, server status, alarm-host, monitor URIs, p2p', async () => {
+    const probes = [
+      ['POST', '/brms/api/v1.1/account/security/password/forgot/guide', 'guide'],
+      ['POST', '/brms/api/v1.1/account/authorize/password/change', 'success'],
+      ['GET', '/brms/api/v1.1/domain', 'orgs'],
+      ['GET', '/brms/api/v1.1/domain/page', 'pageData'],
+      ['GET', '/brms/api/v1.1/license', 'licenseKey'],
+      ['POST', '/brms/api/v1.1/license/active', 'success'],
+      ['GET', '/brms/api/v1.1/server/allServiceStatus', 'serverStatus'],
+      ['GET', '/brms/api/v1.1/server/functions', 'functionCodes'],
+      ['POST', '/brms/api/v1.1/server/switch', 'switchType'],
+      ['GET', '/brms/api/v1.1/server/main/server-name', 'serverName'],
+      ['GET', '/brms/api/v1.1/alarmHosts/config', 'alarmConfigurations'],
+      ['POST', '/brms/api/v1.1/alarm-host/device/operate/batch', 'success'],
+      ['GET', '/brms/api/v1.1/alarm-host/alarm-out/channel/list', 'list'],
+      ['GET', '/brms/api/v1.1/alarm-type/soft-trigger/list', 'list'],
+      ['GET', '/brms/api/v1.1/alarm/combination/rule/list', 'list'],
+      ['GET', '/brms/api/v1.1/realmonitor/uri', 'uri'],
+      ['GET', '/brms/api/v1.1/playback/uri', 'uri'],
+      ['GET', '/brms/api/v1.1/p2p/info', 'connectType'],
+      ['GET', '/brms/api/v1.1/p2p/connect-type', 'p2pStatus']
+    ];
+    for (const [m, p, key] of probes) {
+      const r = await fetch(`${BASE}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: m === 'POST' ? '{}' : undefined });
+      const j = await r.json();
+      assert.equal(j.code, 1000, `${m} ${p}`);
+      assert.ok(key in j.data, `${m} ${p} has descriptor key "${key}"`);
+      assert.ok(JSON.stringify(j).length > 60, `${m} ${p} not catch-all`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

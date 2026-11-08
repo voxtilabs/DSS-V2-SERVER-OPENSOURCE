@@ -3113,6 +3113,7 @@ function createWebSocketServer(httpsServer) {
 // (Dahua AutoRegister.cpp @0x01366578) and the legacy 32B string framing.
 import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson, ARS_MAX_PAYLOAD, ARS_MAX_BUFFER } from './e119-ars-protocol.js';
 import { registerP0Coverage } from './e127-p0-coverage.js';
+import { registerP1Coverage } from './e129-p1-coverage.js';
 function createARSTCPServer() {
   console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
   const server = net.createServer((socket) => {
@@ -3343,6 +3344,7 @@ function createARSTCPServer() {
 // Registered LAST so hasRoute() sees every explicit handler above and skips
 // duplicates - the catch-all below must stay the last resort.
 registerP0Coverage(app, envelope);
+registerP1Coverage(app, envelope);
 
 async function start() {
   try {
