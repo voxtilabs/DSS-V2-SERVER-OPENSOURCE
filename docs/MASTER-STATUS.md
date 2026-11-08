@@ -97,3 +97,21 @@ los existentes (ARCHITECTURE, NETWORK_PROTOCOLS, DAHUA_COMPATIBILITY,
 P2P_RESEARCH, DPSDK_USER_MANAGEMENT_CONTRACTS, DSS_ENDPOINT_COVERAGE,
 CHECKLIST-ADD-DEVICE-ONVIF, evidence/). Estado: **cobertura RE cerrada**;
 pendiente solo la prueba manual del operador con DSS Client 8.006.
+
+**Iteración 2 del cierre (2026-11-08, agentes ses_e45812db8ffe07Z4sg36E7wf46 +
+ses_e45812db5ffe5zhZ2PvSWoNcvF + ses_e451b4956ffeQdao3cVAOkhYQp):**
+- E-129 (commit b260003): 543 rutas para los 32 literales **P1** restantes
+  (login/recuperación, domain/license, server status, alarm-host, monitor
+  URIs, p2p) con claves de descriptor del .rdata de DPSDK.dll. Quedan 369
+  literales P2 servidos por wildcard de lista vacía válida (aceptado por el
+  cliente). **REST: 0 P0/P1 sin handler dedicado.**
+- E-130 (commit ca39f64): SIP **TCP 5080 + TLS 5061** (DPSDK 0xc56d30/
+  0xc56528) con handler compartido 200 OK — verificado live `SIP/2.0 200 OK`;
+  MQ_TOPICS ampliado a los **86 topics** del pool de DPSDK.dll (GetMqConfig
+  anuncia TopicInfos completo); 554/37777 descartados por REA (outbound al
+  dispositivo, sin listener); contrato WSS de MSG.exe documentado.
+- Estado final: **no queda ningún literal REST ni protocolo binario del
+  cliente sin mapear** — REST P0/P1 con handler + claves, P2 con wildcard
+  válido, RPC BRMS.*/DMS.*/VMS.* vía /admin/API, DVRIP/DHIP con reensamblado +
+  caps + ACK offsets RE, SIP UDP/TCP/TLS, MQTT 86 topics, STOMP/OpenWire,
+  WS event, RTSP relay 9100, ARS 9500. Unit 77/0, e2e 12/12, live-verify 15/15.

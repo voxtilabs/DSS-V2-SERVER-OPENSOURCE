@@ -9,7 +9,8 @@ sondas live: RTSP SETUP+PLAY, ARS fragmentado/len falso). Estado tras E-128.
 | 1443 / 9443 | HTTPS API | OK, cert lab CN/SAN 10.10.20.120 (válido a 2027-11-01) | cliente con disablePeerVerification; renovar cert antes de 2027-11 |
 | 9100 | RTSP relay → MediaMTX | OK live (SETUP+PLAY misma URL, 454KB RTP/3s) | ALTA corregida parcialmente: falta serializar SETUP/PLAY si el cliente pipelinea; CSeq se devuelve el del upstream; RTSP_SESSIONS sin TTL (replay LAN); buffers sin tope → ver e115 |
 | 9500 | ARS TCP DVRIP/DHIP | OK tras E-128 | ALTA corregida: reensamblado de frames, cap payload 1MiB / buffer 4MiB, ACK con offsets RE (DVRIP 48B cmd@0x18 seq@0x1C len@0x24 flag@0x2C; DHIP 52B version@0x0C len@0x28 flag@0x30), keepalive/logout en ruta binaria. MEDIA pendiente: `session.authenticated` no exigido (SSRF suave vía IP registrado) |
-| 5080 | SIP UDP | responde 200 OK a todo REGISTER | ALTA documentada: reflector sin rate-limit; falta SIP TCP 5080 y TLS 5060/5061 (DPSDK 0xc56d30/0xc56528) para INVITE intercom TLS |
+| 5080 | SIP UDP + **TCP** (E-130) | OK: 200 OK a REGISTER/OPTIONS/INVITE con headers correctos | reflector sin rate-limit documentado; falta rate-limit |
+| 5061 | SIP over TLS (E-130, cert lab) | OK: listener arriba y publicado en compose (verificado 2026-11-08) | misma nota de rate-limit |
 | 18800 / 19800 | UDP alarm ingest | 18800 → `/event/push` sin auth; 19800 sin handler ni 'error' | falsificación de alarmas por LAN |
 | 61616 | OpenWire (ActiveMQ) | TLS OK con keystore lab | admin/admin en 0.0.0.0 → firewall |
 | 61613 | STOMP publisher interno | gateway publica a red docker | quitar mapeo host de 61613 (admin/admin texto plano) |
@@ -30,8 +31,8 @@ sondas live: RTSP SETUP+PLAY, ARS fragmentado/len falso). Estado tras E-128.
 - Keepalive/logout por JSON method o cmd 0x0004/0x0005 (E-128).
 
 ## Pendientes de red (no bloquean al cliente ONVIF)
-1. SIP sobre TCP/TLS (5080/5060/5061) para vtalk intercom.
-2. 70 topics `brms.notify*`/`vms.notify*` sin publicar (lista en reporte REA residual).
+1. ~~SIP sobre TCP/TLS (5080/5060/5061)~~ **cerrado en E-130** (TCP 5080 + TLS 5061 activos).
+2. ~~70 topics `brms.notify*`/`vms.notify*` sin publicar~~ **cerrado en E-130** (86 topics anunciados en GetMqConfig).
 3. Firewall de puertos 1883/61613/1935/8888/8889/11443/9500 (compose + host).
 4. Rotación del journal `/app/data/logs/requests-*.log` (hoy append sin tope).
 5. RTSP relay: serializar SETUP/PLAY, TTL en RTSP_SESSIONS, tope de buffers.
