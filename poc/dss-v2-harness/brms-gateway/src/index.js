@@ -1716,8 +1716,6 @@ import {
   buildSSRecordActionPayload
 } from './e027-storage.js';
 import {
-  buildGradeDeviceTreePayload,
-  buildGradeDeviceTreeSearchPayload,
   buildRecordPlanPagePayload,
   buildMotionDetectionRecordPlanPagePayload,
   buildUserLevelPayload,
@@ -1746,23 +1744,33 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
 //   motion-detection-record-plan/page -> index-dpjg75Ex.js same shape
 //   account/user/level -> index-BhDUzoCV.js bootstrap data.level
 //   config/timezone/info -> index-BhDUzoCV.js bootstrap dst/enableDst/offset/dst*
-app.post('/brms/api/v1.1/tree/grade-device-tree', async (req) => envelope(buildGradeDeviceTreePayload(req.body || {})));
-app.post('/brms/api/v1.1/tree/grade-device-tree/search/list', async (req) => envelope(buildGradeDeviceTreeSearchPayload(req.body || {})));
-app.post('/brms/api/v1.0/tree/grade-device-tree', async (req) => envelope(buildGradeDeviceTreePayload(req.body || {})));
+// (E-124: the tree/grade-device-tree POST variants are registered below in the
+// E-101 block with the full RE payload - the old E-029 stubs are removed.)
 // E-101: the Users/Config permission dialog calls the GET variants with
 // /full/ in the path (observed live 22:53:21Z -> fell into [FALLBACK]
 // {list:[],total:0}, leaving the permission tree loading forever = AppHang).
 // GET and POST, plain and /full/, v1.0 and v1.1 - query and body merged.
-const gdtHandler = async (req) => envelope(buildGradeDeviceTreePayload({ ...req.query, ...(req.body || {}) }));
-const gdtSearchHandler = async (req) => envelope(buildGradeDeviceTreeSearchPayload({ ...req.query, ...(req.body || {}) }));
+// E-124: both variants now serve the RE-verified full grade tree
+// (organizations -> devices -> channels, every node with checked/hasAuthority
+// as STRING so the native tree renders the checkboxes enabled/clickable).
+import { buildFullGradeDeviceTreePayload, buildFullGradeDeviceTreeSearchPayload } from './e124-grade-tree.js';
+const gdtHandler = async (req) => envelope(buildFullGradeDeviceTreePayload({ ...req.query, ...(req.body || {}) }));
+const gdtSearchHandler = async (req) => envelope(buildFullGradeDeviceTreeSearchPayload({ ...req.query, ...(req.body || {}) }));
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/tree/grade-device-tree`, gdtHandler);
+  app.post(`${host}/tree/grade-device-tree`, gdtHandler);
   app.get(`${host}/tree/full/grade-device-tree`, gdtHandler);
   app.post(`${host}/tree/full/grade-device-tree`, gdtHandler);
   app.get(`${host}/tree/grade-device-tree/search/list`, gdtSearchHandler);
   app.get(`${host}/tree/full/grade-device-tree/search/list`, gdtSearchHandler);
   app.post(`${host}/tree/full/grade-device-tree/search/list`, gdtSearchHandler);
+  app.post(`${host}/tree/grade-device-tree/search/list`, gdtSearchHandler);
 }
+// admin RPC mirror (BRMS.Tree.GetFullGradeDeviceTree, DPSDK 0xcdb070)
+app.post('/admin/API/BRM/Tree/GetFullGradeDeviceTree', async (req) => {
+  const p = buildFullGradeDeviceTreePayload({ ...(req.query || {}), ...(req.body || {}) });
+  return envelope({ method: 'BRMS.Tree.GetFullGradeDeviceTree', ...p, info: p, data: p });
+});
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/storage/plan/channel/record-plan/page`, async (req) => envelope(buildRecordPlanPagePayload(req.query)));
   app.get(`${host}/storage/plan/motion-detection-record-plan/page`, async (req) => envelope(buildMotionDetectionRecordPlanPagePayload(req.query)));
@@ -2641,6 +2649,8 @@ app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => {
 // E-037: the v1.1 tree helpers of the web SPA and of the native stack.
 app.get('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgTreePayload()));
 app.post('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgTreePayload()));
+// (E-124 full/grade-device-tree is registered up in the E-101 block above)
+
 // The client also probes the org tree with POST on the v1.1 + v1.0 bases.
 app.get('/brms/api/v1.1/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
 app.post('/brms/api/v1.1/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));

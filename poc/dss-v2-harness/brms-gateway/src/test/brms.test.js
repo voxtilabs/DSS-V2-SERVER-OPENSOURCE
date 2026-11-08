@@ -872,6 +872,40 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(typeof s10.data.total, 'string');
   });
 
+  it('E-124 full/grade-device-tree: nested org->device->channel with string checked/hasAuthority (admin pre-checked)', async () => {
+    for (const p of ['/brms/api/v1.1/tree/full/grade-device-tree', '/brms/api/v1.0/tree/full/grade-device-tree']) {
+      const r = await (await fetch(`${BASE}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ roleId: '1' }) })).json();
+      assert.equal(r.code, 1000);
+      assert.ok(Array.isArray(r.data.organizations), p + ' organizations[]');
+      // root org 001 contains VIGILAB as child org
+      const root = r.data.organizations.find((o) => o.orgCode === '001');
+      assert.ok(root, 'root org 001 present');
+      assert.ok(root.organizations.some((o) => o.orgCode === 'VIGILAB'), 'VIGILAB nested under 001');
+      assert.strictEqual(root.checked, '1', 'admin: org pre-checked (string)');
+      assert.strictEqual(root.hasAuthority, '1');
+      // devices with channels, all flags strings (agnostic to which devices
+      // the local store holds - prod server has D0238JDG3016 under VIGILAB)
+      const vig = root.organizations.find((o) => o.orgCode === 'VIGILAB');
+      const anyDev = (vig.devices || [])[0] || r.data.devices[0];
+      assert.ok(anyDev, 'at least one device node in the tree');
+      assert.strictEqual(anyDev.checked, '1');
+      assert.strictEqual(anyDev.hasAuthority, '1');
+      assert.ok(Array.isArray(anyDev.channels) && anyDev.channels.length >= 1);
+      assert.strictEqual(anyDev.channels[0].checked, '1');
+      assert.strictEqual(anyDev.channels[0].hasChild, '0');
+      assert.strictEqual(typeof anyDev.channels[0].channelSeq, 'string');
+      // exceeded flags for the SPA tree loader
+      assert.strictEqual(r.data.deviceExceeded, '0');
+      assert.strictEqual(r.data.organizationExceeded, '0');
+    }
+    // search/list variant
+    const s = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree/search/list`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keyword: 'NUEVA' }) })).json();
+    assert.ok(Array.isArray(s.data.devices), 'search returns devices[]');
+    // admin RPC mirror
+    const rpc = await (await fetch(`${BASE}/admin/API/BRM/Tree/GetFullGradeDeviceTree`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(Array.isArray(rpc.data.organizations));
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
