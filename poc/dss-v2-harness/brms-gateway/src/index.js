@@ -749,12 +749,19 @@ function upgradeableHandler(req) {
   // Same client self forms as /videoService/version (E-021 decompile).
   const selected = selectPlatformVersion(req);
   const clientMajorV = 'V' + ((selected.match(/\d+\.\d+\.\d+\.\d+/) || [selected.replace(/^V/, '')])[0]);
+  // E-126: serverVersion must match the client's OWN literal form
+  // (8.006.0000000.0.R.20250307) - an epoch-suffixed value made the client
+  // log "Local major V8.006... vs Remote ..." mismatches (MainFormPlugin
+  // 0x6630b8). No epoch suffix here.
+  const self = selected.replace(/^V/, '').replace(/\.\d{9,10}$/, '');
   return envelope({
     upgradeable: false,
     version: clientMajorV,
-    serverVersion: selected,
+    serverVersion: self,
+    clientVersion: self,
     downloadUrl: '',
-    releaseNote: ''
+    releaseNote: '',
+    list: [], results: []
   });
 }
 // The DPSDK stack probes /v1.1/upgrade/... while the Qt stack probes the same
@@ -1131,7 +1138,7 @@ app.get('/brms/api/v1.1/menu/function/list', async () => envelope(buildFunctionL
 app.get('/brms/api/v1.1/config/function', async () => envelope(REAL_FUNCTION_CONFIG));
 app.get('/brms/api/v1.1/config/sira', async () => envelope({ siraEnable: 0, enable: false, status: '0' }));
 app.get('/brms/api/v1.1/config/feature-analyse', async () => envelope({ enable: false, list: [] }));
-app.get('/brms/api/v1.1/config/device-login-model', async () => envelope({ list: [], total: 0 }));
+app.get('/brms/api/v1.1/config/device-login-model', async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
 app.get('/brms/api/v1.1/config/interface/common/timeout', async () => envelope({ timeout: 300 }));
 // (E-121: time-template/list + alarm/plan/alarm-type/list moved below with
 // the real payloads)
@@ -1416,12 +1423,16 @@ app.post('/admin/API/GenericEvent/Report', async (req) => {
 // E-112: the client's key-existence check (CommonFunc.cpp:149) marked these
 // as "Invalid key" in the live log: QueryHostSpareWarning -> warningHappened,
 // PacketGetMemoryOutOfServerList / PacketGetBasicServiceWarm -> results.
-app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningList: [], list: [], results: [] }));
-app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, list: [], results: [] }));
-app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ warning: 0, warningHappened: '0', warningHappenedNum: 0, list: [], results: [] }));
-app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [], results: [] }));
+// E-126 (forensic report 2026-11-08): the live client log shows IsKeyValid
+// failing on [warningTime] [warningHappened] [results] [abnormityType] ->
+// 5x "The data returned by the service is abnormal" (ErrorId 3101) at every
+// login even with code=1000. All validated keys are now present as STRINGS.
+app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningHappened: '0', warningTime: '0', warningHappenedNum: '0', warningList: [], list: [], results: [], items: [] }));
+app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, abnormityType: '0', abnormity: '0', list: [], results: [], items: [] }));
+app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ warning: 0, warningHappened: '0', warningHappenedNum: '0', warningTime: '0', list: [], results: [], items: [] }));
+app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [], results: [], items: [] }));
 app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [], results: [], items: [] }));
-app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ warning: 0, list: [], results: [] }));
+app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ warning: 0, warningHappened: '0', warningTime: '0', list: [], results: [], items: [] }));
 
 // Access (OBMS) + parking (IPMS) empty modules.
 app.get('/obms/api/v1.1/acp/area/list', async () => envelope({ list: [], total: 0 }));
@@ -1440,7 +1451,7 @@ app.get('/ipms/api/v1.1/organization/list', async () => envelope(buildOrganizati
 app.get('/brms/api/v1.1/organization/list', async () => envelope(buildOrganizationListPayload()));
 app.get('/brms/api/v1.0/organization/list', async () => envelope(buildOrganizationListPayload()));
 app.post('/ipms/api/v1.1/organization/list', async () => envelope(buildOrganizationListPayload()));
-app.get('/ipms/api/v1.1/parking-lot/detail/list', async () => envelope({ list: [], total: 0 }));
+app.get('/ipms/api/v1.1/parking-lot/detail/list', async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
 app.get('/IPMS/API/entrance/parking-lot/binding-vto-itc', async () => envelope({ list: [], count: 0 }));
 
 // ===== E-020: remaining bootstrap 404s + launcher devices + fallbacks =====

@@ -933,6 +933,35 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-126 forensic fixes: pId binding in grade tree + warning keys + upgradeable serverVersion', async () => {
+    // grade tree nodes carry pId (parent binding) - the E-124 regression
+    const g = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree`, { headers: { 'X-Subject-Token': token } })).json();
+    const root = g.data.organizations.find((o) => o.orgCode === '001');
+    assert.strictEqual(root.pId, '0', 'org pId = parentCode');
+    const vig = root.organizations.find((o) => o.orgCode === 'VIGILAB');
+    assert.strictEqual(vig.pId, '001', 'child org pId = 001');
+    const dev = (vig.devices[0] || g.data.devices[0]);
+    assert.ok(dev && dev.pId, 'device pId present');
+    assert.ok(dev.channels[0].pId === dev.deviceCode, 'channel pId = deviceCode');
+    // warning/license endpoints carry every key IsKeyValid checks
+    const warn = await (await fetch(`${BASE}/brms/api/v1.1/system/hot-spare/switch/warning`)).json();
+    assert.ok('warningTime' in warn.data && 'warningHappened' in warn.data, 'hot-spare switch keys');
+    const lic = await (await fetch(`${BASE}/brms/api/v1.1/license/warning`)).json();
+    assert.ok('warningHappened' in lic.data && 'results' in lic.data, 'license warning keys');
+    const abn = await (await fetch(`${BASE}/brms/api/v1.1/license/hot-spare/abnormity`)).json();
+    assert.ok('abnormityType' in abn.data, 'abnormityType key');
+    const bs = await (await fetch(`${BASE}/brms/api/v1.1/system/only-startup-basic-service/warning`)).json();
+    assert.ok('warningHappened' in bs.data, 'basic-service warningHappened');
+    const pl = await (await fetch(`${BASE}/ipms/api/v1.1/parking-lot/detail/list`)).json();
+    assert.ok('results' in pl.data, 'parking-lot results key');
+    const dlm = await (await fetch(`${BASE}/brms/api/v1.1/config/device-login-model`)).json();
+    assert.ok('results' in dlm.data, 'device-login-model results key');
+    // upgradeable serverVersion matches the client literal (no epoch suffix)
+    const up = await (await fetch(`${BASE}/brms/api/v1.1/upgrade/check/upgradeable?clientVersion=8.006`)).json();
+    assert.ok(!/\.\d{9,10}$/.test(String(up.data.serverVersion)), 'serverVersion without epoch: ' + up.data.serverVersion);
+    assert.ok(String(up.data.serverVersion).startsWith('8.006'), 'serverVersion starts with client major');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

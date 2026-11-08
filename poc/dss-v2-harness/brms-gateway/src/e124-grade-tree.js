@@ -39,11 +39,20 @@ function channelNode(device, seq) {
   return {
     channelCode: code, channelId: code, id: code, code,
     channelName: name, name,
+    // E-126: pId is the parent binding the native tree renderer uses
+    // (channel.pId -> deviceCode); without it devices render orphaned.
+    pId: device.deviceCode,
     deviceCode: device.deviceCode, orgCode: deviceOrgCode(device),
     checked: '1', hasAuthority: '1', hasPermission: '1', authority: '1',
     hasChild: '0', isParent: '0', disabled: '0', selectable: '1',
     status: str(device.online ?? device.status ?? 1), channelSeq: String(seq),
-    parentCode: device.deviceCode, sort: String(seq)
+    parentCode: device.deviceCode, sort: String(seq),
+    // E-126: remaining native descriptor keys (FUN_1806d33a0 pool)
+    channelType: '1', channelSubtype: '0', streamType: '0', unitType: '1',
+    cameraType: '1', capability: '', deviceCapability: '1',
+    sourceType: str(device.sourceType || ''), associateId: '', sourceId: '',
+    autoAuthorize: '1', deviceIp: str(device.deviceIp || ''), deviceModel: str(device.model || ''),
+    protocolType: str(device.protocolType || '')
   };
 }
 
@@ -56,6 +65,8 @@ function deviceNode(device, adminChecked) {
     deviceCode: device.deviceCode, deviceId: device.deviceCode,
     code: device.deviceCode, id: device.deviceCode,
     deviceName: device.deviceName, name: device.deviceName,
+    // E-126: pId = owning org (device.pId -> orgCode binding)
+    pId: deviceOrgCode(device),
     orgCode: deviceOrgCode(device), parentCode: deviceOrgCode(device),
     checked, hasAuthority: '1', hasPermission: '1', authority: '1',
     hasChild: channels.length ? '1' : '0', isParent: channels.length ? '1' : '0',
@@ -63,6 +74,11 @@ function deviceNode(device, adminChecked) {
     status: str(device.online ?? device.status ?? 1),
     deviceType: str(device.deviceType || '1'), deviceCategory: str(device.deviceCategory || '1'),
     deviceCapability: '1', sort: '0',
+    // E-126: remaining native descriptor keys
+    deviceIp: str(device.deviceIp || ''), devicePort: str(device.devicePort || ''),
+    deviceModel: str(device.model || ''), capability: '', unitType: '1',
+    sourceType: str(device.sourceType || ''), associateId: '', sourceId: '',
+    autoAuthorize: '1', protocolType: str(device.protocolType || ''),
     channels, channel: channels, channelList: channels
   };
 }
@@ -75,14 +91,19 @@ function orgNode(org, devices, allDevices, adminChecked) {
   const node = {
     orgCode: org.code, code: org.code, id: org.code,
     orgName: org.name, name: org.name,
+    // E-126: pId = parent org (the native tree binds node.pId -> parent)
+    pId: org.parentCode,
     parentCode: org.parentCode, parentName: (listOrgs().find((o) => o.code === org.parentCode) || {}).name || '',
     orgType: str(org.orgType || '1'), domainId: str(org.domainId || '0'),
     isParent: children.length ? '1' : '0',
     hasChild: (children.length || devNodes.length) ? '1' : '0',
     checked, hasAuthority: '1', hasPermission: '1', authority: '1',
     disabled: '0', selectable: '1',
-    deparmentsCount: String(children.length),
+    deparmentsCount: String(children.length), deviceCount: String(devNodes.length),
     sort: '0',
+    // E-126: remaining native descriptor keys
+    sourceType: '', associateId: '', sourceId: '', autoAuthorize: '1',
+    capability: '', deviceCapability: '1',
     organizations: children.map((c) => orgNode(c, devices, allDevices, adminChecked)),
     devices: devNodes, device: devNodes.map((d) => ({ id: d.deviceCode, sort: '0' })),
     deviceList: devNodes, deivceNodes: devNodes, // SDK typo key kept (0xcd9348)
