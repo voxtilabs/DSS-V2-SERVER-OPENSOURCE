@@ -3146,9 +3146,9 @@ function createARSTCPServer() {
         if (buffer.length > ARS_MAX_BUFFER) { console.log('[ARS TCP] buffer overflow, dropping peer', clientKey); socket.destroy(); return; }
         const frame = parseDahuaFrame(buffer);
         if (frame.ok) {
+          if (frame.payloadLen > ARS_MAX_PAYLOAD) { console.log('[ARS TCP] payloadLen too large (' + frame.payloadLen + '), dropping peer', clientKey); socket.destroy(); return; }
           const totalLen = frame.jsonAt >= 0 ? frame.jsonAt + frame.payloadLen : frame.headerLen;
           if (frame.jsonAt === -1 || buffer.length < totalLen) return; // wait for the full JSON
-          if (frame.payloadLen > ARS_MAX_PAYLOAD) { console.log('[ARS TCP] payloadLen too large (' + frame.payloadLen + '), dropping peer', clientKey); socket.destroy(); return; }
           const packet = buffer.subarray(0, totalLen);
           buffer = buffer.subarray(totalLen);
           const info = parseRegisterJson(packet.subarray(frame.jsonAt));
