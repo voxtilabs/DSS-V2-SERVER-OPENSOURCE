@@ -906,6 +906,33 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(rpc.data.organizations));
   });
 
+  it('E-125 admin-API MTS mirrors + journal catch-all closures (StartVideo on /admin/API)', async () => {
+    // the real client called POST /admin/API/MTS/Video/StartVideo and got the
+    // 40B catch-all -> Live View empty. Now it must return a full RTSP session.
+    const sv = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ channelId: 'D0238JDG3016$1$0$0', streamType: 0, dataType: 0 })
+    })).json();
+    assert.equal(sv.code, 1000);
+    assert.ok(sv.data.url && sv.data.url.startsWith('rtsp://'), 'admin StartVideo returns rtsp url');
+    assert.ok(sv.data.token && sv.data.session && sv.data.hlsUrl, 'session fields present');
+    const stop = await (await fetch(`${BASE}/admin/API/MTS/Video/StopVideo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: sv.data.token }) })).json();
+    assert.strictEqual(stop.data.success, true);
+    // the other catch-alls seen in the live journal must now exceed 60B GET / 45B POST
+    const checks = [
+      ['POST', '/admin/API/VMS/TvWall/GetTvWallTaskInfo', '{}'],
+      ['GET', '/brms/api/v1.1/alarm/plan/source/D0238JDG3016$1$0$0/alarm-type/soft-trigger/list', null],
+      ['GET', '/brms/api/v1.1/video/tracking/channel/D0238JDG3016$1$0$0/point/list', null],
+      ['POST', '/brms/api/v1.1/map/resource/config-status/fetch/batch/list', '{}'],
+      ['POST', '/admin/API/SS/Record/QueryRecord', '{}']
+    ];
+    for (const [m, p, b] of checks) {
+      const r = await fetch(`${BASE}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b || undefined });
+      const t = await r.text();
+      assert.ok(t.length > 45, `${m} ${p} explicit route, got ${t.length}B`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

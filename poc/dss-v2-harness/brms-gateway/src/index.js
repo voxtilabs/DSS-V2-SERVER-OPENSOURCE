@@ -2732,6 +2732,67 @@ app.post('/brms/api/v1.1/MTS/Video/StopVideo', { preHandler: auth }, async (req)
   return envelope({ success: true });
 });
 app.post('/brms/api/v1.1/MTS/Video/KeepAlive', { preHandler: auth }, async () => envelope({ success: true }));
+
+// ===== E-125: admin-API mirrors of the MTS media RPCs ========================
+// Live journal (2026-11-08 02:5x UTC, real client, host 10.10.20.120:1443):
+// the native Monitoring Center calls POST /admin/API/MTS/Video/StartVideo and
+// it fell into the 40B catch-all -> Live View read "no video URL" -> empty
+// window. Mirror the same session logic on the /admin/API base (plus the
+// Stop/KeepAlive pair and the TvWall task info RPC).
+const mtsStartVideo = async (req) => {
+  const { channelId, streamType, trackId, extend, fakeSdp, forceSynPlay, keyCode } = req.body || {};
+  const token = genToken();
+  const session = genToken().slice(0, 16);
+  const vkId = 'vk-' + genToken().slice(0, 8);
+  const device = findDeviceByChannelId(channelId);
+  const pathName = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
+  const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
+  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
+  return envelope({
+    connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
+    port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
+    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
+    hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
+  });
+};
+const mtsStopVideo = async (req) => {
+  if (req.body?.token) RTSP_SESSIONS.delete(String(req.body.token));
+  return envelope({ success: true });
+};
+app.post('/admin/API/MTS/Video/StartVideo', mtsStartVideo);
+app.post('/admin/API/MTS/Video/StopVideo', mtsStopVideo);
+app.post('/admin/API/MTS/Video/KeepAlive', async () => envelope({ success: true }));
+app.post('/admin/api/MTS/Video/StartVideo', mtsStartVideo);
+app.post('/admin/api/MTS/Video/StopVideo', mtsStopVideo);
+// SS record RPC mirrors on admin base
+for (const m of ['QueryRecord', 'StartRecord', 'StopRecord', 'LockRecord', 'UnLockRecord', 'QueryLock', 'DeleteRecord']) {
+  app.post(`/admin/API/SS/Record/${m}`, async () => {
+    const map = {
+      QueryRecord: () => envelope({ pageCount: 1, session: genToken().slice(0, 16), records: [] }),
+      StartRecord: () => envelope({ now: new Date().toISOString().slice(0, 19).replace('T', ' '), planId: '' }),
+      StopRecord: () => envelope({ success: true }),
+      LockRecord: () => envelope({ id: genToken().slice(0, 8) }),
+      UnLockRecord: () => envelope({ success: true }),
+      QueryLock: () => envelope({ lockInfos: [] }),
+      DeleteRecord: () => envelope({ success: true })
+    };
+    return map[m]();
+  });
+}
+// TvWall task info (was 40B catch-all in the live journal)
+app.post('/admin/API/VMS/TvWall/GetTvWallTaskInfo', async () => envelope({ method: 'VMS.TvWall.GetTvWallTaskInfo', taskInfos: [], list: [], results: [], items: [], total: '0', totalCount: '0' }));
+// alarm soft-trigger per channel (was 59B catch-all)
+app.get('/brms/api/v1.1/alarm/plan/source/:channel/alarm-type/soft-trigger/list', async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
+app.post('/brms/api/v1.1/alarm/plan/source/:channel/alarm-type/soft-trigger/list', async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
+// video tracking points per channel (was 59B catch-all)
+app.get('/brms/api/v1.1/video/tracking/channel/:channel/point/list', async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
+// map resource config status (was 40B catch-all)
+app.post('/brms/api/v1.1/map/resource/config-status/fetch/batch/list', async () => envelope({ list: [], results: [], items: [], total: '0', totalCount: '0' }));
+// remaining small catch-alls seen in the live journal are already covered by
+// existing handlers (config/ai/privacy + fish-eye + face repository in
+// e026-video.js, system/license/obms/ipms warnings above, accounts/
+// unauthorize at line ~2529) - nothing else to add here.
 for (const m of ['QueryRecord', 'StartRecord', 'StopRecord', 'LockRecord', 'UnLockRecord', 'QueryLock', 'DeleteRecord']) {
   app.post(`/brms/api/v1.1/SS/Record/${m}`, { preHandler: auth }, async (req) => {
     // delegate to the v1.0 handler by reusing the same builders via a local fetch-free shim
