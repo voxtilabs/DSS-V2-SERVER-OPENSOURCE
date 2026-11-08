@@ -1049,6 +1049,17 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-130 SIP TCP/TLS listeners + full 86-topic MQ inventory advertised', async () => {
+    const { MQ_TOPICS } = await import('../e039-mq-notify.js');
+    assert.ok(MQ_TOPICS.length >= 86, `MQ_TOPICS covers the DPSDK pool (${MQ_TOPICS.length})`);
+    for (const t of ['vms.notifyUserRole', 'vms.notifyDeviceOffline', 'vms.notifySyncTime', 'obms.alarmhost.notifyZoneAlarmStatus', 'brms.notifyAlarms'])
+      assert.ok(MQ_TOPICS.includes(t), `topic advertised: ${t}`);
+    // GetMqConfig must list them all as TopicInfos
+    const mq = await (await fetch(`${BASE}/admin/API/BRM/Config/GetMqConfig`, { method: 'POST', headers: { 'content-type': 'application/json', 'X-Subject-Token': token }, body: '{}' })).json();
+    const infos = (mq.data && (mq.data.TopicInfos || mq.data.topicInfos)) || [];
+    assert.ok(infos.length >= 86, `GetMqConfig advertises ${infos.length} topics`);
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

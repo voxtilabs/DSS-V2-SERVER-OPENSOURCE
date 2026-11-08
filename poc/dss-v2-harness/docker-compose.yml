@@ -10,6 +10,8 @@ services:
       - "18800:18800/udp"
       - "19800:19800/udp"
       - "5080:5080/udp"
+      - "5080:5080"    # E-130: SIP TCP (DPSDK 'tcp start server' 0xc56d30)
+      - "5061:5061"    # E-130: SIP over TLS (DPSDK 'tls start server' 0xc56528)
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
       - "1883:1883"  # E-039: MQTT notify broker (dual push, brms.notify* topics)
     volumes:

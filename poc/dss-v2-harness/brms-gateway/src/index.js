@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
 import net from 'node:net';
+import tls from 'node:tls';
 import { WebSocketServer } from 'ws';
 // E-039: MQTT notify broker + device-change hub (real topics from the
 // DPSDK.dll / PROLogic.dll string pools - see the module header).
@@ -3435,68 +3436,114 @@ async function start() {
       console.log(`[E040-AMQ] STOMP publisher targeting ${AMQ_HOST}:${AMQ_STOMP_PORT} (OpenWire advertised on ${PUBLIC_HOST}:${AMQ_PORT})`);
     }
 
-    // SIP UDP 5080 Server (DSS Client intercom/voice registration)
-    const sipUdp = dgram.createSocket('udp4');
-    sipUdp.on('message', (msg, rinfo) => {
-      const text = msg.toString().trim();
-      console.log(`[SIP UDP 5080] ${rinfo.address}:${rinfo.port} -> ${text.substring(0, 200)}`);
-      
-      if (text.includes('REGISTER') && text.includes('SIP/2.0')) {
-        // Parse SIP REGISTER request
-        const lines = text.split('\r\n');
-        const requestLine = lines[0];
-        const headers = {};
-        let callId = '';
-        let fromTag = '';
-        let toTag = '';
-        let via = '';
-        let contact = '';
-        let cseq = '';
-        
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          if (line.startsWith('Via:')) via = line.substring(4).trim();
-          else if (line.startsWith('From:')) {
-            const match = line.match(/tag=([^;>]+)/);
-            if (match) fromTag = match[1];
-          } else if (line.startsWith('To:')) {
-            // We'll add a tag in response
-          } else if (line.startsWith('Call-ID:')) callId = line.substring(8).trim();
-          else if (line.startsWith('CSeq:')) cseq = line.substring(5).trim();
-          else if (line.startsWith('Contact:')) contact = line.substring(8).trim();
-        }
-        
-        // Generate response tag
-        const respTag = crypto.randomBytes(8).toString('hex');
-        
-        // Build SIP 200 OK response
-        const response = [
+    // SIP Server (DSS Client intercom/voice registration)
+    // E-130 (REA ses_e451b4956ffeQdao3cVAOkhYQp): DPSDK arranca 'tcp start
+    // server' (0xc56d30) y 'tls start server' (0xc56528) ademas de UDP -
+    // sin SIP TCP 5080 / TLS 5061 el INVITE de intercom no completa.
+    const SIP_TLS_PORT = parseInt(process.env.SIP_TLS_PORT || '5061', 10);
+    function handleSipMessage(text, remoteAddr, sendFn, transport) {
+      console.log(`[SIP ${transport}] ${remoteAddr} -> ${text.substring(0, 200)}`);
+      if (!text.includes('SIP/2.0')) return;
+      const lines = text.split('\r\n');
+      const headers = {};
+      let callId = '', fromTag = '', via = '', cseq = '';
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('Via:')) via = line.substring(4).trim();
+        else if (line.startsWith('From:')) { const m = line.match(/tag=([^;>]+)/); if (m) fromTag = m[1]; }
+        else if (line.startsWith('Call-ID:')) callId = line.substring(8).trim();
+        else if (line.startsWith('CSeq:')) cseq = line.substring(5).trim();
+      }
+      const respTag = crypto.randomBytes(8).toString('hex');
+      const branch = 'z9hG4bK' + crypto.randomBytes(8).toString('hex');
+      let response;
+      if (text.includes('REGISTER')) {
+        response = [
           'SIP/2.0 200 OK',
-          `Via: ${via};received=${rinfo.address};branch=z9hG4bK${crypto.randomBytes(8).toString('hex')}`,
+          `Via: ${via};received=${remoteAddr};branch=${branch}`,
           `From: <sip:8888881000@${PUBLIC_HOST}>;tag=${fromTag}`,
           `To: <sip:8888881000@${PUBLIC_HOST}>;tag=${respTag}`,
           `Call-ID: ${callId}`,
           `CSeq: ${cseq}`,
-          `Contact: <sip:8888881000@${PUBLIC_HOST}:${SIP_PORT};transport=udp>`,
-          'Expires: 3600',
-          'Content-Length: 0',
-          '', ''
+          `Contact: <sip:8888881000@${PUBLIC_HOST}:${SIP_PORT};transport=${transport}>`,
+          'Expires: 3600', 'Content-Length: 0', '', ''
         ].join('\r\n');
-        
-        sipUdp.send(response, rinfo.port, rinfo.address, (err) => {
-          if (err) console.log('[SIP] Response error:', err.message);
-          else console.log(`[SIP] 200 OK sent to ${rinfo.address}:${rinfo.port}`);
-        });
+      } else {
+        // OPTIONS/INVITE/MESSAGE/etc: generic 200 OK so the UA proceeds
+        response = [
+          'SIP/2.0 200 OK',
+          `Via: ${via};received=${remoteAddr};branch=${branch}`,
+          `From: <sip:8888881000@${PUBLIC_HOST}>;tag=${fromTag}`,
+          `To: <sip:8888881000@${PUBLIC_HOST}>;tag=${respTag}`,
+          `Call-ID: ${callId}`,
+          `CSeq: ${cseq}`,
+          'Content-Length: 0', '', ''
+        ].join('\r\n');
       }
+      sendFn(response, (err) => {
+        if (err) console.log('[SIP] Response error:', err.message);
+        else console.log(`[SIP] 200 OK sent to ${remoteAddr} (${transport})`);
+      });
+    }
+
+    // SIP UDP 5080
+    const sipUdp = dgram.createSocket('udp4');
+    sipUdp.on('message', (msg, rinfo) => {
+      handleSipMessage(msg.toString().trim(), rinfo.address, (resp, cb) => sipUdp.send(resp, rinfo.port, rinfo.address, cb), 'udp');
     });
-    
-    sipUdp.on('error', (err) => {
-      console.error('[SIP UDP] Error:', err.message);
-    });
-    
+    sipUdp.on('error', (err) => { console.error('[SIP UDP] Error:', err.message); });
     sipUdp.bind(SIP_PORT, '0.0.0.0', () => {
       console.log(`SIP UDP Server listening on 0.0.0.0:${SIP_PORT}`);
     });
+
+    // E-130: SIP TCP 5080 (mismo puerto, transporte tcp)
+    const sipTcp = net.createServer((socket) => {
+      let buf = '';
+      socket.on('data', (chunk) => {
+        buf += chunk.toString();
+        let idx;
+        while ((idx = buf.indexOf('\r\n\r\n')) !== -1) {
+          const msg = buf.slice(0, idx + 4);
+          buf = buf.slice(idx + 4);
+          handleSipMessage(msg.trim(), socket.remoteAddress, (resp, cb) => socket.write(resp, cb), 'tcp');
+        }
+        if (buf.length > 64 * 1024) { socket.destroy(); } // anti-flood
+      });
+      socket.on('error', () => {});
+      socket.setTimeout(120000, () => socket.destroy());
+    });
+    sipTcp.on('error', (err) => { console.error('[SIP TCP] Error:', err.message); });
+    sipTcp.listen(SIP_PORT, '0.0.0.0', () => {
+      console.log(`SIP TCP Server listening on 0.0.0.0:${SIP_PORT}`);
+    });
+
+    // E-130: SIP over TLS 5061 (cert lab existente)
+    try {
+      const sipTls = tls.createServer({
+        key: fs.readFileSync(SSL_KEY),
+        cert: fs.readFileSync(SSL_CERT)
+      }, (socket) => {
+        let buf = '';
+        socket.on('data', (chunk) => {
+          buf += chunk.toString();
+          let idx;
+          while ((idx = buf.indexOf('\r\n\r\n')) !== -1) {
+            const msg = buf.slice(0, idx + 4);
+            buf = buf.slice(idx + 4);
+            handleSipMessage(msg.trim(), socket.remoteAddress, (resp, cb) => socket.write(resp, cb), 'tls');
+          }
+          if (buf.length > 64 * 1024) socket.destroy();
+        });
+        socket.on('error', () => {});
+        socket.setTimeout(120000, () => socket.destroy());
+      });
+      sipTls.on('error', (err) => { console.error('[SIP TLS] Error:', err.message); });
+      sipTls.listen(SIP_TLS_PORT, '0.0.0.0', () => {
+        console.log(`SIP TLS Server listening on 0.0.0.0:${SIP_TLS_PORT}`);
+      });
+    } catch (err) {
+      console.error('[SIP TLS] no se pudo abrir 5061:', err.message);
+    }
 
     const udp = dgram.createSocket('udp4');
     udp.on('message', (msg, rinfo) => {

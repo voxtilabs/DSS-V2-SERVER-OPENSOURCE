@@ -21,25 +21,40 @@
 
 import net from 'node:net';
 
+// E-130: full topic inventory extracted from DPSDK.dll string pool
+// (86 topics, REA ses_e451b4956ffeQdao3cVAOkhYQp). The native client
+// subscribes to all of them via GetMqConfig TopicInfos; advertising the full
+// list means no subscribe is rejected and every notify has a topic.
 export const MQ_TOPICS = [
-  'brms.notifyAlarms',
-  'brms.notifyBatchAddDevices',
-  'brms.notifyChannelStatuses',
-  'brms.notifyChannelCapabilities',
-  'brms.notifyDeviceSipStatus',
-  'brms.notifyDeviceSleepRequest',
-  'brms.notifyFaceInfos',
-  'brms.notifyHumanInfos',
-  'brms.notifyNonVehicleInfos',
-  'brms.notifyVehicleInfos',
-  'brms.notifyPasswordOverDate',
-  'brms.notifyLicenseInvalid',
-  'brms.notifyAcsEvents',
-  'brms.notifyLiftEvents',
-  'brms.notifyOutsideDatabaseErrorInfo',
-  'brms.device.notifyDiscoverAndUpdateDeviceResult',
-  'brms.device.batchDiscoverDevices',
-  'brms.batchAddDevices'
+  'brms.notifyAlarms', 'brms.notifyBatchAddDevices', 'brms.notifyChannelStatuses',
+  'brms.notifyChannelCapabilities', 'brms.notifyDeviceSipStatus', 'brms.notifyDeviceSleepRequest',
+  'brms.notifyFaceInfos', 'brms.notifyHumanInfos', 'brms.notifyNonVehicleInfos',
+  'brms.notifyVehicleInfos', 'brms.notifyPasswordOverDate', 'brms.notifyLicenseInvalid',
+  'brms.notifyAcsEvents', 'brms.notifyLiftEvents', 'brms.notifyOutsideDatabaseErrorInfo',
+  'brms.device.notifyDiscoverAndUpdateDeviceResult', 'brms.device.batchDiscoverDevices', 'brms.batchAddDevices',
+  'brms.alarm.notifyAlarmFiles', 'brms.alarm.notifyUserGroupAlarmFiles', 'brms.alarm.notifyUserGroupAlarmPicture',
+  'brms.alarm.notifyUserGroupAlarms', 'brms.database.notifyDatabaseTableBreakdown',
+  'brms.gtalk.notifyGroupStatus', 'brms.gtalk.notifyGroupTalkStatus', 'brms.gtalk.notifyUserPocStatus',
+  'brms.license.notifyHotSpareAbnormity', 'brms.map.notifyResourceLocations',
+  'brms.service.notifyPocServiceStatus', 'brms.tvWall.notifyCapability',
+  'ipms.entrance.notifySwipeCardPassFailure', 'ipms.entrance.notifyVehicleCaptureInfo', 'ipms.uvss.notifyDetection',
+  'obms.acp.notifyPointDoorStatuses', 'obms.acs.notifyControlDoorFailureInfo',
+  'obms.alarmHost.notifyZoneSnapshot', 'obms.alarmhost.notifyAreaAlarmStatus', 'obms.alarmhost.notifyAreaArmStatus',
+  'obms.alarmhost.notifyZoneAlarmStatus', 'obms.alarmhost.notifyZoneBypassStatus', 'obms.alarmhost.notifyZoneFaultStatus',
+  'obms.alarmhost.notifyZoneRealTimeStatus', 'obms.desfire.notifyConfigResult',
+  'obms.lift.notifyFailedGlobalChannelStatus', 'obms.notifyVtoIssueResults',
+  'vms.notify.resourceBinding', 'vms.notifyAlarmHostStatus', 'vms.notifyAlarmPicture', 'vms.notifyBitmapInfo',
+  'vms.notifyCapturePicture', 'vms.notifyChannelIntelliState', 'vms.notifyChannelVisibleArea',
+  'vms.notifyChnLocationDetail', 'vms.notifyDevChannelStatus', 'vms.notifyDevLocation', 'vms.notifyDevLocationDetail',
+  'vms.notifyDeviceImportResult', 'vms.notifyDeviceLocalLogs', 'vms.notifyDeviceOffline',
+  'vms.notifyDeviceSearchStatus', 'vms.notifyDeviceStatus', 'vms.notifyDomainDel', 'vms.notifyDomainOffline',
+  'vms.notifyFaceInfo', 'vms.notifyFaceRepositoryProcess', 'vms.notifyFileDownLoadUrl', 'vms.notifyHumanInfo',
+  'vms.notifyHumanProcessInfo', 'vms.notifyIssueVtoDoorOpenPass', 'vms.notifyLicenseExpired',
+  'vms.notifyLicenseUnauthorized', 'vms.notifyLockUser', 'vms.notifyMasterSlaveObject', 'vms.notifyMediaVK',
+  'vms.notifyMenuRightChanged', 'vms.notifyNonVehicleInfo', 'vms.notifyPTZLockStatus', 'vms.notifyParkingLotVto',
+  'vms.notifySwitchCenterStatus', 'vms.notifySyncTime', 'vms.notifyTvWallStatus', 'vms.notifyUserOnlineStatus',
+  'vms.notifyUserOverDate', 'vms.notifyUserPassword', 'vms.notifyUserReuseStatus', 'vms.notifyUserRole',
+  'vms.notifyUserTokenExpiration', 'vms.notifyVehicleInfo'
 ];
 export const TOPIC_BATCH_ADD_DEVICES = 'brms.notifyBatchAddDevices';
 export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
