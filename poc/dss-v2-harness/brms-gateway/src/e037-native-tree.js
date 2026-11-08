@@ -279,7 +279,7 @@ export function buildNativeChannelVo(device, channelSeq) {
   return {
     channelCode: code,
     channelName: seq === 0 ? device.deviceName : `${device.deviceName} CH${seq + 1}`,
-    channelSeq: seq,
+    channelSeq: String(seq),
     status: str(device.online ?? device.status ?? 1),
     sn: str(device.serialNumber || ''),
     cameraType: '',
@@ -326,7 +326,7 @@ export function buildNativeChannelVo(device, channelSeq) {
     solarBattery: '',
     // aliases used by the web SPA / older parsers
     channelId: code,
-    channelNo: seq + 1,
+    channelNo: String(seq + 1),
     deviceCode: device.deviceCode,
     deviceName: device.deviceName,
     deviceIp: device.deviceIp,
@@ -334,10 +334,20 @@ export function buildNativeChannelVo(device, channelSeq) {
     protocolType: device.protocolType,
     videoEncode: 'H.265',
     audioEncode: '',
-    ptz: 0,
-    audio: 1,
-    record: 0,
-    online: device.online ?? 1
+    ptz: '0',   // E-123: string flags (E-095 strict-=== lesson)
+    audio: '1',
+    record: '0',
+    online: str(device.online ?? device.status ?? 1),
+    authority: '1',   // E-123: channel authority (empty = grey/no-permission)
+    hasAuthority: '1',
+    enable: '1',
+    checked: '0',
+    disabled: '0',
+    isParent: '0',
+    hasChild: '0',
+    id: code,
+    name: seq === 0 ? device.deviceName : `${device.deviceName} CH${seq + 1}`,
+    parentCode: device.deviceCode
   };
 }
 
@@ -430,13 +440,13 @@ export function buildNativeDeviceInfoVo(d) {
     sourceType: str(d.sourceType || ''),
     sourceId: str(d.sourceId || ''),
     associateId: str(d.associateId || ''),
-    authority: '',
+    authority: '1', // E-123: empty authority made the client render the node as no-permission (grey)
     solarBattery: '',
     // --- aliases parsed by the native client (DPSDK.dll string pool) ---
     enableUnit: '1',
     enableBuilding: '0',
     enableLift: '0',
-    isParent: false,
+    isParent: '1', // E-123: string flag (E-087 lesson: a JSON boolean never binds)
     parentName: DSS_ROOT_ORG.name,
     streamProtocol: '',
     encrypType: '0',
@@ -464,10 +474,10 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
   const channel = [];
   let sort = 0;
   for (const d of devices) {
-    device.push({ id: str(d.deviceCode), sort: sort++ });
+    device.push({ id: str(d.deviceCode), sort: String(sort++) });
     const count = Math.max(1, Number(d.channelNum) || 1);
     for (let seq = 0; seq < count; seq++) {
-      channel.push({ id: dssChannelCode(d.deviceCode, seq), sort: channel.length });
+      channel.push({ id: dssChannelCode(d.deviceCode, seq), sort: String(channel.length) });
     }
   }
   // E-087: isParent/deparmentsCount must reflect the REAL org hierarchy
@@ -491,7 +501,7 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
     sourceId: '',
     associateId: '',
     remark: '',
-    authority: '',
+    authority: '1', // E-123: org node authority (empty = grey/no-permission in the client tree)
     // --- aliases parsed by the native client ---
     // E-087: the DPSDK org-node parser binds these as STRINGS ("1"/"0") -
     // a JSON boolean never binds, so isParent/hasChild must be strings.
@@ -502,8 +512,10 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
     isParent: childCount > 0 ? '1' : '0',
     hasChild: (childCount > 0 || devices.length > 0) ? '1' : '0',
     parentName: parentOrg ? parentOrg.name : '',
-    sort: 0,
-    roleIds: []
+    sort: '0', // E-123: string (E-095 lesson)
+    roleIds: [],
+    // E-123: tree-selection flags on the org node itself
+    checked: '0', hasAuthority: '1', disabled: '0', selectable: '1'
   };
 }
 

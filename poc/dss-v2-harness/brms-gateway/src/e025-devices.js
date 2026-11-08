@@ -1476,6 +1476,14 @@ function serializeUserPageRow(u) {
 // role name lists are CSV STRINGS ("1,2") as real Dahua REST does.
 function serializeUserRow(u) {
   const base = serializeUserPageRow(u);
+  // E-123: the User Details > Permissions dialog reads the user's current
+  // grants from the detail row - deviceCodes/channelCodes/orgCodes as CSV
+  // STRINGS (real Dahua REST semantics, no array leaves per E-105). Admin
+  // gets every registered device/channel/org automatically.
+  const allDeviceCodes = [...DEVICE_REGISTRY.values()].map((d) => d.deviceCode).join(',');
+  const allChannelIds = allChannels().map((c) => c.channelId || c.channelCode).join(',');
+  const allOrgCodes = (() => { try { return listOrgs().map((o) => o.code).join(','); } catch { return '001,VIGILAB'; } })();
+  const isAdmin = String(u.adminFlag ?? u.isAdmin ?? '') === '1' || String(u.userType) === '1';
   return {
     ...base,
     userId: String(u.userId ?? u.id ?? ''),
@@ -1484,6 +1492,8 @@ function serializeUserRow(u) {
     employeeName: String(u.employeeName ?? u.realName ?? base.name),
     userTypeName: String(u.userTypeName ?? ''),
     adminFlag: String(u.adminFlag ?? '0'),
+    hasAuthority: '1',
+    authority: '1',
     statusName: String(u.statusName ?? ''),
     enable: String(u.enable ?? '1'),
     locked: String(u.locked ?? u.lock ?? '0'),
@@ -1495,7 +1505,10 @@ function serializeUserRow(u) {
     groupId: String(u.groupId ?? ''),
     groupName: String(u.groupName ?? ''),
     orgCode: String(u.orgCode ?? ''),
+    orgCodes: isAdmin ? allOrgCodes : String(u.orgCode ?? ''),
     domainId: String(u.domainId ?? '0'),
+    deviceCodes: isAdmin ? allDeviceCodes : '',
+    channelIds: isAdmin ? allChannelIds : '',
     email: String(u.email ?? ''),
     telephone: String(u.telephone ?? ''),
     mobile: String(u.mobile ?? ''),
