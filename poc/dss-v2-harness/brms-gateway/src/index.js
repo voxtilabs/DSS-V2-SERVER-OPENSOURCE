@@ -3111,7 +3111,8 @@ function createWebSocketServer(httpsServer) {
 // ===== ARS TCP Binary Server (DVRIP/DHIP) =====
 // E-119: accept BOTH framings - the RE-verified binary header + JSON payload
 // (Dahua AutoRegister.cpp @0x01366578) and the legacy 32B string framing.
-import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson } from './e119-ars-protocol.js';
+import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson, ARS_MAX_PAYLOAD, ARS_MAX_BUFFER } from './e119-ars-protocol.js';
+import { registerP0Coverage } from './e127-p0-coverage.js';
 function createARSTCPServer() {
   console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
   const server = net.createServer((socket) => {
@@ -3137,41 +3138,67 @@ function createARSTCPServer() {
 
       // E-119: RE-verified DVRIP/DHIP framing (8B magic + 0x19930522 + JSON)
       // takes precedence when the peer speaks it.
-      const frame = parseDahuaFrame(buffer);
-      if (frame.ok) {
-        const totalLen = frame.jsonAt >= 0 ? frame.jsonAt + (frame.payloadLen || 0) : buffer.length;
-        if (frame.jsonAt === -1 || buffer.length < totalLen) return; // wait for the full JSON
-        const packet = buffer.subarray(0, totalLen);
-        buffer = buffer.subarray(totalLen);
-        const info = parseRegisterJson(packet.subarray(frame.jsonAt));
-        console.log('[ARS TCP] DVRIP/DHIP frame', frame.magic, 'json ' + (info ? 'parsed' : 'unparsed'), 'len ' + packet.length, 'from', socket.remoteAddress);
-        if (info && (info.deviceId || info.machineAddress)) {
-          const deviceId = info.deviceId || info.serialNo || ('NVR-' + Date.now());
-          session.sequence = frame.sequence;
-          session.deviceId = deviceId;
-          session.authenticated = true;
-          ARS_DEVICES.set(deviceId, {
-            deviceId: 'ARS-' + deviceId, originalId: deviceId, serialNo: info.serialNo,
-            deviceName: info.deviceName || ('NVR ' + deviceId), ip: info.ip,
-            port: info.port, username: info.username, password: info.password,
-            deviceType: info.deviceType, channelNum: info.channelCount,
-            deviceClass: info.deviceClass, protocol: 'Dahua', source: 'auto-register',
-            status: 1, registeredAt: Date.now(), lastSeen: Date.now()
-          });
-          try {
-            const registered = registerArsDevice({
-              deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
-              ip: info.ip, port: info.port, username: info.username, password: info.password,
-              deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua'
+      // E-128 (DevOps audit): frame reassembly + DoS caps. A fragmented frame
+      // must NOT be consumed until headerLen+declared payloadLen have arrived;
+      // a bogus payloadLen (>1MiB) or a buffer >4MiB without a valid frame
+      // destroys the socket instead of accumulating forever.
+      if (buffer.length > 0 && (buffer.subarray(0, 5).toString('latin1') === 'DVRIP' || buffer.subarray(0, 4).toString('latin1') === 'DHIP')) {
+        if (buffer.length > ARS_MAX_BUFFER) { console.log('[ARS TCP] buffer overflow, dropping peer', clientKey); socket.destroy(); return; }
+        const frame = parseDahuaFrame(buffer);
+        if (frame.ok) {
+          const totalLen = frame.jsonAt >= 0 ? frame.jsonAt + frame.payloadLen : frame.headerLen;
+          if (frame.jsonAt === -1 || buffer.length < totalLen) return; // wait for the full JSON
+          if (frame.payloadLen > ARS_MAX_PAYLOAD) { console.log('[ARS TCP] payloadLen too large (' + frame.payloadLen + '), dropping peer', clientKey); socket.destroy(); return; }
+          const packet = buffer.subarray(0, totalLen);
+          buffer = buffer.subarray(totalLen);
+          const info = parseRegisterJson(packet.subarray(frame.jsonAt));
+          console.log('[ARS TCP] DVRIP/DHIP frame', frame.magic, 'json ' + (info ? 'parsed' : 'unparsed'), 'len ' + packet.length, 'from', socket.remoteAddress);
+          const method = info ? '' : '';
+          let rawJson = null;
+          try { rawJson = JSON.parse(packet.subarray(frame.jsonAt).toString('utf8').replace(/\0+$/, '')); } catch { /* not json */ }
+          const jmethod = rawJson && typeof rawJson === 'object' ? String(rawJson.method || rawJson.Method || rawJson.cmd || '') : '';
+          // E-128: keepalive / logout also arrive on the binary framing -
+          // refresh lastSeen and ACK instead of Ret:400.
+          if (/keepalive|keep-alive|heartbeat/i.test(jmethod) || frame.command === 0x0004) {
+            if (session.deviceId) { const d = ARS_DEVICES.get(session.deviceId); if (d) { d.lastSeen = Date.now(); d.status = 1; } }
+            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0004, frame.sequence, { Ret: 100, RetMsg: 'OK', KeepAliveSecond: '60' }));
+            return;
+          }
+          if (/logout/i.test(jmethod) || frame.command === 0x0005) {
+            if (session.deviceId) ARS_DEVICES.delete(session.deviceId);
+            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0005, frame.sequence, { Ret: 100, RetMsg: 'OK' }));
+            return;
+          }
+          if (info && (info.deviceId || info.machineAddress)) {
+            const deviceId = info.deviceId || info.serialNo || ('NVR-' + Date.now());
+            session.sequence = frame.sequence;
+            session.deviceId = deviceId;
+            session.authenticated = true;
+            ARS_DEVICES.set(deviceId, {
+              deviceId: 'ARS-' + deviceId, originalId: deviceId, serialNo: info.serialNo,
+              deviceName: info.deviceName || ('NVR ' + deviceId), ip: info.ip,
+              port: info.port, username: info.username, password: info.password,
+              deviceType: info.deviceType, channelNum: info.channelCount,
+              deviceClass: info.deviceClass, protocol: 'Dahua', source: 'auto-register',
+              status: 1, registeredAt: Date.now(), lastSeen: Date.now()
             });
-            scheduleStreamProvisioning(registered);
-          } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
-          try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
-          socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
-        } else {
-          socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, { Ret: 400, RetMsg: 'Bad register payload' }));
+            try {
+              const registered = registerArsDevice({
+                deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
+                ip: info.ip, port: info.port, username: info.username, password: info.password,
+                deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua'
+              });
+              scheduleStreamProvisioning(registered);
+            } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
+            try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
+            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
+          } else {
+            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, { Ret: 400, RetMsg: 'Bad register payload' }));
+          }
+          return;
         }
-        return;
+        if (frame.needMore) return; // valid magic, incomplete header/JSON: wait
+        // magic present but version mismatch -> fall through to legacy framing
       }
 
       // Process complete DVRIP packets (32-byte header + payload)
@@ -3180,6 +3207,12 @@ function createARSTCPServer() {
         if (!header) break;
 
         const totalLen = 32 + header.payloadLen;
+        // E-128: bogus payloadLen (e.g. 0xFFFFFFFF) must not accumulate forever
+        if (header.payloadLen > ARS_MAX_PAYLOAD || buffer.length > ARS_MAX_BUFFER) {
+          console.log('[ARS TCP] legacy frame payloadLen too large (' + header.payloadLen + '), dropping peer', clientKey);
+          socket.destroy();
+          return;
+        }
         if (buffer.length < totalLen) break; // Wait for more data
 
         // E-025: keep the raw packet: the previous code sliced `buffer` first
@@ -3305,6 +3338,11 @@ function createARSTCPServer() {
   });
   return server;
 }
+
+// ===== E-127: P0 coverage closure (residual REA report 2026-11-08) =====
+// Registered LAST so hasRoute() sees every explicit handler above and skips
+// duplicates - the catch-all below must stay the last resort.
+registerP0Coverage(app, envelope);
 
 async function start() {
   try {

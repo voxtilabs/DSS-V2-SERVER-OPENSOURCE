@@ -31,6 +31,12 @@ function startsWith(buf, magic) {
 
 // Try the RE-verified DVRIP/DHIP framing: 8B magic + version + header + JSON.
 // Returns {ok, magic, version, command, sequence, payloadLen, headerLen, payload}
+// E-128: payloadLen now comes from the HEADER (DVRIP len@0x24, DHIP len@0x28),
+// not from buf.length - jsonAt, so a fragmented frame reports its declared
+// length and the caller can wait for the complete frame.
+export const ARS_MAX_PAYLOAD = 1024 * 1024; // 1 MiB cap - anti-DoS (DevOps audit)
+export const ARS_MAX_BUFFER = 4 * 1024 * 1024; // 4 MiB accumulated cap
+
 export function parseDahuaFrame(buf) {
   for (const [magic, label] of [[MAGIC_DVRIP, 'DVRIP'], [MAGIC_DHIP, 'DHIP']]) {
     if (!startsWith(buf, magic)) continue;
@@ -39,22 +45,22 @@ export function parseDahuaFrame(buf) {
     const v2 = buf.readUInt32LE(12);
     const version = v1 === DVRIP_VERSION ? v1 : v2;
     if (version !== DVRIP_VERSION) return { ok: false, magic: label };
-    // DVRIP layout (template @0x01388648): command/length candidates are the
-    // small dwords; the JSON payload starts after the 48B header. DHIP uses a
-    // 52B header (JSON @+0x34). We locate the JSON by scanning for '{'.
+    // DVRIP layout (template @0x01388648): cmd@0x18 seq@0x1c len@0x24 flag@0x2c,
+    // 48B header, JSON @+0x30. DHIP layout (template @0x013988dc): version@0x0c,
+    // 52B header, JSON @+0x34, len@0x28 flag@0x30.
     const headerLen = label === 'DVRIP' ? 0x30 : 0x34;
-    const jsonAt = buf.indexOf(0x7b); // '{'
-    if (jsonAt === -1) {
-      return { ok: true, magic: label, version, headerLen, command: 0, sequence: 0, payloadLen: 0, payload: Buffer.alloc(0), jsonAt: -1 };
-    }
-    // header dwords: for DVRIP cmd@0x18 seq@0x1c len@0x24; for DHIP cmd@0x10
-    // (both tolerate garbage - the JSON is authoritative)
+    if (buf.length < headerLen) return { ok: false, magic: label, needMore: true };
     const command = label === 'DVRIP' ? buf.readUInt32LE(0x18) : buf.readUInt32LE(0x10);
     const sequence = label === 'DVRIP' ? buf.readUInt32LE(0x1c) : buf.readUInt32LE(0x14);
-    const payloadLen = buf.length - jsonAt;
+    const declaredLen = label === 'DVRIP' ? buf.readUInt32LE(0x24) : buf.readUInt32LE(0x28);
+    const jsonAt = buf.indexOf(0x7b); // '{'
+    if (jsonAt === -1) {
+      return { ok: true, magic: label, version, headerLen, command: 0, sequence: 0, payloadLen: declaredLen, payload: Buffer.alloc(0), jsonAt: -1, needMore: true };
+    }
     return {
       ok: true, magic: label, version, headerLen, jsonAt,
-      command: command & 0xffff, sequence, payloadLen,
+      command: command & 0xffff, sequence,
+      payloadLen: declaredLen > 0 && declaredLen <= ARS_MAX_PAYLOAD ? declaredLen : (buf.length - jsonAt),
       payload: buf.subarray(jsonAt)
     };
   }
@@ -96,17 +102,33 @@ export function parseRegisterJson(jsonBuf) {
   };
 }
 
-// Build a protocol ACK frame (magic + version + cmd|0x8000 + seq + JSON body).
+// Build a protocol ACK frame. E-128: offsets fixed to the RE header templates
+// (DevOps audit found the old code wrote cmd@0x0C/seq@0x10/len@0x14, while
+// netsdk template @0x01388648 reads cmd@0x18/seq@0x1C/len@0x24/flag@0x2C):
+//   DVRIP ACK: 48B header - magic@0, version@8, cmd|0x8000@0x18, seq@0x1C,
+//              len@0x24, flag 1@0x2C, JSON payload @0x30.
+//   DHIP ACK:  52B header - magic@0, 0@8, version@0x0C, cmd|0x8000@0x10,
+//              seq@0x14, len@0x28, flag 1@0x30, JSON payload @0x34.
 export function buildDahuaAck(magic, command, sequence, jsonBody) {
   const body = Buffer.from(typeof jsonBody === 'string' ? jsonBody : JSON.stringify(jsonBody), 'utf8');
-  const header = Buffer.alloc(0x30);
-  const magicBuf = magic === 'DHIP' ? MAGIC_DHIP : MAGIC_DVRIP;
+  const isDhip = magic === 'DHIP';
+  const header = Buffer.alloc(isDhip ? 0x34 : 0x30);
+  const magicBuf = isDhip ? MAGIC_DHIP : MAGIC_DVRIP;
   magicBuf.copy(header, 0);
-  header.writeUInt32LE(DVRIP_VERSION, 8);
-  header.writeUInt32LE((command | 0x8000) & 0xffffffff, 12);
-  header.writeUInt32LE(sequence || 0, 16);
-  header.writeUInt32LE(body.length, 20);
-  header.writeUInt32LE(1, 28);
+  if (isDhip) {
+    header.writeUInt32LE(0, 8);
+    header.writeUInt32LE(DVRIP_VERSION, 0x0c);
+    header.writeUInt32LE((command | 0x8000) & 0xffffffff, 0x10);
+    header.writeUInt32LE(sequence || 0, 0x14);
+    header.writeUInt32LE(body.length, 0x28);
+    header.writeUInt32LE(1, 0x30);
+  } else {
+    header.writeUInt32LE(DVRIP_VERSION, 8);
+    header.writeUInt32LE((command | 0x8000) & 0xffffffff, 0x18);
+    header.writeUInt32LE(sequence || 0, 0x1c);
+    header.writeUInt32LE(body.length, 0x24);
+    header.writeUInt32LE(1, 0x2c);
+  }
   return Buffer.concat([header, body]);
 }
 

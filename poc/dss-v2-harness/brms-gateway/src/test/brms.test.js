@@ -962,6 +962,62 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(String(up.data.serverVersion).startsWith('8.006'), 'serverVersion starts with client major');
   });
 
+  it('E-127 P0 coverage: residual REA literals now return rich envelopes (no 40B catch-all)', async () => {
+    const probes = [
+      ['POST', '/brms/api/v1.1/alarm/disarm', '{}'],
+      ['GET', '/brms/api/v1.1/alarmBusiness/alarmList', null],
+      ['POST', '/brms/api/v1.1/alarm/handle/batch', '{}'],
+      ['GET', '/brms/api/v1.1/config/server/time', null],
+      ['POST', '/brms/api/v1.1/config/mail/send', '{}'],
+      ['GET', '/brms/api/v1.1/omc/device/upgrade/task/page', null],
+      ['POST', '/admin/API/DMS/Ptz/OperatePresetPoint', '{"channelId":"D0238JDG3016$1$0$0","presetId":1}'],
+      ['GET', '/brms/api/v1.1/devicesManager/deviceTree', null],
+      ['POST', '/brms/api/v1.1/devicesManager/devicesGroup/001', '{}'],
+      ['GET', '/brms/api/v1.1/v1.1/device/satellite-line/list'.replace('/v1.1/v1.1', '/v1.1'), null],
+      ['POST', '/admin/API/common/request/abc', '{}'],
+      ['GET', '/brms/api/v1.1/map/vector/status', null],
+      ['GET', '/v1.1/inspect/plan/page', null]
+    ];
+    for (const [m, p, b] of probes) {
+      const r = await fetch(`${BASE}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b || undefined });
+      const j = await r.json();
+      assert.equal(j.code, 1000, `${m} ${p} code`);
+      assert.ok(j.data && (j.data.list || j.data.results || j.data.success === true || j.data.serverTime), `${m} ${p} rich data`);
+      assert.ok(JSON.stringify(j).length > 60, `${m} ${p} not catch-all (${JSON.stringify(j).length}B)`);
+    }
+    // id-variant of a trailing-slash P0 path
+    const pw = await (await fetch(`${BASE}/brms/api/v1.1/accounts/users/password/admin`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.strictEqual(pw.code, 1000);
+    assert.ok('handled' in pw.data || pw.data.success === true);
+  });
+
+  it('E-128 ARS hardening: ACK header offsets per RE template + declared payloadLen + DoS cap', async () => {
+    const { parseDahuaFrame, buildDahuaAck, ARS_MAX_PAYLOAD } = await import('../e119-ars-protocol.js');
+    // DVRIP ACK: cmd|0x8000@0x18, seq@0x1C, len@0x24, flag@0x2C, 48B header
+    const ack = buildDahuaAck('DVRIP', 0x0001, 7, { Ret: 100 });
+    assert.equal(ack.length, 0x30 + JSON.stringify({ Ret: 100 }).length);
+    assert.equal(ack.readUInt32LE(0x18) & 0xffff, 0x8001 & 0xffff);
+    assert.equal(ack.readUInt32LE(0x1c), 7);
+    assert.equal(ack.readUInt32LE(0x24), JSON.stringify({ Ret: 100 }).length);
+    assert.equal(ack.readUInt32LE(0x2c), 1);
+    // DHIP ACK: 52B header, version@0x0C, len@0x28, flag@0x30
+    const ack2 = buildDahuaAck('DHIP', 0x0001, 9, { Ret: 100 });
+    assert.equal(ack2.subarray(0, 4).toString('latin1'), 'DHIP');
+    assert.equal(ack2.readUInt32LE(0x0c), 0x19930522);
+    assert.equal(ack2.readUInt32LE(0x28), JSON.stringify({ Ret: 100 }).length);
+    assert.equal(ack2.readUInt32LE(0x30), 1);
+    // fragmented frame: header declares payloadLen, parse must report it even
+    // when only half the JSON arrived (caller waits instead of Ret:400)
+    const body = JSON.stringify({ method: 'client.register', DeviceID: 'X1' });
+    const full = Buffer.concat([(() => { const h = Buffer.alloc(0x30); Buffer.from('DVRIP\0\0\0', 'latin1').copy(h, 0); h.writeUInt32LE(0x19930522, 8); h.writeUInt32LE(1, 0x18); h.writeUInt32LE(3, 0x1c); h.writeUInt32LE(body.length, 0x24); return h; })(), Buffer.from(body)]);
+    const half = full.subarray(0, 0x30 + 5);
+    const f = parseDahuaFrame(half);
+    assert.ok(f.ok && f.payloadLen === body.length, 'declared payloadLen from header');
+    const fFull = parseDahuaFrame(full);
+    assert.equal(fFull.payloadLen, body.length);
+    assert.ok(ARS_MAX_PAYLOAD === 1024 * 1024);
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
