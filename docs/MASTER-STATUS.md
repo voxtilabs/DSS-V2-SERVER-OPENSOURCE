@@ -68,3 +68,32 @@ full/grade-device-tree, E-125 mirrors /admin/API/MTS + cierre catch-alls.
 - REA residual: inventario total de literales vs servidos (agente REA).
 - Validación pila TCP/IP + riesgos de listeners (agente DevOps).
 - Validación manual del operador con DSS Client 8.006.
+
+## 7. CIERRE DE COBERTURA (2026-11-08, agentes ses_e46bd58b8ffe2Tfmm3n6r4m2uP + ses_e46bd58b7ffe3V5NVN6XT2zaDx)
+
+**REA residual cerrado (E-127, commit cd68bdd):** los 76 literales P0 de
+DPSDK.dll que faltaban (devicesManager/*, alarmBusiness/alarmDuty/alarm-host,
+DMS/Ptz|Cruise|Device, config server/mail/ldap/key/callMode, omc upgrade,
+map raster/vector, inspect/plan, eventCenter subscribeAddress, common/request,
+api/actualGps|message, privileges/menus, accounts/users/password) ahora se
+sirven en `src/e127-p0-coverage.js` (1808 rutas sobre todas las raíces) con
+envelopes ricos. Quedan P1/P2 (storage raid, log export, tvwall operate,
+face/vehicle/parking/acs) servidos como listas vacías válidas — el cliente
+los acepta con `envelope({list:[],...})`. **No queda ningún literal P0 sin
+mapear.** Hallazgo de implementación: `hasRoute()` matchea el wildcard del
+catch-all → registro incondicional con try/catch anti-duplicado.
+
+**Pila TCP/IP auditada y endurecida (E-128/E-128b, commits cd68bdd/d37a999):**
+ACK DVRIP/DHIP con offsets RE correctos, reensamblado de frames ARS,
+caps anti-DoS (1MiB payload / 4MiB buffer), keepalive/logout en ruta binaria.
+Verificado live: frame fragmentado en 3 chunks → ACK Ret:100; payloadLen
+0xFFFFFFFF → sin OOM; health OK; live-verify 15/15; unit 75/0; e2e 12/12.
+Riesgos MEDIOS/BAJOS y pendientes de red documentados en
+`docs/LISTENER-SECURITY.md` (matriz puerto/propósito/riesgo + contrato
+binario DVRIP/DHIP). Runbook verificado en `docs/DEPLOY-RUNBOOK.md`.
+
+**Docs de cierre:** `DEPLOY-RUNBOOK.md`, `LISTENER-SECURITY.md`, además de
+los existentes (ARCHITECTURE, NETWORK_PROTOCOLS, DAHUA_COMPATIBILITY,
+P2P_RESEARCH, DPSDK_USER_MANAGEMENT_CONTRACTS, DSS_ENDPOINT_COVERAGE,
+CHECKLIST-ADD-DEVICE-ONVIF, evidence/). Estado: **cobertura RE cerrada**;
+pendiente solo la prueba manual del operador con DSS Client 8.006.
