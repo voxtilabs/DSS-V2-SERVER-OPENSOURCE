@@ -64,7 +64,7 @@ import { dirname } from 'node:path';
 // E-041: the default org of a new device is the persisted org VIGILAB (the
 // native add dialog sends orgCode "" - attempt-2 log - which must not stay
 // empty; an empty orgCode also made the org-filtered tree drop the device).
-import { DEFAULT_ORG_CODE, deviceOrgCode, orgName, getOrg } from './e041-orgs.js';
+import { DEFAULT_ORG_CODE, deviceOrgCode, orgName, getOrg, listOrgs } from './e041-orgs.js';
 
 // ---------------------------------------------------------------------------
 // 0) Tunables (no secrets, no hostnames from the lab config)
@@ -1236,23 +1236,50 @@ export function buildTimezoneListPayload() {
 export function buildRolePagePayload() {
   // E-102 native contract (DPSDK.dll FUN_1806c6280, role/page pageData[]):
   // items bind allowEdit/id/roleType/roleName/memo - ALL strings (tipo 2).
+  // E-122: the Administrator role carries the FULL grant automatically -
+  // every registered deviceCode, every channelId, the whole menu/function
+  // catalog and every org - so the Role Details dialog opens with all
+  // Device Permissions pre-checked and the camera is clickable/selected.
+  const allDevices = [...DEVICE_REGISTRY.values()];
+  const allDeviceCodes = allDevices.map((d) => d.deviceCode);
+  const allChannelIds = allChannels().map((c) => c.channelId || c.channelCode);
+  const allOrgCodes = listOrgsSafe().map((o) => o.code);
+  // menuCatalogForRole lives in e037 (which imports this module) - resolved at
+  // call time via dynamic binding, never at module-eval time.
+  const allMenuCodes = safeMenuCodes();
+  const allFunctionCodes = DSS_FUNCTIONS_AVAILABLE.map((f) => f.functionCode);
   const list = [
     { roleId: '1', id: '1', roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator',
       memo: 'Built-in administrator', roleType: '1', allowEdit: '0',
       userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1',
       default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1',
-      orgCode: '001', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' },
+      hasAuthority: '1', orgCode: '001', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00',
+      // E-122: automatic full grant
+      deviceCodes: allDeviceCodes, channelIds: allChannelIds, orgCodes: allOrgCodes,
+      menuCodes: allMenuCodes, functionCodes: allFunctionCodes,
+      deviceList: allDeviceCodes, channelList: allChannelIds },
     { roleId: '2', id: '2', roleCode: 'operator', roleName: 'Operator', description: 'Built-in operator',
       memo: 'Built-in operator', roleType: '2', allowEdit: '1',
       userCount: '1', status: '1', statusName: 'Enable', level: '2', roleLevel: '2',
       default: '0', editable: '1', deletable: '1', checked: '1', permission: '1', operate: '1',
-      orgCode: 'VIGILAB', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00' }
+      hasAuthority: '1', orgCode: 'VIGILAB', createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00',
+      deviceCodes: allDeviceCodes, channelIds: allChannelIds, orgCodes: ['VIGILAB'],
+      menuCodes: allMenuCodes, functionCodes: allFunctionCodes }
   ];
   return {
     list, results: list, items: list, roleList: list, roles: list, pageData: list, // E-103: pageData alias (native contract)
     total: String(list.length), totalCount: String(list.length),
     pageNo: '1', pageSize: '20', pageCount: '1'
   };
+}
+
+// late-bound helpers (avoid circular imports at module load)
+function listOrgsSafe() { try { return listOrgs(); } catch { return [{ code: '001' }, { code: 'VIGILAB' }]; } }
+function safeMenuCodes() {
+  // e037-native-tree.js imports this module, so we cannot import it at
+  // top-level safely; the full catalog codes are static (E-035/E-037 RE),
+  // listed here to keep buildRolePagePayload dependency-free.
+  return ['001', '002', '003', '004', '010', '002001', '002002', '002005004', '002013', '004001', '004003', '004004', '004005', '004007', '004008', '010001', '010002', '003005', '002006', '002007', '002008', '002009', '004004004'];
 }
 
 // E-099 helper: stringify every numeric value of a row (enum/boolean flags
@@ -1653,10 +1680,20 @@ export function buildResourceAllocateOrgDevicesPayload(body = {}) {
       deviceType: d.deviceType || '1', deviceCategory: d.deviceCategory || '1',
       orgCode: deviceOrgCodeOf(d), status: deviceOnlineOf(d) ? '1' : '0',
       online: deviceOnlineOf(d) ? '1' : '0',
+      // E-122: selection flags so the Role Details > Device Permissions tree
+      // renders every camera as an ENABLED, CLICKABLE checkbox (the DPSDK
+      // tree parser binds checked/hasAuthority/disabled as strings).
+      checked: '0', hasAuthority: '1', disabled: '0', selectable: '1',
+      isParent: channels.length ? '1' : '0', hasChild: channels.length ? '1' : '0',
+      id: d.deviceCode, name: d.deviceName, parentCode: deviceOrgCodeOf(d),
       channels: channels.map((c) => ({
         channelId: c.channelId || c.channelCode, channelCode: c.channelCode,
         channelName: c.channelName || d.deviceName, channelSeq: c.channelSeq ?? 0,
-        deviceCode: d.deviceCode, orgCode: deviceOrgCodeOf(d), status: '1'
+        deviceCode: d.deviceCode, orgCode: deviceOrgCodeOf(d), status: '1',
+        checked: '0', hasAuthority: '1', disabled: '0', selectable: '1',
+        isParent: '0', hasChild: '0',
+        id: c.channelId || c.channelCode, name: c.channelName || d.deviceName,
+        parentCode: d.deviceCode
       }))
     };
   });

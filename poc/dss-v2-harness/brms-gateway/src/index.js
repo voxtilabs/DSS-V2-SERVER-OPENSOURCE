@@ -2083,8 +2083,12 @@ app.get('/brms/api/v1.1/role/:roleId', async (req, reply) => {
     // level==1); synthesize so a role id of '0'/'001' still resolves.
     // E-099: synthesized role keeps the E-095 string-flag contract (a numeric
     // status crashed the User Config dialog at 21:12 UTC 2026-11-06)
+    // E-122: merge the FULL automatic grant (deviceCodes/channelIds/menuCodes/
+    // functionCodes) from the catalog so the Role Details dialog opens with
+    // every camera pre-authorized.
     || (id && !['page', 'all', 'list'].includes(id)
-      ? { roleId: id, id, roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', memo: 'Built-in administrator', roleType: '1', allowEdit: '0', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', createTime: '2026-01-01 00:00:00' }
+      ? { ...(roles.find((r) => String(r.roleId) === '1') || {}), roleId: id, id,
+          roleCode: 'admin', roleName: 'Administrator', description: 'Built-in administrator', memo: 'Built-in administrator', roleType: '1', allowEdit: '0', userCount: '1', status: '1', statusName: 'Enable', level: '1', roleLevel: '1', default: '1', editable: '0', deletable: '0', checked: '1', permission: '1', operate: '1', hasAuthority: '1', createTime: '2026-01-01 00:00:00' }
       : null);
   if (!role) return reply.code(404).send(envelope(null, 404, 'Role not found'));
   return envelope(role);
@@ -2557,20 +2561,40 @@ app.get('/brms/api/v1.0/system/time', { preHandler: auth }, async () => envelope
   ntpServer: 'pool.ntp.org'
 }));
 
-app.get('/brms/api/v1.0/version', { preHandler: auth }, async () => envelope({
-  version: 'V8.008.0000000.0',
-  buildDate: '2026-09-30',
-  buildNumber: 'R.20260930',
-  productName: 'DSS Ultimate',
-  protocolVersion: '1.0'
-}));
+// E-122: the desktop client compares its own build (V8.006...) against
+// data.version on EVERY version endpoint - a fixed V8.008 here is what makes
+// it toast "Client & server versions don't match. Please reinstall..." right
+// after login. Mirror the client's own version (same logic as
+// /videoService/version, E-021 decompile).
+app.get('/brms/api/v1.0/version', { preHandler: auth }, async (req) => {
+  const v = selectPlatformVersion(req);
+  const self = v.replace(/^V/, '').replace(/\.\d{9,10}$/, '');
+  const majorV = 'V' + ((v.match(/\d+\.\d+\.\d+\.\d+/) || [self])[0]);
+  const fix = (v.match(/R\.(\d{8})/) || [])[1] || '20261107';
+  return envelope({
+    version: self,
+    softwareVersion: majorV,
+    serverVersion: majorV,
+    buildDate: '2026-11-07',
+    buildNumber: 'R.' + fix,
+    productName: 'DSS Ultimate',
+    protocolVersion: '1.0'
+  });
+});
 
-app.get('/brms/api/v1.0/system/version', { preHandler: auth }, async () => envelope({
-  version: 'V8.008.0000000.0',
-  buildDate: '2026-09-30',
-  buildNumber: 'R.20260930',
-  productName: 'DSS Ultimate'
-}));
+app.get('/brms/api/v1.0/system/version', { preHandler: auth }, async (req) => {
+  const v = selectPlatformVersion(req);
+  const self = v.replace(/^V/, '').replace(/\.\d{9,10}$/, '');
+  const majorV = 'V' + ((v.match(/\d+\.\d+\.\d+\.\d+/) || [self])[0]);
+  return envelope({
+    version: self,
+    softwareVersion: majorV,
+    serverVersion: majorV,
+    buildDate: '2026-11-07',
+    buildNumber: 'R.20261107',
+    productName: 'DSS Ultimate'
+  });
+});
 
 app.get('/brms/api/v1.0/capability', { preHandler: auth }, async () => envelope({
   capabilities: {
