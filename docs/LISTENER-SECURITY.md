@@ -35,3 +35,29 @@ sondas live: RTSP SETUP+PLAY, ARS fragmentado/len falso). Estado tras E-128.
 3. Firewall de puertos 1883/61613/1935/8888/8889/11443/9500 (compose + host).
 4. Rotación del journal `/app/data/logs/requests-*.log` (hoy append sin tope).
 5. RTSP relay: serializar SETUP/PLAY, TTL en RTSP_SESSIONS, tope de buffers.
+
+## Contrato WebSocket local de MSG.exe (REA 2026-11-08, ses_e45812db5ffe5zhZ2PvSWoNcvF)
+- MSG.exe corre su **propio WSS local** (no es el WS del gateway): puerto libre
+  vía `queryAvailablePort` (0x1f8f08), TLS con cert autofirmado
+  `/Cache/cert.pem`+`key.pem` (0x1f8e00/0x1f8e10), anuncia el puerto al SDK con
+  `SendWebsocketPort:%d` (0x1f5b80 → DPSDK 0xc40520).
+- Handshake RFC6455 estricto: GET + `Connection: upgrade` + `Upgrade:
+  websocket` + `Sec-Websocket-Version: 13` + `Sec-WebSocket-Key` (base64
+  16B) → 101 con `Sec-WebSocket-Accept` = base64(SHA1(key+GUID
+  258EAFA5-E914-47DA-95CA-C5AB0DC85B11)). Errores propios: 405/426.
+- Protocolo de control (texto JSON):
+  `{"hub":"methods","method":"subscribe|unsubscribe","methods":[{"method":...,"name":...}]}`
+  (0x1f8978-0x1f8ab0). Push de eventos vía `NotifyNormalMsg`/`NotifyFrequentMsg`
+  (0x1f8ba8/0x1f8c10) alimentado por la cola MQ local (`mq.alarm.msg.topic.*`
+  0x1f6280-0x1f6328, per-user con el UserId de GetMqConfig).
+- El gateway solo necesita su WS propio ya existente
+  (`wss://host:1443/brms/api/v1.0/event/ws?token=...` → WELCOME).
+
+## 554 / 37777 — conclusión REA (cerrado)
+- Son **puertos outbound hacia el dispositivo**, no listeners del gateway:
+  554 = RTSP default a cámaras Dahua nativas (DPSDK 0xe75edc tabla .data,
+  PluginFactory 0x19a9bb4); 37777 = SDK nativo Dahua al dispositivo
+  (PluginFactory 0x19a9f2c). Dispositivos ONVIF no usan intercom ni rewind en
+  plataforma (`ONVIF protocol access devices do not support intercom.`
+  PluginFactory 0x1a95d20). **No se abre listener en 554 ni 37777**; el video
+  entra por el relay RTSP 9100 y el registro por ARS 9500.
