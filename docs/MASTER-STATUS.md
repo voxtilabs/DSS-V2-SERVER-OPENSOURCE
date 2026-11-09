@@ -216,3 +216,21 @@ pull-queue, alarm handle/ack + notify, post-login functions/Rights-Nodes).
 Integracion (supervisor, al recibir reportes): cablear register() en index.js,
 unit + e2e x2, deploy server, live-verify 15/15 + sondeos de flujos, commit.
 
+
+### E-135 cerrada (2026-11-09, commit 6dbd9fc)
+
+Motor RPC + raices, integrado por el supervisor en `index.js`:
+`brmRpcHandler` fallback -> `e135BuildRpcPayload` (ya no stub vacio) y
+`registerE135RpcCatalog` + `registerE135Roots` tras e127/e129 (find-my-way:
+static > param > wildcard, no pisa rutas). Envelope alineado a **code 1000**
+(constante `RPC_CODE_OK` en e135-rpc-catalog.js; tests e135 actualizados).
+Cobertura: 110 metodos P0 con claves obligatorias del gap matrix + 1.940 por
+familia (list/write/del) sobre el catalogo de 2.024; 18 raices
+(/obms /ipms /omms /emap /emapService /arms /otms /OTMS /iams /erms /ecos
+/vehicleServer /psib /faceService /alarmProcess /cfgs + versionadas
+/brms/api/v1.0|v1.1), 72 rutas GET+POST 2/3 seg. Eco de body+query. Nunca 404
+ni 40B: todo responde 200 envelope code 1000. Unit 155 tests 154/0/1; boot
+local health OK + sondeos (BRMS.Alarm.GetPageAlarmRecords, SS.Record P0,
+/arms/api label, OBMS door open, v1.1 BRMS.Storage); e2e 12/12 (server sigue
+en E-134b). E-136-B en curso (subagente `ses_e3dea7bcaffe2…`).
+
