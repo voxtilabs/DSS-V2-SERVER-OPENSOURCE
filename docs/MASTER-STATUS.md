@@ -145,3 +145,15 @@ warningType/warningLevel/standbyServerRemainDays/abnormityType/results...).
 Unit 79/0, e2e 12/12 ×2, live-verify 15/15. **REA MCP intermitente**: volvió
 y cayó de nuevo (catalogo Code Mode ya no lo lista); todo REA pendiente se
 cubre con string-pool node+fs.
+
+**Iteración 5 (2026-11-09, E-133, commit b7c6314):** cierre del reporte REA
+`ses_e4217e907` (toasts 3101 + Monitoring). (a) Rutas **POST** de
+license/warning, hot-spare/abnormity, hot-spare/info y demás warning sirven
+WARN_KEYS completo (el SPA usa POST; antes caían al fallback 40B → toast).
+(b) RPC de 3 segmentos conserva `:cls` (`BRM.Resource.Tree.GetDeviceOrg` ya
+no colapsa) + GET en la familia + handlers Tree.GetDeviceOrg→departments[] /
+Tree.GetDeviceTree→devices[] — **esto puebla Resources/Browser del Monitoring
+Center** (verificado en vivo: 3 devices incl. D0238JDG3016). (c) POST
+/admin/API/tree/deviceOrg. (d) user/group/list con eventTypes[] por fila.
+(e) disk/memory server lists con fila real (serverIp/warnDisks). Unit 80/0,
+e2e 12/12 ×2, live-verify 15/15.
