@@ -923,10 +923,24 @@ function e024CatalogPayload(method, body) {
 
 async function brmRpcHandler(req) {
   const b = req.body || {};
-  const method = b.method || `BRM.${req.params.ns}.${req.params.fn}`;
+  // E-133 (REA ses_e4217e907): 3-segment RPC keeps :cls in the method name -
+  // BRM.Resource.Tree.GetDeviceOrg must NOT collapse to BRM.Resource.GetDeviceOrg.
+  const method = b.method || (req.params.cls
+    ? `BRM.${req.params.ns}.${req.params.cls}.${req.params.fn}`
+    : `BRM.${req.params.ns}.${req.params.fn}`);
   // E-024: catalog methods over the RPC transport.
   const catalog = e024CatalogPayload(method, b);
   if (catalog) return rpcEnvelope(method, catalog);
+
+  // E-133: tree RPCs used by the Monitoring Center Resources/Browser panel
+  // (Resource.Tree.GetDeviceOrg -> departments[], BRMS.Tree.GetDeviceTree ->
+  // devices[]). Same payloads as /admin/API/tree/deviceOrg|devices.
+  if (/Resource\.Tree\.GetDeviceOrg$|Tree\.GetDeviceOrg$/.test(method) || method.endsWith('Tree.GetDeviceOrg')) {
+    return rpcEnvelope(method, buildNativeOrgTreePayload());
+  }
+  if (/Tree\.GetDeviceTree$|Tree\.GetDevices$/.test(method) || method.endsWith('Tree.GetDeviceTree')) {
+    return rpcEnvelope(method, buildNativeDeviceTreePayload((b.data || b)));
+  }
 
   if (method === 'BRM.Config.GetMqConfig') {
     // E-040/E-087: real contract - UseMqFlag=1 + MQConfig/addr "<host>:61616"
@@ -1085,23 +1099,24 @@ app.post('/admin/api/BRM/:ns/:fn', brmRpcHandler);
 app.get('/admin/API/BRM/:ns/:fn', brmRpcHandler);
 app.get('/admin/api/BRM/:ns/:fn', brmRpcHandler);
 // E-024: 3-segment BRMS RPC family (BRMS.Dictionary.GetDictionaries, ...).
-app.post('/admin/API/BRM/:ns/:cls/:fn', async (req) => {
+// E-133: GET also served on the 3-segment family (some descriptors register
+// GET, e.g. BRMS.Organization.GetOrganizations via FUN_1806c97f0).
+const rpc3seg = async (req) => {
   const b = req.body || {};
   const method = b.method || `${req.params.ns}.${req.params.cls}.${req.params.fn}`;
   const catalog = e024CatalogPayload(method, b);
   if (catalog) return rpcEnvelope(method, catalog);
   return brmRpcHandler(req);
-});
-app.post('/admin/api/BRM/:ns/:cls/:fn', async (req) => {
-  const b = req.body || {};
-  const method = b.method || `${req.params.ns}.${req.params.cls}.${req.params.fn}`;
-  const catalog = e024CatalogPayload(method, b);
-  if (catalog) return rpcEnvelope(method, catalog);
-  return brmRpcHandler(req);
-});
+};
+app.post('/admin/API/BRM/:ns/:cls/:fn', rpc3seg);
+app.post('/admin/api/BRM/:ns/:cls/:fn', rpc3seg);
+app.get('/admin/API/BRM/:ns/:cls/:fn', rpc3seg);
+app.get('/admin/api/BRM/:ns/:cls/:fn', rpc3seg);
 // Same RPC family probed under the /brms/api prefix (observed 404 E-019).
 app.post('/brms/api/BRM/:ns/:fn', brmRpcHandler);
 app.get('/brms/api/BRM/:ns/:fn', brmRpcHandler);
+app.post('/brms/api/BRM/:ns/:cls/:fn', rpc3seg);
+app.get('/brms/api/BRM/:ns/:cls/:fn', rpc3seg);
 
 // ===== E-019: post-login bootstrap unblocks (all observed 404 in live trace) =====
 
@@ -1447,14 +1462,35 @@ const WARN_KEYS = {
   warning: 0, warningHappened: '0', warningHappenedNum: '0', warningTime: '0',
   warningContent: '', warningType: '0', warningLevel: '0', warningTitle: '',
   standbyServerRemainDays: '0', abnormityType: '0', abnormity: '0', abnormal: 0,
+  expireRemainDays: '0',
   warningList: [], list: [], results: [], items: [], total: '0', totalCount: '0'
 };
+// E-133: disk/memory server lists carry one benign element with the per-row
+// keys IsKeyValid checks (serverIp/serverType/warnDisks), not just results:[]
+const DISK_ROWS = [{ serverIp: '127.0.0.1', serverName: 'BRMS-LAB', serverType: '1', status: '1', warnDisks: [], diskList: [], total: '0' }];
+const MEM_ROWS = [{ serverIp: '127.0.0.1', serverName: 'BRMS-LAB', serverType: '1', status: '1', memoryUsage: '0', totalMemory: '0', usedMemory: '0', freeMemory: '0' }];
 app.get('/brms/api/v1.1/license/warning', async () => envelope({ ...WARN_KEYS }));
 app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ ...WARN_KEYS }));
 app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ ...WARN_KEYS }));
-app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [], results: [], items: [], ...WARN_KEYS }));
-app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [], results: [], items: [], ...WARN_KEYS }));
+app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ ...WARN_KEYS, list: DISK_ROWS, results: DISK_ROWS, items: DISK_ROWS }));
+app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ ...WARN_KEYS, list: MEM_ROWS, results: MEM_ROWS, items: MEM_ROWS }));
 app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ ...WARN_KEYS }));
+// E-133 (REA ses_e4217e907): the SPA calls these with POST - the GET-only
+// registration left them on the 40B fallback {"data":{}} -> 3101 toasts.
+for (const p of [
+  '/brms/api/v1.1/license/warning',
+  '/brms/api/v1.1/license/hot-spare/abnormity',
+  '/brms/api/v1.1/license/hot-spare/info',
+  '/brms/api/v1.1/system/hot-spare/switch/warning',
+  '/brms/api/v1.1/system/only-startup-basic-service/warning',
+  '/brms/api/v1.1/system/warn/disk/list',
+  '/brms/api/v1.1/system/out/memory/server/list'
+]) {
+  app.post(p, async () => envelope({ ...WARN_KEYS, info: { ...WARN_KEYS } }));
+}
+// E-133: verb symmetry on the native tree org endpoint.
+app.post('/admin/API/tree/deviceOrg', async () => envelope(adminTreePayload()));
+app.post('/admin/api/tree/deviceOrg', async () => envelope(adminTreePayload()));
 
 // Access (OBMS) + parking (IPMS) empty modules.
 app.get('/obms/api/v1.1/acp/area/list', async () => envelope({ list: [], total: 0 }));

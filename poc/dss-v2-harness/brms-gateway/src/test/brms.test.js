@@ -1123,6 +1123,35 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-133 SPA POST warning routes + 3-seg RPC tree + eventTypes + disk/mem rows', async () => {
+    // POST variants (SPA) must not fall to the 40B fallback
+    for (const p of ['/brms/api/v1.1/license/warning', '/brms/api/v1.1/license/hot-spare/abnormity', '/brms/api/v1.1/license/hot-spare/info']) {
+      const j = await (await fetch(`${BASE}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+      assert.equal(j.code, 1000, p);
+      assert.ok('warningContent' in j.data && 'standbyServerRemainDays' in j.data && 'abnormityType' in j.data, `${p} WARN_KEYS`);
+    }
+    // 3-segment RPC keeps :cls -> tree payloads (Monitoring Resources/Browser)
+    const org = await (await fetch(`${BASE}/admin/API/BRM/Resource/Tree/GetDeviceOrg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    const orgData = org.data || org.info || org;
+    assert.ok(Array.isArray(orgData.departments) && orgData.departments.length >= 1, 'RPC GetDeviceOrg departments[]');
+    const orgGet = await (await fetch(`${BASE}/admin/API/BRM/Resource/Tree/GetDeviceOrg`)).json();
+    assert.ok((orgGet.data || orgGet.info || orgGet).departments.length >= 1, 'RPC GetDeviceOrg GET verb');
+    const dev = await (await fetch(`${BASE}/admin/API/BRM/BRMS/Tree/GetDeviceTree`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    const devData = dev.data || dev.info || dev;
+    assert.ok(Array.isArray(devData.devices) && devData.devices.length >= 1, 'RPC GetDeviceTree devices[]');
+    // POST /admin/API/tree/deviceOrg verb symmetry
+    const postOrg = await (await fetch(`${BASE}/admin/API/tree/deviceOrg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    assert.ok(postOrg.data.departments.length >= 1, 'POST deviceOrg departments[]');
+    // user/group/list rows carry eventTypes[]
+    const gl = await (await fetch(`${BASE}/brms/api/v1.1/user/group/list?keyword=`)).json();
+    assert.ok(gl.data.results.length >= 1 && Array.isArray(gl.data.results[0].eventTypes) && 'eventType' in gl.data.results[0].eventTypes[0], 'group rows eventTypes[]');
+    // disk/memory lists carry a row with per-element keys
+    const disk = await (await fetch(`${BASE}/brms/api/v1.1/system/warn/disk/list`)).json();
+    assert.ok(disk.data.results.length >= 1 && 'serverIp' in disk.data.results[0] && 'warnDisks' in disk.data.results[0], 'disk row keys');
+    const mem = await (await fetch(`${BASE}/brms/api/v1.1/system/out/memory/server/list`)).json();
+    assert.ok(mem.data.results.length >= 1 && 'serverIp' in mem.data.results[0], 'memory row keys');
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

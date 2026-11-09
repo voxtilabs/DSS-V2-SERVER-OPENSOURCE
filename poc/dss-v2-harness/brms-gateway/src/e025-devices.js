@@ -1574,6 +1574,13 @@ export function buildUserGroupListPayload(query = {}) {
   // results[] { groupName, groupId, users[] { userId, username } } - strings.
   const list = USER_GROUP_STORE.filter((g) => !kw || g.groupName.toLowerCase().includes(kw)).map((g) => ({
     ...g,
+    // E-133 (REA ses_e4217e907, APIModule 0x28e70): every group row must carry
+    // eventTypes[]{eventType,eventTypeName,sort} or IsKeyValid -> 3101 toast.
+    eventTypes: [
+      { eventType: '1', eventTypeName: 'Alarm', sort: '1' },
+      { eventType: '2', eventTypeName: 'Event', sort: '2' },
+      { eventType: '3', eventTypeName: 'System', sort: '3' }
+    ],
     users: USER_STORE.filter((u) => u.groupId === g.groupId)
       .map((u) => ({ userId: u.userId, id: u.id, username: u.username, userName: u.username, name: u.realName }))
   }));

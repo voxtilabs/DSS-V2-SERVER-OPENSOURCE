@@ -62,6 +62,7 @@ export const WARN_KEYS = {
   warning: 0, warningHappened: '0', warningHappenedNum: '0', warningTime: '0',
   warningContent: '', warningType: '0', warningLevel: '0', warningTitle: '',
   standbyServerRemainDays: '0', abnormityType: '0', abnormity: '0', abnormal: 0,
+  expireRemainDays: '0',
   warningList: []
 };
 
