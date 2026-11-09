@@ -1180,6 +1180,11 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.equal(vd.algorithm, 'MD5', 'vk algorithm');
     assert.ok(typeof vd.vkValue === 'string' && vd.vkValue.length >= 8, 'vk vkValue non-empty');
     assert.ok(vd.vkId, 'vk vkId');
+    // E-134b: alias versionado /brms/api/v1.1/BRM/Config/GetCurrentMediaVK (GET,
+    // era FALLBACK en el journal 09-11) devuelve el mismo contrato
+    const vk2 = await (await fetch(`${BASE}/brms/api/v1.1/BRM/Config/GetCurrentMediaVK?channelId=D0238JDG3016%241%240%240`)).json();
+    const vd2 = vk2.data || vk2.info || vk2;
+    assert.ok(vd2.createDate && vd2.algorithm === 'MD5' && vd2.vkValue, 'versioned BRM Config.GetCurrentMediaVK contract');
     // D2: el cliente nativo envia POST /admin/API/MTS/Video/StartVideo con el
     // envelope RPC {method, data:{channelId,...}} - el handler debe leer
     // body.data (antes channelId=undefined -> cam1).

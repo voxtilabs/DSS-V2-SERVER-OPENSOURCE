@@ -1062,7 +1062,7 @@ async function brmRpcHandler(req) {
   }
   if (method === 'BRM.Time.SyncServerTime') { const now = Math.floor(Date.now() / 1000); return rpcEnvelope(method, { time: now, serverTime: now, timezone: 'UTC' }); }
   // Media keys: Dpsdk GetMediaKey family (RestLogicalDevice.cpp).
-  if (method === 'BRM.Device.GetCurrentMediaVK') {
+  if (method === 'BRM.Device.GetCurrentMediaVK' || method === 'BRM.Config.GetCurrentMediaVK') {
     const hostIp = String((req.headers.host || '').split(':')[0] || '127.0.0.1');
     // E-134 D5 (FUN_1807512d0): el parser exige createDate/vkValue/algorithm/vkId
     const vk = crypto.createHash('md5').update('vk:' + hostIp).digest('hex');
@@ -1136,6 +1136,14 @@ app.post('/brms/api/BRM/:ns/:fn', brmRpcHandler);
 app.get('/brms/api/BRM/:ns/:fn', brmRpcHandler);
 app.post('/brms/api/BRM/:ns/:cls/:fn', rpc3seg);
 app.get('/brms/api/BRM/:ns/:cls/:fn', rpc3seg);
+// E-134b: versioned BRM RPC family under /brms/api/v1.x (live journal 09-11
+// FALLBACK: GET /brms/api/v1.1/BRM/Config/GetCurrentMediaVK?channelId=...).
+for (const v of ['v1.0', 'v1.1']) {
+  app.post(`/brms/api/${v}/BRM/:ns/:fn`, brmRpcHandler);
+  app.get(`/brms/api/${v}/BRM/:ns/:fn`, brmRpcHandler);
+  app.post(`/brms/api/${v}/BRM/:ns/:cls/:fn`, rpc3seg);
+  app.get(`/brms/api/${v}/BRM/:ns/:cls/:fn`, rpc3seg);
+}
 
 // ===== E-019: post-login bootstrap unblocks (all observed 404 in live trace) =====
 
