@@ -715,7 +715,14 @@ function selectPlatformVersion(req) {
 }
 
 app.get('/videoService/version', async (req) => {
-  const softwareVersion = selectPlatformVersion(req);
+  // E-132 (REA ses_e4217e90affe5dwaqu3eemapWC + client log proof): the login
+  // compare is data.baseVersion (sscanf "V%u.%u.%u.%u") vs the client's own
+  // V8.006.0000000.0 - UserLogical emits code 10 (toast "Client & server
+  // versions don't match...", MainFormPlugin 0x180664810) when the served
+  // baseVersion parses LOWER. selectPlatformVersion() can pick an older
+  // CLIENT_VERSIONS entry from a stray UA/query token, so this pre-login
+  // endpoint is PINNED to the deployed fleet build (8.006): never older.
+  const softwareVersion = CLIENT_VERSIONS['8.006'];
   // E-021 red-warning fix - compares decompiled from MainFormPlugin.dll
   // CLoginUI::Init (0x18015bbe0): the client regex-captures the first
   // `\d*\.\d*\.\d*\.\d*` group of its OWN process-arg version (DSS Client.exe
@@ -732,9 +739,12 @@ app.get('/videoService/version', async (req) => {
   // dialog). data.protocolVersion must be "1.0.1" (code 101) or "1.1.0"
   // (code 110); any other value degrades the client to protocol code 0.
   // data.version is the key the client compares its own build against.
+  // E-132: serverName is the field that actually selects server type 1/3/4/2
+  // (CRestLogical+0xc8, 0x2ef872); absent => type 2. Send it explicitly.
   return envelope({
     version: clientSelfVersion,
     platform: 'DSS Pro',
+    serverName: 'DSS Pro',
     softwareVersion: clientMajorV,
     protocolVersion: '1.1.0',
     copyright: 'Copyright © 2020 Zhejiang Dahua Technology Co., Ltd.',
@@ -747,8 +757,9 @@ app.get('/videoService/version', async (req) => {
 
 // Upgrade check endpoint - never forces an upgrade; mirrors the platform version
 function upgradeableHandler(req) {
-  // Same client self forms as /videoService/version (E-021 decompile).
-  const selected = selectPlatformVersion(req);
+  // E-132: pinned to the fleet build like /videoService/version (never older,
+  // never newer - equality is what the client's switch expects).
+  const selected = CLIENT_VERSIONS['8.006'];
   const clientMajorV = 'V' + ((selected.match(/\d+\.\d+\.\d+\.\d+/) || [selected.replace(/^V/, '')])[0]);
   // E-126: serverVersion must match the client's OWN literal form
   // (8.006.0000000.0.R.20250307) - an epoch-suffixed value made the client
@@ -1429,12 +1440,21 @@ app.post('/admin/API/GenericEvent/Report', async (req) => {
 // failing on [warningTime] [warningHappened] [results] [abnormityType] ->
 // 5x "The data returned by the service is abnormal" (ErrorId 3101) at every
 // login even with code=1000. All validated keys are now present as STRINGS.
-app.get('/brms/api/v1.1/license/warning', async () => envelope({ warning: 0, warningHappened: '0', warningTime: '0', warningHappenedNum: '0', warningList: [], list: [], results: [], items: [] }));
-app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ abnormal: 0, abnormityType: '0', abnormity: '0', list: [], results: [], items: [] }));
-app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ warning: 0, warningHappened: '0', warningHappenedNum: '0', warningTime: '0', list: [], results: [], items: [] }));
-app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [], results: [], items: [] }));
-app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [], results: [], items: [] }));
-app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ warning: 0, warningHappened: '0', warningTime: '0', list: [], results: [], items: [] }));
+// E-132 (client log 2026-11-08 22:16:41 IsKeyValid ERR in the live session):
+// [warningContent] + [warningType] were still missing -> ErrorId 3101 toasts.
+// Full warning key set as STRINGS on every warning/abnormity endpoint.
+const WARN_KEYS = {
+  warning: 0, warningHappened: '0', warningHappenedNum: '0', warningTime: '0',
+  warningContent: '', warningType: '0', warningLevel: '0', warningTitle: '',
+  standbyServerRemainDays: '0', abnormityType: '0', abnormity: '0', abnormal: 0,
+  warningList: [], list: [], results: [], items: [], total: '0', totalCount: '0'
+};
+app.get('/brms/api/v1.1/license/warning', async () => envelope({ ...WARN_KEYS }));
+app.get('/brms/api/v1.1/license/hot-spare/abnormity', async () => envelope({ ...WARN_KEYS }));
+app.get('/brms/api/v1.1/system/hot-spare/switch/warning', async () => envelope({ ...WARN_KEYS }));
+app.get('/brms/api/v1.1/system/warn/disk/list', async () => envelope({ list: [], results: [], items: [], ...WARN_KEYS }));
+app.get('/brms/api/v1.1/system/out/memory/server/list', async () => envelope({ list: [], results: [], items: [], ...WARN_KEYS }));
+app.get('/brms/api/v1.1/system/only-startup-basic-service/warning', async () => envelope({ ...WARN_KEYS }));
 
 // Access (OBMS) + parking (IPMS) empty modules.
 app.get('/obms/api/v1.1/acp/area/list', async () => envelope({ list: [], total: 0 }));

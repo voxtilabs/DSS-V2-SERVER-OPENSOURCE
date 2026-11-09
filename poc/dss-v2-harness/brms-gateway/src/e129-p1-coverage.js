@@ -2,7 +2,7 @@
 // 32 P1 literals (login/password-recovery, domain/license, server status,
 // alarm-host, monitor URIs, p2p) with the descriptor keys the client validates
 // (IsKeyValid) so no ErrorId 3101 toast. Same multi-root registration as E-127.
-import { urlsFor, DEFAULT_DATA } from './e127-p0-coverage.js';
+import { urlsFor, DEFAULT_DATA, WARN_KEYS } from './e127-p0-coverage.js';
 
 // base path (no leading slash, no trailing slash) -> payload data
 const P1 = {
@@ -83,12 +83,14 @@ const P1 = {
 export function registerP1Coverage(app, envelope) {
   let added = 0, skipped = 0;
   for (const [p, data] of Object.entries(P1)) {
+    // E-132: warning/abnormity P1 routes carry the full IsKeyValid key set.
+    const payload = /warning|abnormity/i.test(p) ? { ...data, ...WARN_KEYS } : data;
     for (const url of urlsFor(p)) {
       const variants = p.endsWith('/') ? [url + '/:id', url] : [url];
       for (const u of variants) {
         for (const method of ['GET', 'POST']) {
           try {
-            app[method.toLowerCase()](u, async () => envelope(data));
+            app[method.toLowerCase()](u, async () => envelope(payload));
             added++;
           } catch { skipped++; }
         }

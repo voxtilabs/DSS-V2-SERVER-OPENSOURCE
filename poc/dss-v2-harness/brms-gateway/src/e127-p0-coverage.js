@@ -56,8 +56,19 @@ export const DEFAULT_DATA = {
   total: '0', totalCount: '0', pageNo: '1', pageSize: '20', pageCount: '0'
 };
 
+// E-132: full warning key set (client IsKeyValid CommonFunc.cpp:149 fails on
+// warningContent/warningType/standbyServerRemainDays -> ErrorId 3101 toasts).
+export const WARN_KEYS = {
+  warning: 0, warningHappened: '0', warningHappenedNum: '0', warningTime: '0',
+  warningContent: '', warningType: '0', warningLevel: '0', warningTitle: '',
+  standbyServerRemainDays: '0', abnormityType: '0', abnormity: '0', abnormal: 0,
+  warningList: []
+};
+
 function customData(base) {
   const now = new Date().toISOString();
+  // E-132: any warning/abnormity route carries every validated key as string.
+  if (/warning|abnormity/i.test(base)) return { ...DEFAULT_DATA, ...WARN_KEYS };
   switch (base) {
     case 'config/server/time':
       return { ...DEFAULT_DATA, serverTime: now, time: now, timeZone: 'GMT+08:00', zoneOffset: '480', ntpEnable: '0', syncEnable: '0', dst: { enable: '0', startTime: '', endTime: '' } };

@@ -1093,6 +1093,36 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-132 version pinned to fleet 8.006 + full warning key set (kills 3101 toasts)', async () => {
+    // /videoService/version: baseVersion must be exactly V8.006.0000000.0 even
+    // if a stray User-Agent carries an older token (selectPlatformVersion bug).
+    const v = await (await fetch(`${BASE}/videoService/version`, { headers: { 'user-agent': 'whatever V8.000 8000' } })).json();
+    assert.equal(v.data.baseVersion, 'V8.006.0000000.0', 'baseVersion pinned (toast killer)');
+    assert.equal(v.data.version, '8.006.0000000.0.R.20250307', 'version literal');
+    assert.equal(v.data.softwareVersion, 'V8.006.0000000.0');
+    assert.equal(v.data.protocolVersion, '1.1.0');
+    assert.ok('serverName' in v.data, 'serverName present');
+    const up = await (await fetch(`${BASE}/brms/api/v1.1/upgrade/check/upgradeable`, { headers: { 'user-agent': 'V8.002' } })).json();
+    assert.equal(up.data.serverVersion, '8.006.0000000.0.R.20250307', 'upgradeable pinned');
+    assert.equal(up.data.upgradeable, false);
+    // warning endpoints: every IsKeyValid key present as string
+    const warnPaths = [
+      '/brms/api/v1.1/license/warning',
+      '/brms/api/v1.1/license/hot-spare/abnormity',
+      '/brms/api/v1.1/system/hot-spare/switch/warning',
+      '/brms/api/v1.1/system/only-startup-basic-service/warning',
+      '/brms/api/v1.1/system/warn/disk/list',
+      '/brms/api/v1.1/system/out/memory/server/list'
+    ];
+    const need = ['warningHappened', 'warningTime', 'warningContent', 'warningType', 'standbyServerRemainDays', 'results'];
+    for (const p of warnPaths) {
+      const j = await (await fetch(`${BASE}${p}`)).json();
+      assert.equal(j.code, 1000, p);
+      for (const k of need) assert.ok(k in j.data && typeof j.data[k] !== 'undefined', `${p} has "${k}"`);
+      if ('abnormityType' in j.data || p.includes('abnormity')) assert.ok('abnormityType' in j.data, `${p} abnormityType`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
