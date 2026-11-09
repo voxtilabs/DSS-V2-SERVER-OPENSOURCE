@@ -193,3 +193,26 @@ ausentes (otms/iams/erms/ecos/vehicleServer/psib/faceService/alarmProcess/
 arms), 5 notify topics faltantes, WS subscribe por `methods[]` pendiente,
 Event Center pull-queue pendiente, licencia/upgrade OMC/P2P reales pendientes.
 
+
+## Iteración 7 EN CURSO (2026-11-09, E-135/E-136) — "completar el motor"
+
+Gap analysis por capas cerrado (reportes `%TEMP%\opencode\rea-gap-client.md`
+52 filas con parser VA + claves obligatorias, y `rea-gap-server.md` TOP20):
+el motor completo son ~730 metodos server-only / 2.024 metodos RPC del pool
+cliente (cosechados en `brms-gateway/src/data/rpc-method-catalog.txt`), 97
+notify topics (`src/data/dpsdk-notify-topics.txt`, faltaban 5), ~15 raices de
+subsistema ausentes y 4 flujos async (WS subscribe methods[], Event Center
+pull-queue, alarm handle/ack + notify, post-login functions/Rights-Nodes).
+
+- **E-135-A** (subagente `ses_e3dea7bd2…`): router generico del catalogo RPC
+  (2.024 metodos, envelope correcto, nunca catch-all 40B) + payloads reales
+  P0 del gap-client + raices faltantes. Archivos nuevos `src/e135-*.js`.
+- **E-136-B** (subagente `ses_e3dea7bcaffe2…`): `src/e136-*.js` — alarm store
+  persistente + Event Center (BRMS.Alarm/AlarmPlan/User/Role/Rights-Nodes),
+  WS hub MSG.exe (subscribe/unsubscribe methods[] + siteSessionId +
+  NotifyNormalMsg/FrequentMsg), eventCenter pull-queue, 5 topics + routing
+  mq.*.msg.topic.<UserId> en e039.
+
+Integracion (supervisor, al recibir reportes): cablear register() en index.js,
+unit + e2e x2, deploy server, live-verify 15/15 + sondeos de flujos, commit.
+
