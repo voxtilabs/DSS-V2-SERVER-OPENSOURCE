@@ -157,3 +157,39 @@ Center** (verificado en vivo: 3 devices incl. D0238JDG3016). (c) POST
 /admin/API/tree/deviceOrg. (d) user/group/list con eventTypes[] por fila.
 (e) disk/memory server lists con fila real (serverIp/warnDisks). Unit 80/0,
 e2e 12/12 ×2, live-verify 15/15.
+
+**Iteración 6 (2026-11-09, E-134 commit c78207e + E-134b commit 9f7de36):** cierre
+de los 8 deltas del auditor REA `ses_e41b71d20`. (a) D1/D4 `buildLoginSuccess()`
+ampliado al cluster de 26 claves (secretKey/secretVector/credential/reused/
+verification/userLevel/pocId/userGroupId/unlockRemainTimes/unlockRemainTime +
+versionInfo.patchVersion) — keepalive/updateToken heredan `credential`
+(FUN_18072a2b0 / FUN_1806771a0; mataba "LoginSecTime is failed, PrivateDecrypt
+Failed"). (b) D2 los 3 handlers MTS StartVideo leen `body.data` del envelope RPC
+→ `/admin/API/MTS/Video/StartVideo` devuelve `cam_D0238JDG3016` (no cam1).
+(c) D3 compose: `9100:9100` publicado del **brms-gateway** (relay e115 traduce
+`?token=` → `/trackID=N`); MediaMTX pasa a `18554:8554` en host. Verificado en
+vivo: OPTIONS/DESCRIBE/SETUP `?token=` en :9100 → 200/200/200 (antes 400).
+(d) D5 GetCurrentMediaVK con createDate/algorithm=MD5/vkValue MD5. (e) D6 SIP:
+Via = original + `;received=` (1 branch, verificado en vivo), From/To
+textuales con host/tag originales. (f) D7 MQTT `brms.notify*` publica también
+el envelope `{method, info}` (ParseMQMsg FUN_1800306b0) además del VO plano.
+(g) E-134b: alias RPC versionado `/brms/api/v1.x/BRM/*` GET+POST 2/3 segmentos +
+`BRM.Config.GetCurrentMediaVK` (cerraba el último FALLBACK del journal 09-11).
+**MCP REA endurecido** (diagnóstico `ses_e3f9d9415` →
+`%TEMP%\opencode\rea-mcp-diagnosis.md`): causa raíz = kill masivo de node.exe
+(code 255) + timeout Ghidra 330s. Aplicado en `~/.config/opencode/opencode.jsonc`:
+`mcp.timeout`/`rea.timeout` execution 1800000, env
+REA_GHIDRA_STARTUP_TIMEOUT_MS=900000 / DECOMPILE=300 / GHIDRA_HEADLESS_MAXMEM=3G,
+`codemode:false`, permissions deny `*Get-Process node*` / `*taskkill*node*` +
+ask `*Stop-Process*`; limpiados 9,94 GB de `%TEMP%\rea-ghidra-*`. Fallback
+permanente commiteado: `tools/ghidra-fallback/` (ReaStrings/ReaDecomp/
+ReaExports .java sin BOM + rea-ghidra.ps1). Tests: unit 81/0/1, e2e 12/12 ×3
+(pre y post deploy), boot local health 200, live-verify 15/15, sondeos vivos
+D1/D2/D3/D4/D5/D6 OK. **Gap analysis por capas** (subagentes REA
+`ses_e3f22b574…` server / `ses_e3f22b577…` cliente →
+`%TEMP%\opencode\rea-gap-server.md` / `rea-gap-client.md`): ~730 métodos
+server-only sin cubrir (BRMS 468, IPMS 82, Express 78, OBMS 48…), raíces
+ausentes (otms/iams/erms/ecos/vehicleServer/psib/faceService/alarmProcess/
+arms), 5 notify topics faltantes, WS subscribe por `methods[]` pendiente,
+Event Center pull-queue pendiente, licencia/upgrade OMC/P2P reales pendientes.
+
