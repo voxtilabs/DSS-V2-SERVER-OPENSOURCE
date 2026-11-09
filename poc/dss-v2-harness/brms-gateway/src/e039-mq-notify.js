@@ -276,7 +276,11 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1
   const eventCenterSubscribe = `https://${publicHost}:${httpsPort}/videoService/eventCenter/messages/subscribe`;
   return {
     method: 'BRM.Config.GetMqConfig',
-    SessionId: '',
+    // E-131 (REA ses_e43246d72ffeu24WoOOUOjBPHv, MSG.exe FUN_1401b5f90 reads
+    // these with get<int>): SessionId/UseMqFlag/SSLEnable/UnSSLPort/
+    // ProtocolVersion MUST be ints, not strings, or the GetMqConfig parse
+    // aborts and the native client never connects to MQ.
+    SessionId: 1,
     UseMqFlag: enabled ? 1 : 0,
     MQConfig: mqAddr,
     MQType: 'stomp',
@@ -309,13 +313,20 @@ export function buildMqConfigPayload({ publicHost, amqPort = 61616, mqttPort = 1
     MQUser: 'admin',
     MQPwd: 'admin',
     UserId: MQ_USER_ID,
-    GroupId: '',
+    // E-131: 2 of the 7 MSG.exe subscriptions are GroupId-based
+    // (mq.alarm.msg.group.topic.<GroupId>, mq.event.msg.group.topic.<GroupId>)
+    // - GroupId must NOT be empty or those subscriptions resolve to a bare
+    // prefix and never match.
+    GroupId: '1',
     SSLEnable: 0,
     UnSSLPort: amqPort,
     CertificatePath: '',
-    ProtocolVersion: 'MQTT',
+    // E-131: ProtocolVersion as INT (MSG.exe get<int>), MQTT 3.1.1 = 4
+    ProtocolVersion: 4,
     httpsMode: 0,
-    TopicInfos: MQ_TOPICS.map((t) => ({ Topic: t, IsAccUser: 0 }))
+    // E-131: IsAccUser as STRING "1"/"0" (SetMQTopic compares =="1" to build
+    // "<prefix>.<Topic>"); numeric 0 made the client subscribe the bare topic.
+    TopicInfos: MQ_TOPICS.map((t) => ({ Topic: t, IsAccUser: '1' }))
   };
 }
 
@@ -560,7 +571,15 @@ export function buildAlarmEventEnvelope(event) {
     eventTime: e.eventTime || e.alarmTime, description: e.description ?? e.strMessage ?? e.eventRemark
   };
   const native = toNativeAlarmEventSafe(ev);
-  return JSON.stringify({ method: 'vms.alarm.msg', timestamp: ts, ...native });
+  // E-131 (REA ses_e43246d72ffeu24WoOOUOjBPHv): the CMQ pipe handlers
+  // (FUN_1401b2e40) require the envelope root to carry BOTH "method" AND
+  // "info" (info.disarmUserIds) - a flat payload makes the native client drop
+  // the alarm. Keep the flat fields too for the SPA/WS path.
+  return JSON.stringify({
+    method: 'vms.alarm.msg', timestamp: ts,
+    info: { ...native, disarmUserIds: [], handleUserId: '', handleUserName: '' },
+    ...native
+  });
 }
 
 // late import guard: e117/e118 may not be loaded when this module is used alone

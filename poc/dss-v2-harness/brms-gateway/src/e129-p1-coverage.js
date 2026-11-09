@@ -45,7 +45,39 @@ const P1 = {
   'resource/videoRealation': { ...DEFAULT_DATA, list: [], results: [] },
   // p2p (0x0C81358, 0x0C97C78)
   'p2p/info': { ...DEFAULT_DATA, connectType: '0', p2pStatus: '0', status: '0', serverCode: '', globalStatus: '0' },
-  'p2p/connect-type': { ...DEFAULT_DATA, connectType: '0', p2pStatus: '0', status: '0', serverCode: '', globalStatus: '0' }
+  'p2p/connect-type': { ...DEFAULT_DATA, connectType: '0', p2pStatus: '0', status: '0', serverCode: '', globalStatus: '0' },
+  // E-131 (REA compat map ses_e43246d77ffen5H55I1rNxEW1X + ses_e43246d72ffeu24WoOOUOjBPHv)
+  // license mutations
+  'license/deactivate': { ...DEFAULT_DATA, success: true, licenseKey: '', deactivated: '1' },
+  'license/export': { ...DEFAULT_DATA, success: true, fileData: '', fileName: 'license.lic', licenseFile: '' },
+  'license/reactive': { ...DEFAULT_DATA, success: true, licenseKey: '', expireTime: '' },
+  // historical playback (DPSDK SS/Playback/StartPlaybackByTime 0xc93ef8, StartPlaybackByFile 0xc93fb8)
+  // NOTE: Fastify routes are case-sensitive - the native client sends the
+  // DPSDK literal case "SS/Playback/StartPlaybackByTime".
+  'SS/Playback/StartPlaybackByTime': { ...DEFAULT_DATA, session: '', token: '', url: '', startTime: '', endTime: '', records: [] },
+  'SS/Playback/StartPlaybackByFile': { ...DEFAULT_DATA, session: '', token: '', url: '', fileId: '', records: [] },
+  'SS/Playback/StopPlayback': { ...DEFAULT_DATA, success: true },
+  'SS/Playback/Pause': { ...DEFAULT_DATA, success: true, paused: '1' },
+  'SS/Playback/Resume': { ...DEFAULT_DATA, success: true, paused: '0' },
+  // emap CRUD (DPSDK AddRasterMap / GetVectorMap / AR labels)
+  'map/label/list': { ...DEFAULT_DATA, labels: [], list: [], results: [] },
+  'map/label/add': { ...DEFAULT_DATA, success: true, labelId: '' },
+  'map/label/update': { ...DEFAULT_DATA, success: true },
+  'map/label/delete': { ...DEFAULT_DATA, success: true },
+  'map/picture/upload': { ...DEFAULT_DATA, success: true, url: '', fileId: '' },
+  'map/vector': { ...DEFAULT_DATA, mapInfo: {}, vectorData: '', list: [], results: [] },
+  // tvwall operation RPCs (DPSDK 0xc94748-0xc96920) + REST vms/tvWall*
+  'VMS/TvWall/OperateTvWall': { ...DEFAULT_DATA, ret: '0', success: true },
+  'VMS/TvWall/OpenWindows': { ...DEFAULT_DATA, ret: '0', success: true, windows: [] },
+  'VMS/TvWall/SetFishEyeParam': { ...DEFAULT_DATA, ret: '0', success: true },
+  'VMS/TvWall/AddTvWallTask': { ...DEFAULT_DATA, ret: '0', success: true, taskId: '' },
+  'VMS/TvWall/ConfigTvWallWindows': { ...DEFAULT_DATA, ret: '0', success: true },
+  'vms/tvWall': { ...DEFAULT_DATA, wallName: '', wallMode: '1', tvWallId: '', screens: [], splitCaps: [], state: '1' },
+  'vms/tvWalls': { ...DEFAULT_DATA, list: [], tvWalls: [], total: '0', totalCount: '0' },
+  'vms/tvWallTask': { ...DEFAULT_DATA, list: [], tasks: [], total: '0' },
+  'vms/tvWall/operation': { ...DEFAULT_DATA, success: true, ret: '0' },
+  'vms/tvWall/openWindows': { ...DEFAULT_DATA, success: true, windows: [] },
+  'vms/tvWall/capacity': { ...DEFAULT_DATA, maxFreeWindows: '0', windowTotal: '0', windowLayout: '', maxSplitNum: '4' }
 };
 
 export function registerP1Coverage(app, envelope) {

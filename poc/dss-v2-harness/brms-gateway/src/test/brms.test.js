@@ -1060,6 +1060,39 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(infos.length >= 86, `GetMqConfig advertises ${infos.length} topics`);
   });
 
+  it('E-131 compat-map fixes: GetMqConfig int types + IsAccUser string + alarm info envelope + playback/license/emap/tvwall', async () => {
+    // GetMqConfig: SessionId/ProtocolVersion ints, GroupId non-empty, IsAccUser "1"
+    const mq = await (await fetch(`${BASE}/admin/API/BRM/Config/GetMqConfig`, { method: 'POST', headers: { 'content-type': 'application/json', 'X-Subject-Token': token }, body: '{}' })).json();
+    const info = mq.info || mq.data || mq;
+    assert.equal(typeof info.SessionId, 'number', 'SessionId int');
+    assert.equal(typeof info.ProtocolVersion, 'number', 'ProtocolVersion int');
+    assert.ok(info.GroupId && info.GroupId !== '', 'GroupId non-empty');
+    const ti = info.TopicInfos || [];
+    assert.ok(ti.length >= 86 && ti.every((t) => typeof t.IsAccUser === 'string'), 'TopicInfos IsAccUser string');
+    // alarm envelope carries method + info (CMQ pipe contract)
+    const { buildAlarmEventEnvelope } = await import('../e039-mq-notify.js');
+    const env = JSON.parse(buildAlarmEventEnvelope({ alarmId: 'A1', channelCode: 'D0238JDG3016$1$0$0' }));
+    assert.equal(env.method, 'vms.alarm.msg');
+    assert.ok(env.info && 'disarmUserIds' in env.info, 'alarm envelope has info.disarmUserIds');
+    assert.ok(env.alarmTypeId, 'flat fields kept for SPA');
+    // new E-131 routes
+    const probes = [
+      ['POST', '/brms/api/v1.1/SS/Playback/StartPlaybackByTime', 'session'],
+      ['POST', '/brms/api/v1.1/SS/Playback/StartPlaybackByFile', 'url'],
+      ['POST', '/brms/api/v1.1/license/deactivate', 'success'],
+      ['GET', '/brms/api/v1.1/license/export', 'fileData'],
+      ['GET', '/emap/api/v1.1/map/label/list', 'labels'],
+      ['POST', '/admin/API/VMS/TvWall/OperateTvWall', 'ret'],
+      ['GET', '/brms/api/v1.1/vms/tvWall/capacity'.replace('/v1.1/vms', '/v1.1/vms'), 'maxFreeWindows']
+    ];
+    for (const [m, p, key] of probes) {
+      const r = await fetch(`${BASE}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: m === 'POST' ? '{}' : undefined });
+      const j = await r.json();
+      assert.equal(j.code, 1000, `${m} ${p}`);
+      assert.ok(key in j.data, `${m} ${p} has "${key}"`);
+    }
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');

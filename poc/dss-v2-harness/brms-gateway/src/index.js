@@ -928,7 +928,8 @@ async function brmRpcHandler(req) {
     // topic list (DPSDK.dll 0xc40450 / PROLogic.dll 0x62f7b0) + the DPSDK
     // descriptor keys password/addr/mqtt/enableTls/userName (FUN_1806755a0).
     const cfg = buildMqConfigPayload({ publicHost: PUBLIC_HOST, amqPort: AMQ_PORT, mqttPort: MQTT_PORT, enabled: MQ_ENABLE, httpsPort: HTTPS_PORT });
-    cfg.SessionId = String(b.clientPushId || cfg.SessionId);
+    // E-131: SessionId stays an INT (MSG.exe get<int>) - never String()
+    cfg.SessionId = parseInt(b.clientPushId, 10) || cfg.SessionId;
     // dual-key: legacy envelope (info/data) AND root-level spread (the DPSDK
     // response parser may bind either layer).
     return { ...rpcEnvelope(method, cfg), ...cfg };

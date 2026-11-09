@@ -89,7 +89,10 @@ export function urlsFor(p) {
   for (const b of bases) {
     const roots = /^v\d\.\d\//.test(b)
       ? ['/brms/api', '', '/admin/api', '/cfgs/api']
-      : ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '', '/v1.1', '/v1.0'];
+      : ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '', '/v1.1', '/v1.0',
+         '/emap/api', '/emap/api/v1.1', '/omms/api', '/omms/api/v1.1',
+         '/obms/api', '/obms/api/v1.1', '/ipms/api', '/ipms/api/v1.1',
+         '/arms/api', '/arms/api/v1.1', '/videoService'];
     for (const r of roots) out.add((r + '/' + b).replace(/\/+/g, '/').replace(/\/$/, '') || '/');
   }
   return [...out];
