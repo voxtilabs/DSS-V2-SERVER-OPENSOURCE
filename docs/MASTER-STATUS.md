@@ -128,3 +128,20 @@ del catálogo): para retomar análisis fino (xrefs, decompilar) hay que reinicia
 el cliente MCP; mientras tanto todo REA sigue cubierto por string-pool.
 Pendientes aceptados (no bloquean): stream nativo DPSDK, playback con índice
 real, túnel P2P, workflow alarmas, mapas emap servidos, TVWall decode.
+
+**Iteración 4 (2026-11-09, E-132, commit 078f461):** cierre de los avisos
+vivos. (a) Toast "Client & server versions don't match": REA trazó el compare
+a `data.baseVersion` de `GET /videoService/version` (UserLogical emite código
+10 si el server parsea MENOR que V8.006.0000000.0; el string vive en
+MainFormPlugin 0x180664810, único xref 0x180166cd3). El log del cliente prueba
+que con el server actual el compare pasa IGUAL, pero `selectPlatformVersion()`
+podía devolver V8.000/V8.004 por un token del UA → endpoint y `upgradeable`
+anclados al build 8.006 (nunca más viejo), `serverName` añadido. (b) Toasts
+"data abnormal" (ErrorId 3101 = IsKeyValid CommonFunc.cpp:149): la sesión viva
+mostraba `Invalid key: [warningContent] [warningType]`; todas las rutas
+warning/abnormity (explícitas + capa P0/P1 vía WARN_KEYS) devuelven el set
+completo como strings (warningHappened/warningTime/warningContent/
+warningType/warningLevel/standbyServerRemainDays/abnormityType/results...).
+Unit 79/0, e2e 12/12 ×2, live-verify 15/15. **REA MCP intermitente**: volvió
+y cayó de nuevo (catalogo Code Mode ya no lo lista); todo REA pendiente se
+cubre con string-pool node+fs.
