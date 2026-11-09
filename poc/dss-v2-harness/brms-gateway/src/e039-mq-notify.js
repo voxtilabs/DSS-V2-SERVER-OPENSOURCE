@@ -54,7 +54,13 @@ export const MQ_TOPICS = [
   'vms.notifyMenuRightChanged', 'vms.notifyNonVehicleInfo', 'vms.notifyPTZLockStatus', 'vms.notifyParkingLotVto',
   'vms.notifySwitchCenterStatus', 'vms.notifySyncTime', 'vms.notifyTvWallStatus', 'vms.notifyUserOnlineStatus',
   'vms.notifyUserOverDate', 'vms.notifyUserPassword', 'vms.notifyUserReuseStatus', 'vms.notifyUserRole',
-  'vms.notifyUserTokenExpiration', 'vms.notifyVehicleInfo'
+  'vms.notifyUserTokenExpiration', 'vms.notifyVehicleInfo',
+  // E-136: los 5 topics del pool DPSDK (97 en data/dpsdk-notify-topics.txt)
+  // que faltaban en GetMqConfig. Sin ellos el cliente rechazaba la
+  // suscripcion de esos metodos ("no subscribe is rejected") y sus notifies
+  // se quedaban sin topic.
+  'aps.notifyAlarmProcessRecord', 'erms.inspectPlan.notifyRunningStatus',
+  'face.event.notify', 'omms.alert.notifyAlerts', 'schoolattendance.event.notify'
 ];
 export const TOPIC_BATCH_ADD_DEVICES = 'brms.notifyBatchAddDevices';
 export const TOPIC_CHANNEL_STATUSES = 'brms.notifyChannelStatuses';
@@ -87,6 +93,45 @@ export function clientMqTopics(userId = '1') {
   for (const p of CLIENT_MQ_TOPIC_PREFIXES) {
     out.push(p);
     if (id) out.push(`${p}${id}`);
+  }
+  return out;
+}
+
+// E-136 (TOP20 #5 de rea-gap-server.md): el cliente real (MSG.exe) NO escucha
+// `brms.notify*` (ConsumerCount=0 ahi vivo); consume el pool `mq.*.msg.topic*`
+// con sufijo <UserId>. Para una ALARMA los topics relevantes son el de alarma,
+// el de evento, los dos "group" y el comun (MSG.exe los suscribe todos:
+// mq.common.msg.topic.<UserId> tenia ConsumerCount=1).
+// Se excluyen a proposito `mq.carsurvey.alarm.msg.topic.` y
+// `mq.vehicle.msg.topic` (alarmas de vehiculo/ANPR, no de Event Center).
+export const ALARM_MQ_TOPIC_PREFIXES = [
+  'mq.alarm.msg.topic.',
+  'mq.alarm.msg.group.topic.',
+  'mq.event.msg.topic.',
+  'mq.event.msg.group.topic.',
+  'mq.common.msg.topic'
+];
+
+/**
+ * Topics `mq.*` donde el cliente native espera las alarmas (bare + <UserId>).
+ *
+ * Los prefijos del pool de MSG.exe vienen con punto final EXCEPTO
+ * `mq.common.msg.topic` (pool 0x1f6280-0x1f6328). Ese topic sin punto se
+ * observa en vivo como `mq.common.msg.topic` (bare) y como
+ * `mq.common.msg.topic.<UserId>` (ConsumerCount=1), mientras que el resto de
+ * prefijos usan `<prefijo><UserId>` con el punto ya incluido. Para no perder
+ * ninguna de las dos grafias, los prefijos SIN punto final se publican con
+ * las dos variantes (`p+id` y `p+'.'+id`); los que ya acaban en punto usan
+ * solo `p+id` (suficiente y sin topics duplicados).
+ */
+export function alarmMqTopics(userId = '1') {
+  const id = String(userId || '');
+  const out = [];
+  for (const p of ALARM_MQ_TOPIC_PREFIXES) {
+    out.push(p);
+    if (!id) continue;
+    out.push(`${p}${id}`);
+    if (!p.endsWith('.')) out.push(`${p}.${id}`);
   }
   return out;
 }
@@ -542,9 +587,12 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
         amqPublish('brms.notifyAlarms', body);
         amqPublish('vms.alarm.msg', body);
         // the native pool MSG.exe really consumes
-        for (const t of clientMqTopics(mqUserId)) {
-          if (t.startsWith('mq.alarm.msg.topic.') || t.startsWith('mq.event.msg.topic.')) amqPublish(t, body);
-        }
+        for (const t of alarmMqTopics(mqUserId)) amqPublish(t, body);
+        // E-136: los 5 topics que faltaban en GetMqConfig. Los dos del
+        // dominio de alarma (registro de proceso de alarma y alertas OMMS)
+        // reciben el mismo sobre {method,info}.
+        amqPublish('aps.notifyAlarmProcessRecord', body);
+        amqPublish('omms.alert.notifyAlerts', body);
       } catch (err) { console.log('[E040-NOTIFY] alarm publish failed:', err.message); }
     }
     if (wsClients) {
@@ -559,7 +607,26 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
     console.log('[E117-ALARM] event published:', event.eventId || event.description || '(no id)');
   }
 
-  return { deviceEvent, alarmEvent };
+  /**
+   * E-136: publica un sobre {method,info} en un topic concreto del pool
+   * DPSDK y en los topics `mq.*.msg.topic.<UserId>` que consume el cliente
+   * native (MSG.exe). Da salida a los 5 topics que faltaban en GetMqConfig
+   * (aps/erms/face/omms/schoolattendance) sin inventar un bus nuevo.
+   */
+  function topicEvent(topic, method, info = {}) {
+    const env = (info && typeof info === 'object') ? info : {};
+    const envelope = JSON.stringify({ ...env, method: String(method || topic), info: env });
+    if (mqttPublish) mqttPublish(topic, envelope);
+    if (amqPublish) {
+      try {
+        amqPublish(topic, envelope);
+        for (const t of alarmMqTopics(mqUserId)) amqPublish(t, envelope);
+      } catch (err) { console.log('[E136-NOTIFY] topic publish failed:', err.message); }
+    }
+    return envelope;
+  }
+
+  return { deviceEvent, alarmEvent, topicEvent };
 }
 
 // E-117: alarm event envelope for the Event Center. The native client listens

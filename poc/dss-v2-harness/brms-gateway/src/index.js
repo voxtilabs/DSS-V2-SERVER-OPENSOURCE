@@ -1433,6 +1433,8 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.post(`${host}/alarm/general/event`, async (req) => {
     const ev = ingestGeneralEvent({ ...req.query, ...(req.body || {}) });
     try { NOTIFY.alarmEvent(ev); } catch { /* hub not ready */ }
+    // E-136: ingesta en el store persistente + cola del pull-queue del Event Center.
+    try { e136Ctx.e136?.eventCenter?.publishAlarm(ev); } catch { /* e136 no cableado */ }
     return envelope({ success: true, eventId: ev.eventId, alarmId: ev.eventId });
   });
   app.get(`${host}/alarm/general/event/:eventId`, async (req, reply) => {
@@ -1472,6 +1474,8 @@ app.get('/brms/api/v1.1/omms/alert/subscribe', async () => envelope(buildAlertSu
 app.post('/admin/API/GenericEvent/Report', async (req) => {
   const ev = ingestGeneralEvent(req.body || {});
   try { NOTIFY.alarmEvent(ev); } catch { /* hub not ready */ }
+  // E-136: ingesta en el store persistente + cola del pull-queue del Event Center.
+  try { e136Ctx.e136?.eventCenter?.publishAlarm(ev); } catch { /* e136 no cableado */ }
   return envelope({ success: true, eventId: ev.eventId });
 });
 
@@ -3212,6 +3216,11 @@ import { registerP1Coverage } from './e129-p1-coverage.js';
 // Envelope alineado a code 1000 (rpcEnvelope de arriba).
 import { register as registerE135RpcCatalog, buildRpcPayload as e135BuildRpcPayload } from './e135-rpc-catalog.js';
 import { register as registerE135Roots } from './e135-roots.js';
+// E-136: Event Center (stores persistentes alarmas/planes/usuarios/roles +
+// pull-queue messages/subscribe) y hub WS MSG.exe (subscribe methods[] +
+// NotifyNormalMsg/NotifyFrequentMsg).
+import { register as registerE136EventCenter } from './e136-eventcenter.js';
+import { register as registerE136WsHub } from './e136-ws-hub.js';
 function createARSTCPServer() {
   console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
   const server = net.createServer((socket) => {
@@ -3451,6 +3460,26 @@ registerP1Coverage(app, envelope);
 const e135Ctx = {};
 registerE135RpcCatalog(app, e135Ctx);
 registerE135Roots(app, e135Ctx);
+
+// E-136: el preHandler de e136-eventcenter intercepta los RPC/REST del Event
+// Center (BRMS.Alarm.*, AlarmPlan.*, User.*, Role.*, Rights/Nodes, ...) sin
+// pisar el resto (devuelve undefined cuando no es suyo). El parche de
+// WebSocketServer.prototype.on (e136-ws-hub) DEBE instalarse antes de que
+// start() cree el wss (createWebSocketServer) para que el hub reciba las
+// conexiones MSG.exe. notifyHub = NOTIFY (e039: alarmEvent/topicEvent MQ+WS).
+const e136Ctx = { envelope, notifyHub: NOTIFY, wsClients: WS_CLIENTS };
+// WS hub PRIMERO: crea el hub y lo expone en e136Ctx; luego el Event Center
+// cierra sobre notifyHub (MQ via NOTIFY) + wsHub (WS via publishNotify).
+const e136WsHub = registerE136WsHub(app, e136Ctx);
+e136Ctx.wsHub = e136WsHub;
+registerE136EventCenter(app, e136Ctx);
+// E-136: cada alarmEvent (MQ via e039) tambien se rutea al hub WS MSG.exe
+// como NotifyNormalMsg para las sesiones suscritas a brms.notifyAlarms.
+const e136OrigAlarmEvent = NOTIFY.alarmEvent;
+NOTIFY.alarmEvent = (ev) => {
+  e136OrigAlarmEvent(ev);
+  try { e136WsHub.publishNotify('brms.notifyAlarms', ev); } catch { /* best effort */ }
+};
 
 async function start() {
   try {
