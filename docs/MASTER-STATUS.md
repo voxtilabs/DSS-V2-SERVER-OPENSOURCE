@@ -115,3 +115,16 @@ ses_e45812db5ffe5zhZ2PvSWoNcvF + ses_e451b4956ffeQdao3cVAOkhYQp):**
   válido, RPC BRMS.*/DMS.*/VMS.* vía /admin/API, DVRIP/DHIP con reensamblado +
   caps + ACK offsets RE, SIP UDP/TCP/TLS, MQTT 86 topics, STOMP/OpenWire,
   WS event, RTSP relay 9100, ARS 9500. Unit 77/0, e2e 12/12, live-verify 15/15.
+
+**Iteración 3 del cierre (2026-11-09, E-131, commit 99bb907):** mapa de
+compatibilidad sobre los **1363 exports DPSDK_*** + contratos MSG.exe/play.dll/
+UserLogical (REA con MCP operativo) → `docs/COMPATIBILITY-MAP.md`. Fixes:
+GetMqConfig con tipos int (SessionId/ProtocolVersion) + GroupId + IsAccUser
+string + envelope de alarma con `info`; rutas nuevas SS/Playback,
+license/{deactivate,export,reactive}, map/label/*, VMS/TvWall/* (raíces de
+subistema emap/omms/obms/ipms/arms en urlsFor → 4294 rutas P0 + 2240 P1).
+Unit 78/0, e2e 12/12 ×2, live-verify 15/15. **REA MCP ahora CAIDO** (desapareció
+del catálogo): para retomar análisis fino (xrefs, decompilar) hay que reiniciar
+el cliente MCP; mientras tanto todo REA sigue cubierto por string-pool.
+Pendientes aceptados (no bloquean): stream nativo DPSDK, playback con índice
+real, túnel P2P, workflow alarmas, mapas emap servidos, TVWall decode.
