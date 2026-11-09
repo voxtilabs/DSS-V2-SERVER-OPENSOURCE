@@ -19,6 +19,14 @@ ssh bruno@10.10.20.120 "cd ~/dss-v2-harness && tar czf /tmp/data-backup-\$(date 
 cd poc/dss-v2-harness/brms-gateway
 node --check src/index.js                       # sintaxis
 # matar zombis locales que ocupen 11443/9100 antes del boot-test
+# PROHIBIDO `Get-Process node | Stop-Process -Force`: termina procesos gestionados
+# (p.ej. el servidor MCP `rea` de OpenCode -> "MCP server process exited with code
+# 255"). Matar solo por identidad (command line) o por puerto:
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Where-Object { $_.CommandLine -match 'brms-gateway' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Get-NetTCPConnection -LocalPort 11443,9100 -State Listen -ErrorAction SilentlyContinue |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 node --test --test-timeout=20000 src\test\*.test.js   # 75 pass / 0 fail (E-128)
 cd .. ; node --test e2e-lan-test.mjs           # 12/12 (x2-3; flake conocido: STOMP notifyChannelStatuses)
 # boot-test local + auditoria de duplicados (Fastify aborta con rutas

@@ -14,6 +14,8 @@ services:
       - "5061:5061"    # E-130: SIP over TLS (DPSDK 'tls start server' 0xc56528)
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
       - "1883:1883"  # E-039: MQTT notify broker (dual push, brms.notify* topics)
+      - "9100:9100"  # E-134 D3: RTSP relay e115 - StartVideo URLs point at host:9100;
+                     # the relay translates ?token= -> /trackID=N for MediaMTX
     volumes:
       - ../certs:/certs:ro
       # E-032: the device registry (data/devices.json) MUST survive a container
@@ -90,7 +92,8 @@ services:
       context: .
       dockerfile: MediaMTX.Dockerfile
     ports:
-      - "9100:8554"  # RTSP port (mapped to 9100 for DSS Client)
+      - "18554:8554"  # E-134 D3: host 9100 now belongs to the brms-gateway RTSP
+                      # relay; MediaMTX RTSP is exposed on 18554 for direct ops
       - "1935:1935"  # RTMP
       - "8888:8888"  # HLS
       - "8889:8889"  # WebRTC

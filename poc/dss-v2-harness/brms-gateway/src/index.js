@@ -546,11 +546,28 @@ function envelope(data, code = 1000, desc = 'Success') {
 function buildLoginSuccess(userName) {
   const token = genToken();
   TOKENS.set(token, { userName, expires: Date.now() + 86400000 });
+  // E-134 D1/D4 (REA auditor ses_e41b71d20, FUN_18072a2b0 descriptor de 26
+  // claves + FUN_1806771a0 keepalive): faltaban secretKey/secretVector/
+  // credential/reused/verification/userLevel/pocId/userGroupId/
+  // unlockRemainTimes/unlockRemainTime y versionInfo.patchVersion ->
+  // "LoginSecTime is failed, PrivateDecrypt Failed" en cada sesion.
+  const secretKey = crypto.createHash('sha256').update(token).digest('hex');
   return {
     token,
     duration: 86400,
     userId: '1',
-    versionInfo: { updateUrl: '', patchUrl: '', lastVersion: 'V' + (DEFAULT_SERVER_VERSION.match(/\d+\.\d+\.\d+\.\d+/) || [DEFAULT_SERVER_VERSION.replace(/^V/, '')])[0] },
+    userLevel: '1',
+    secretKey,
+    secretVector: crypto.randomBytes(16).toString('hex'),
+    credential: crypto.createHash('sha256').update(token + '::' + secretKey).digest('hex'),
+    reused: '0',
+    verification: '0',
+    pocId: '1',
+    userGroupId: '1',
+    pocPassword: '',
+    unlockRemainTimes: '0',
+    unlockRemainTime: '0',
+    versionInfo: { updateUrl: '', patchUrl: '', patchVersion: '20250307', lastVersion: 'V' + (DEFAULT_SERVER_VERSION.match(/\d+\.\d+\.\d+\.\d+/) || [DEFAULT_SERVER_VERSION.replace(/^V/, '')])[0] },
     lastLoginIp: '',
     loginIpChanged: '0',
     passwordRemainValidityPeriod: '0',
@@ -1047,7 +1064,9 @@ async function brmRpcHandler(req) {
   // Media keys: Dpsdk GetMediaKey family (RestLogicalDevice.cpp).
   if (method === 'BRM.Device.GetCurrentMediaVK') {
     const hostIp = String((req.headers.host || '').split(':')[0] || '127.0.0.1');
-    return rpcEnvelope(method, { vkId: '1', vkValue: '', mediaKey: '', ip: hostIp, port: 9100 });
+    // E-134 D5 (FUN_1807512d0): el parser exige createDate/vkValue/algorithm/vkId
+    const vk = crypto.createHash('md5').update('vk:' + hostIp).digest('hex');
+    return rpcEnvelope(method, { vkId: '1', vkValue: vk, mediaKey: vk, algorithm: 'MD5', createDate: String(Math.floor(Date.now() / 1000)), ip: hostIp, port: 9100 });
   }
   if (method === 'BRM.Device.GetMediaVKs') return rpcEnvelope(method, { list: [], mediaKeys: [] });
   // E-026: BRM.Device.AddDevice RPC - native Qt stack calls this to add a device.
@@ -2731,8 +2750,15 @@ app.post('/brms/api/v1.0/tree/deviceOrgs', async () => envelope(buildNativeOrgTr
 // E-034: the Live View opens the URL returned here. Every registered device
 // owns its own MediaMTX path (cam_<deviceCode>) so the stream of the camera
 // the operator picked is the stream that is played.
+// E-134 D2 (REA auditor ses_e41b71d20): el cliente nativo envia el envelope
+// RPC {method, data:{channelId,...}} en /admin/API/MTS/... - leer SIEMPRE
+// body.data si existe, si no el body plano (v1.0/v1.1).
+function mtsBody(req) {
+  const b = req.body || {};
+  return (b.data && typeof b.data === 'object' && !Array.isArray(b.data)) ? b.data : b;
+}
 app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
-  const { channelId, streamType, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, trackId } = req.body;
+  const { channelId, streamType, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, trackId } = mtsBody(req);
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
@@ -2780,7 +2806,7 @@ app.get('/brms/api/v1.1/video/live/channel/:channelId/hls', async (req, reply) =
 // returns the 40B catch-all {data:{}} which the Live View reads as "no
 // video URL" (verified live: v1.1 StartVideo -> data:{}).
 app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
-  const { channelId, streamType, trackId, extend, fakeSdp, forceSynPlay, keyCode } = req.body || {};
+  const { channelId, streamType, trackId, extend, fakeSdp, forceSynPlay, keyCode } = mtsBody(req);
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
@@ -2809,7 +2835,7 @@ app.post('/brms/api/v1.1/MTS/Video/KeepAlive', { preHandler: auth }, async () =>
 // window. Mirror the same session logic on the /admin/API base (plus the
 // Stop/KeepAlive pair and the TvWall task info RPC).
 const mtsStartVideo = async (req) => {
-  const { channelId, streamType, trackId, extend, fakeSdp, forceSynPlay, keyCode } = req.body || {};
+  const { channelId, streamType, trackId, extend, fakeSdp, forceSynPlay, keyCode } = mtsBody(req);
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
@@ -3503,23 +3529,29 @@ async function start() {
       if (!text.includes('SIP/2.0')) return;
       const lines = text.split('\r\n');
       const headers = {};
-      let callId = '', fromTag = '', via = '', cseq = '';
+      let callId = '', fromTag = '', via = '', cseq = '', rawFrom = '', rawTo = '';
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i];
         if (line.startsWith('Via:')) via = line.substring(4).trim();
-        else if (line.startsWith('From:')) { const m = line.match(/tag=([^;>]+)/); if (m) fromTag = m[1]; }
+        else if (line.startsWith('From:')) { rawFrom = line; const m = line.match(/tag=([^;>]+)/); if (m) fromTag = m[1]; }
+        else if (line.startsWith('To:')) rawTo = line;
         else if (line.startsWith('Call-ID:')) callId = line.substring(8).trim();
         else if (line.startsWith('CSeq:')) cseq = line.substring(5).trim();
       }
       const respTag = crypto.randomBytes(8).toString('hex');
-      const branch = 'z9hG4bK' + crypto.randomBytes(8).toString('hex');
+      // E-134 D6 (REA auditor, sipCallHandler_checkReq 0x180a90850): Via ya
+      // trae ;branch= -> NO duplicarlo, solo anadir received=; From/To se
+      // devuelven textuales (host y tag originales preservados).
+      const viaOut = via + `;received=${remoteAddr}`;
+      const fromOut = rawFrom || `From: <sip:8888881000@${PUBLIC_HOST}>;tag=${fromTag}`;
+      const toOut = (rawTo ? rawTo + `;tag=${respTag}` : `To: <sip:8888881000@${PUBLIC_HOST}>;tag=${respTag}`);
       let response;
       if (text.includes('REGISTER')) {
         response = [
           'SIP/2.0 200 OK',
-          `Via: ${via};received=${remoteAddr};branch=${branch}`,
-          `From: <sip:8888881000@${PUBLIC_HOST}>;tag=${fromTag}`,
-          `To: <sip:8888881000@${PUBLIC_HOST}>;tag=${respTag}`,
+          `Via: ${viaOut}`,
+          fromOut,
+          toOut,
           `Call-ID: ${callId}`,
           `CSeq: ${cseq}`,
           `Contact: <sip:8888881000@${PUBLIC_HOST}:${SIP_PORT};transport=${transport}>`,
@@ -3529,9 +3561,9 @@ async function start() {
         // OPTIONS/INVITE/MESSAGE/etc: generic 200 OK so the UA proceeds
         response = [
           'SIP/2.0 200 OK',
-          `Via: ${via};received=${remoteAddr};branch=${branch}`,
-          `From: <sip:8888881000@${PUBLIC_HOST}>;tag=${fromTag}`,
-          `To: <sip:8888881000@${PUBLIC_HOST}>;tag=${respTag}`,
+          `Via: ${viaOut}`,
+          fromOut,
+          toOut,
           `Call-ID: ${callId}`,
           `CSeq: ${cseq}`,
           'Content-Length: 0', '', ''

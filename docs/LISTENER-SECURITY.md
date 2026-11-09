@@ -7,7 +7,7 @@ sondas live: RTSP SETUP+PLAY, ARS fragmentado/len falso). Estado tras E-128.
 |---|---|---|---|
 | 11443 | HTTP API | OK sin TLS (lab) | MEDIA: `/event/push` sin auth → alarma falsificable; restringir por firewall |
 | 1443 / 9443 | HTTPS API | OK, cert lab CN/SAN 10.10.20.120 (válido a 2027-11-01) | cliente con disablePeerVerification; renovar cert antes de 2027-11 |
-| 9100 | RTSP relay → MediaMTX | OK live (SETUP+PLAY misma URL, 454KB RTP/3s) | ALTA corregida parcialmente: falta serializar SETUP/PLAY si el cliente pipelinea; CSeq se devuelve el del upstream; RTSP_SESSIONS sin TTL (replay LAN); buffers sin tope → ver e115 |
+| 9100 | RTSP relay e115 (brms-gateway) → MediaMTX | OK tras E-134 D3: compose publica `9100:9100` del **gateway** (el relay traduce `?token=` → `/trackID=N` y hace SETUP/PLAY split); MediaMTX ya NO se mapea a 9100 en host (movido a `18554:8554`) | ALTA corregida parcialmente: falta serializar SETUP/PLAY si el cliente pipelinea; CSeq se devuelve el del upstream; RTSP_SESSIONS sin TTL (replay LAN); buffers sin tope → ver e115 |
 | 9500 | ARS TCP DVRIP/DHIP | OK tras E-128 | ALTA corregida: reensamblado de frames, cap payload 1MiB / buffer 4MiB, ACK con offsets RE (DVRIP 48B cmd@0x18 seq@0x1C len@0x24 flag@0x2C; DHIP 52B version@0x0C len@0x28 flag@0x30), keepalive/logout en ruta binaria. MEDIA pendiente: `session.authenticated` no exigido (SSRF suave vía IP registrado) |
 | 5080 | SIP UDP + **TCP** (E-130) | OK: 200 OK a REGISTER/OPTIONS/INVITE con headers correctos | reflector sin rate-limit documentado; falta rate-limit |
 | 5061 | SIP over TLS (E-130, cert lab) | OK: listener arriba y publicado en compose (verificado 2026-11-08) | misma nota de rate-limit |
@@ -15,7 +15,7 @@ sondas live: RTSP SETUP+PLAY, ARS fragmentado/len falso). Estado tras E-128.
 | 61616 | OpenWire (ActiveMQ) | TLS OK con keystore lab | admin/admin en 0.0.0.0 → firewall |
 | 61613 | STOMP publisher interno | gateway publica a red docker | quitar mapeo host de 61613 (admin/admin texto plano) |
 | 1883 | MQTT notify | broker propio sin auth/TLS; el cliente nativo se suscribe (MQConfig.mqtt) | envenenamiento de árbol por LAN (vms.addDev etc.); 70 de 88 topics suscritos aún sin publicar (ver REA residual) |
-| mediamtx 8554 | RTSP interno | OK solo 127.0.0.1:9554 | — |
+| mediamtx 8554 | RTSP interno | OK; en host sale por **18554** (E-134 D3, antes 9100 que chocaba con el relay) | — |
 | mediamtx 1935/8888/8889 | RTMP/HLS/WS | **publicados en 0.0.0.0 sin auth** | ALTA: H.265 descargable sin credenciales → acotar a LAN confiable |
 | mediamtx 9997 | API control | auth solo 172.18.0.0/16 | MEDIA: si la red docker cambia de subred, provisioning muere (clase E-116) → fijar subred o 172.16.0.0/12 |
 | 554 / 37777 | RTSP/SDK nativos a dispositivos | NO hay proxy nativo | dispositivos ONVIF usan 8021/8554; documentado en NETWORK_PROTOCOLS.md |

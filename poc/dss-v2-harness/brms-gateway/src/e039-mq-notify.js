@@ -476,6 +476,13 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
     if (mqttPublish) {
       mqttPublish(TOPIC_BATCH_ADD_DEVICES, body);
       mqttPublish(TOPIC_CHANNEL_STATUSES, body);
+      // E-134 D7 (REA FUN_1800306b0 ParseMQMsg): the native MQTT parser
+      // requires {method, info} at the root - publish the same envelopes
+      // used on the AMQ bus so the libcurl-MQTT branch can consume them.
+      for (const envelope of buildClientNotifyEnvelopes(type, d)) {
+        mqttPublish(TOPIC_BATCH_ADD_DEVICES, envelope);
+        mqttPublish(TOPIC_CHANNEL_STATUSES, envelope);
+      }
     }
     // E-040: the REAL client bus - ActiveMQ topic via STOMP publisher.
     if (amqPublish) {

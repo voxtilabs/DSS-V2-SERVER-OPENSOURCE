@@ -181,8 +181,18 @@ describe('E-039/E-040 notify hub fans out to WS + MQTT + ActiveMQ topics', () =>
     assert.equal(sent[0].deviceCode, 'HUB01');
     assert.equal(sent[1].eventType, 'DEVICE_ADDED');
     assert.equal(sent[1].data.deviceCode, 'HUB01');
-    assert.deepEqual(published.map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
+    assert.deepEqual(published.slice(0, 2).map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
     assert.ok(JSON.parse(published[0][1]).deviceCode === 'HUB01');
+    // E-134 D7: after the flat VO, the same {method, info} envelopes used on
+    // the AMQ bus are also published on the MQTT topics (ParseMQMsg
+    // FUN_1800306b0 requires method+info at the root).
+    const mqttEnvelopes = published.slice(2).map((p) => JSON.parse(p[1]));
+    assert.ok(mqttEnvelopes.length >= 3, 'method envelopes on MQTT too');
+    for (const env of mqttEnvelopes) {
+      assert.ok(env.method && env.info && typeof env.info === 'object', 'MQTT envelope {method, info}');
+    }
+    assert.ok(published.slice(2).some((p) => p[0] === TOPIC_BATCH_ADD_DEVICES && p[1].includes('"method"')));
+    assert.ok(published.slice(2).some((p) => p[0] === TOPIC_CHANNEL_STATUSES && p[1].includes('"method"')));
     // E-040: same two topics on the ActiveMQ bus (destination carries /topic/)
     assert.deepEqual(amqPublished.slice(0, 2).map((p) => p[0]), [TOPIC_BATCH_ADD_DEVICES, TOPIC_CHANNEL_STATUSES]);
     assert.ok(JSON.parse(amqPublished[0][1]).deviceCode === 'HUB01');

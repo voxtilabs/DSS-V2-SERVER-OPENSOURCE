@@ -1152,6 +1152,65 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(mem.data.results.length >= 1 && 'serverIp' in mem.data.results[0], 'memory row keys');
   });
 
+  it('E-134 auditor deltas D1/D2/D4/D5: login 26-key cluster, credential en keepalive/updateToken, MediaVK, MTS envelope admin', async () => {
+    // D1: re-login completo - el descriptor FUN_18072a2b0 (26 claves) exige
+    // secretKey/secretVector/credential/reused/verification/userLevel/pocId/
+    // userGroupId/unlockRemainTimes/unlockRemainTime + versionInfo.patchVersion;
+    // sin ellas el cliente loguea "LoginSecTime is failed, PrivateDecrypt Failed".
+    const ch = await fetch(`${BASE}/brms/api/v1.0/accounts/authorize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userName: USER }) });
+    const { realm, randomKey, challengeKey } = (await ch.json()).data;
+    const sig = makeSig(USER, realm, doubleMd5(USER, PASS), randomKey);
+    const auth = await (await fetch(`${BASE}/brms/api/v1.0/accounts/authorize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userName: USER, randomKey, signature: sig, clientType: 'WINPC_V2', challengeKey }) })).json();
+    const ld = auth.data;
+    for (const k of ['secretKey', 'secretVector', 'credential', 'reused', 'verification', 'userLevel', 'pocId', 'userGroupId', 'unlockRemainTimes', 'unlockRemainTime']) {
+      assert.ok(k in ld && ld[k] !== undefined && ld[k] !== '', `login data carries "${k}" (D1)`);
+    }
+    assert.ok(ld.versionInfo && typeof ld.versionInfo.patchVersion === 'string' && ld.versionInfo.patchVersion.length >= 4, 'versionInfo.patchVersion (D1)');
+    // D4: keepalive/updateToken descriptor FUN_1806771a0 = {duration, token, credential}
+    for (const p of ['/brms/api/v1.0/accounts/keepalive', '/brms/api/v1.0/accounts/updateToken', '/brms/api/v1.1/accounts/keepalive']) {
+      const j = await (await fetch(`${BASE}${p}`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' })).json();
+      const kd = j.data || j;
+      assert.ok(typeof kd.credential === 'string' && kd.credential.length >= 16, `${p} carries credential (D4)`);
+      assert.ok(kd.secretKey && kd.secretVector, `${p} carries secretKey/secretVector (D4)`);
+    }
+    // D5: GetCurrentMediaVK - FUN_1807512d0 exige createDate/vkValue/algorithm/vkId
+    const vk = await (await fetch(`${BASE}/admin/API/BRM/Device/GetCurrentMediaVK`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json();
+    const vd = vk.data || vk.info || vk;
+    assert.ok(vd.createDate, 'vk createDate present');
+    assert.equal(vd.algorithm, 'MD5', 'vk algorithm');
+    assert.ok(typeof vd.vkValue === 'string' && vd.vkValue.length >= 8, 'vk vkValue non-empty');
+    assert.ok(vd.vkId, 'vk vkId');
+    // D2: el cliente nativo envia POST /admin/API/MTS/Video/StartVideo con el
+    // envelope RPC {method, data:{channelId,...}} - el handler debe leer
+    // body.data (antes channelId=undefined -> cam1).
+    const add = await (await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceName: 'E134-CAM', deviceIp: '127.0.0.84', devicePort: 37777, protocolType: '99', channelCount: 1, addType: '1' })
+    })).json();
+    const code = add.data.deviceCode || add.data.device?.deviceCode;
+    assert.ok(code, 'device created for D2');
+    const sv = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
+      method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientType: 'WINPC_V2', clientMac: 'AABBCCDDEEFF', project: 'PSDK', method: 'MTS.Video.StartVideo', data: { enableRtsps: 0, dataType: '2', streamType: '1', channelId: `${code}$1$0$0`, trackId: '' } })
+    })).json();
+    const sd = sv.data || sv;
+    assert.ok(sd.url && sd.url.includes(`cam_${code}`), `admin envelope StartVideo resolves cam_${code}, got ${sd.url}`);
+    assert.ok(!sd.url.includes('undefined') && !sd.url.includes('/cam1?'), `no cam1/undefined fallback, got ${sd.url}`);
+    // v1.0/v1.1 con envelope tambien
+    for (const host of ['/brms/api/v1.0', '/brms/api/v1.1']) {
+      const sv2 = await (await fetch(`${BASE}${host}/MTS/Video/StartVideo`, {
+        method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method: 'MTS.Video.StartVideo', data: { channelId: `${code}$1$0$0`, streamType: '1' } })
+      })).json();
+      const d2 = sv2.data || sv2;
+      assert.ok(d2.url && d2.url.includes(`cam_${code}`), `${host} envelope StartVideo cam_${code}, got ${d2.url}`);
+    }
+    await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [code] })
+    });
+  });
+
   it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
     assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
