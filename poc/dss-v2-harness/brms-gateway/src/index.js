@@ -1107,8 +1107,9 @@ async function brmRpcHandler(req) {
       deviceVo: created
     });
   }
-  // Everything else in the BRM.* family: benign success with empty data.
-  return rpcEnvelope(method, {});
+  // E-135: motor del catalogo RPC - payload por familia/P0 para los ~2.024
+  // metodos del pool del cliente (ya no cae al stub vacio; code 1000).
+  return rpcEnvelope(method, e135BuildRpcPayload(method, { ...(req.query || {}), ...b }));
 }
 
 app.post('/admin/API/BRM/:ns/:fn', brmRpcHandler);
@@ -3206,6 +3207,11 @@ function createWebSocketServer(httpsServer) {
 import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson, ARS_MAX_PAYLOAD, ARS_MAX_BUFFER } from './e119-ars-protocol.js';
 import { registerP0Coverage } from './e127-p0-coverage.js';
 import { registerP1Coverage } from './e129-p1-coverage.js';
+// E-135: motor del catalogo RPC (2.024 metodos cosechados del string-pool del
+// cliente en src/data/rpc-method-catalog.txt) + raices de subsistema faltantes.
+// Envelope alineado a code 1000 (rpcEnvelope de arriba).
+import { register as registerE135RpcCatalog, buildRpcPayload as e135BuildRpcPayload } from './e135-rpc-catalog.js';
+import { register as registerE135Roots } from './e135-roots.js';
 function createARSTCPServer() {
   console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
   const server = net.createServer((socket) => {
@@ -3437,6 +3443,14 @@ function createARSTCPServer() {
 // duplicates - the catch-all below must stay the last resort.
 registerP0Coverage(app, envelope);
 registerP1Coverage(app, envelope);
+
+// E-135: registrar DESPUES de todos los handlers explicitos (find-my-way da
+// prioridad static > param > wildcard, asi que no pisa rutas existentes).
+// Motor RPC BRMS.* del catalogo + 18 raices de subsistema con dispatcher
+// generico al catalogo. Ninguna ruta del catalogo vuelve a caer en 40B.
+const e135Ctx = {};
+registerE135RpcCatalog(app, e135Ctx);
+registerE135Roots(app, e135Ctx);
 
 async function start() {
   try {
