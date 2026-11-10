@@ -314,3 +314,44 @@ channels 10 con pId=deviceCode, 	ree/deviceOrg departments 001 + VIGILAB
 001 -> VIGILAB -> D0238JDG3016 -> canal D0238JDG3016\\\, y que
 MoidfyDevStatus updateStatus pase a 1 (topic plano consumido por MSG.exe via
 OpenWire 61616 / MQTT 1883).
+
+### Iteracion 9 cerrada (2026-11-10, commit 46d7354 E-138)
+
+**REA ses_e3c071651ffeoKjtc23nzZtAEO (DPSDK.dll, sha256 ce43c8b7...) entrego el
+contrato exacto** -> %TEMP%\opencode\rea-grade-tree.md:
+- Arbol de grado (esquema FUN_1806d33a0 @0x1806d33a0): raiz dentro de data
+  con organizations[], devices[], channels[] (arrays, plano canonico) +
+  devices[].channels[] anidado redundante. Enlace hijo->padre = **pId**.
+  devices[].status y channels[].status son **STRING** (typeCode=2):
+  solo "status":"1" vincula; el numero 1 se descarta en silencio. online
+  NO existe en este contrato (es clave de usuarios).
+- Notify MQ (ParseMQMsg FUN_1800306b0 exige {method, info} en raiz):
+  ms.notifyDeviceStatus -> parser FUN_180360120 lee info{deviceCode,
+  onlineStatus INT (1->1, 2->2, resto->0), offlineReason, syncChannelStauts
+  (typo SDK)}; ms.notifyDevChannelStatus y rms.notifyChannelStatuses
+  -> handler FUN_1800312e0 / parser FUN_180360450 leen info objeto o array
+  de {channelId, onlineStatus INT}. Claves viejas status/online/
+  deviceStatus NO existen ahi -> se ignoraban => onlineStatus ausente =>
+  normaliza a 0 => MoidfyDevStatus updateStatus=0 (ese log es del cliente UI,
+  no de DPSDK: 0 matches en DPSDK.dll).
+- DPSDK NO filtra nodos offline del arbol (copia verbatim); solo
+  ilterEmptyDevice (server-side) quita devices sin canales.
+
+**E-138 (commit 46d7354, 2 archivos, +57/-16)**: uildDeviceStatusNotifyEnvelopes
+ahora emite el contrato exacto: ms.notifyDeviceStatus con
+{deviceCode, onlineStatus:1 (int), offlineReason:"", syncChannelStauts:1} +
+claves legacy; ms.notifyDevChannelStatus un envelope por canal
+{channelId, onlineStatus:1}; rms.notifyChannelStatuses con info como
+ARRAY de todos los canales. El arbol de grado ya servia status:"1" string y
+pId (e124/e037 verificados).
+
+**Verificacion**: unit 224/0/1; e2e 12/12 x2; deploy server health 1443 HTTP
+200; live-verify 15/15; captura STOMP 61613 en vivo muestra en
+/topic/brms.notifyChannelStatuses los envelopes nuevos
+(onlineStatus:1) y en el pool mq.*.msg.topic.* (donde MSG.exe escucha).
+
+**Pendiente**: retest del cliente real (updateStatus deberia pasar a 1) y
+shape del contrato paged 	ree/orgs|devices|channels (FUN_18071dac0:
+{totalCount, results[]} con online string, parentId, isParent,
+
+odeType) - REA MainFormPlugin en curso (ses_e3c06c344ffennJpZfYkJQlPBF).
