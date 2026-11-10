@@ -275,3 +275,42 @@ brms.test.js:1451); e2e **12/12 x2** post-deploy contra el server.
 **Pendiente D8**: probar el DSS Client real (toasts 3101) con sesion viva
 post E-132..E-136 - tabla de evidencias flujo a flujo en el cierre.
 
+
+### Iteracion 8 cerrada (2026-11-10, commit 0bf9a37 E-137)
+
+**Diagnostico del bug Resources**: Monitoring Center -> Resources mostraba solo
+el nodo estatico "Browser". Journal server ventana 02:17:40-02:19:30Z: el
+cliente pedia GET /admin/API/tree/deviceOrg, POST /admin/API/tree/devices,
+GET /brms/api/v1.1/tree/full/grade-device-tree (200, 526KB) - todo 200, pero
+grade-device-tree servia organizations roots-only, asi que el parser nativo
+(parentCode/pId) no podia montar VIGILAB bajo 001 y el arbol colapsaba.
+Logs cliente: DPSDK_GetAreaTree/GetDepartmentTree success en login,
+Open Widget[ResourceManager] OK, canal presente en modelo
+(OPEN_VIDEO strChannelId[D0238JDG3016\\\]) pero MoidfyDevStatus
+updateStatus=0 cada minuto (devices offline en el cliente aunque el server
+los tiene online:1).
+
+**E-137 (commit 0bf9a37, 3 archivos, +20/-2)**:
+- e124-grade-tree.js: uildFullGradeDeviceTreePayload sirve
+  organizations/departments PLANOS (todos los orgs linkeados por pId) y
+  conserva ademas los hijos anidados bajo la key organizations de cada nodo
+  (doble contrato: parser nativo por parentCode + renderer de dialogos por
+  hijos anidados).
+- e039-mq-notify.js: los eventos DEVICE_STATUS publican los envelopes
+  {method, info} de uildDeviceStatusNotifyEnvelopes tambien al topic plano
+  rms.notifyChannelStatuses (MQTT y AMQ/STOMP), no solo a
+  mq.*.msg.topic.<UserId>.
+- rms.test.js: asercion nueva - VIGILAB presente como org top-level plano.
+
+**Verificacion**: unit **225 tests, 224 pass / 0 fail / 1 skip**; e2e **12/12
+x2**; deploy en server via docker compose up -d --build brms-gateway, health
+https://127.0.0.1:1443/health HTTP 200; live-verify dentro del contenedor
+**15/15**; probe en vivo confirma organizations.length=2 (001 pId=0,
+VIGILAB pId=001) plano + anidado, devices 3 planos con channels,
+channels 10 con pId=deviceCode, 	ree/deviceOrg departments 001 + VIGILAB
+(device 3, channel 10). RTSP cam_D0238JDG3016 DESCRIBE 200 OK.
+
+**Pendiente**: que el usuario reabra Monitoring Center -> Resources y confirme
+001 -> VIGILAB -> D0238JDG3016 -> canal D0238JDG3016\\\, y que
+MoidfyDevStatus updateStatus pase a 1 (topic plano consumido por MSG.exe via
+OpenWire 61616 / MQTT 1883).
