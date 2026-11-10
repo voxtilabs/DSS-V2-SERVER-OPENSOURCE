@@ -188,14 +188,23 @@ export function buildClientNotifyEnvelope(type, device) {
 //   vms.notifyDeviceStatus / vms.notifyDevChannelStatus (plus the flat
 //   brms.notifyChannelStatuses). Typo warning: the DPSDK string pool spells the
 //   deviceStatus variant "notifyDeviceStatus" exactly (not "notifyDeviceState").
-//   The parser keys are NOT fully RE'd (no Ghidra decomp for its handler), so
-//   info is a defensive superset: deviceCode/deviceId + status "1"/"0" STRING
-//   (E-095: strict === against "1"), online, statusName and a channel array
-//   covering both notifyDevChannelStatus shapes.
+// E-138 (REA ses_e3c071651ffeoKjtc23nzZtAEO -> rea-grade-tree.md Q3): the MQ
+// parsers read EXACTLY these keys from `info` (ParseMQMsg FUN_1800306b0 exige
+// {method, info} en la raiz):
+//   vms.notifyDeviceStatus  -> parser FUN_180360120: info{ deviceCode (string,
+//     OBLIGATORIA), onlineStatus (INT: 1->1, 2->2, resto->0), offlineReason
+//     (string), syncChannelStauts (int, typo del SDK tal cual) }
+//   vms.notifyDevChannelStatus / brms.notifyChannelStatuses -> handler
+//     FUN_1800312e0 / parser FUN_180360450: info objeto O array de objetos,
+//     cada uno { channelId (string, OBLIGATORIA), onlineStatus (int 1/2) }
+//   onlineStatus admite numero JSON (1) o cadena "1" (atoi en FUN_180761ae0).
+//   ANTES se enviaban status/online/deviceStatus: claves que el parser IGNORA
+//   => onlineStatus ausente => normaliza a 0 => MoidfyDevStatus updateStatus=0.
 export function buildDeviceStatusNotifyEnvelopes(device, online = true) {
   const d = typeof device === 'object' ? device : { deviceCode: String(device) };
   const code = d.deviceCode || '';
   if (!code) return [];
+  const onlineStatus = online ? 1 : 0; // E-138: int; 1->1, 2->2, resto->0
   const status = online ? '1' : '0';
   const statusName = online ? 'Online' : 'Offline';
   const orgCode = d.orgCode || '';
@@ -205,16 +214,31 @@ export function buildDeviceStatusNotifyEnvelopes(device, online = true) {
     channelId, channelCode: channelId, deviceCode: code, status, online: status,
     statusName, channelStatus: status
   }));
-  const statusInfo = {
-    deviceCode: code, deviceId: code, deviceName: d.deviceName || code,
+  // E-138: legacy superset keys are KEPT (the parser ignores unknown keys and
+  // the web SPA still reads them); the contract keys are added on top.
+  const deviceInfo = {
+    deviceCode: code,                       // FUN_180360120: obligatoria
+    onlineStatus,                          // int 1/2; otro -> 0
+    offlineReason: online ? '' : 'offline',
+    syncChannelStauts: online ? 1 : 0,     // typo del SDK, verbatim
+    deviceId: code, deviceName: d.deviceName || code,
     orgCode, status, online: status, statusName,
     deviceStatus: status, statusValue: status, time: new Date().toISOString(),
     channels: channelList
   };
+  const channelInfos = channelCodes.map((channelId) => ({
+    channelId,                             // FUN_180360450: obligatoria
+    onlineStatus,                          // int 1/2
+    channelCode: channelId, deviceCode: code, status, online: status,
+    statusName, channelStatus: status
+  }));
   const env = (method, info) => JSON.stringify({ method, info });
   return [
-    env('vms.notifyDeviceStatus', { ...statusInfo, info: statusInfo }),
-    env('vms.notifyDevChannelStatus', { ...statusInfo, info: statusInfo })
+    env('vms.notifyDeviceStatus', deviceInfo),
+    // per-channel object envelopes (el parser acepta objeto o array)
+    ...channelCodes.map((_, i) => env('vms.notifyDevChannelStatus', channelInfos[i])),
+    // topic plano: forma array con todos los canales (mismo handler FUN_1800312e0)
+    env('brms.notifyChannelStatuses', channelInfos)
   ];
 }
 

@@ -1219,18 +1219,35 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     });
   });
 
-  it('E-097 notifyDeviceStatus push (no manual refresh)', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
+  it('E-097/E-138 notifyDeviceStatus push (no manual refresh) - contrato exacto REA', async () => {    const { buildDeviceStatusNotifyEnvelopes } = await import('../e039-mq-notify.js');
     const envs = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'D0238JDG3016', orgCode: 'VIGILAB', deviceName: 'cam', channelNum: 1 }, true);
-    assert.equal(envs.length, 2, 'device status + dev channel status envelopes');
+    // E-138: device envelope + one per channel + flat brms.notifyChannelStatuses (array form)
+    assert.equal(envs.length, 3, 'device + per-channel + flat topic envelopes');
+    const byMethod = new Map();
     for (const raw of envs) {
       const env = JSON.parse(raw);
-      assert.ok(env.method === 'vms.notifyDeviceStatus' || env.method === 'vms.notifyDevChannelStatus', 'method from DPSDK table @0xc71358');
-      const info = env.info.info || env.info;
-      assert.strictEqual(info.status, '1', 'status STRING "1"');
-      assert.strictEqual(info.online, '1');
-      assert.equal(info.deviceCode, 'D0238JDG3016');
-      assert.ok(Array.isArray(info.channels) && info.channels.length >= 1, 'channel list present');
+      byMethod.set(env.method, env);
+      assert.ok(['vms.notifyDeviceStatus', 'vms.notifyDevChannelStatus', 'brms.notifyChannelStatuses'].includes(env.method), 'method from DPSDK table @0xc71358');
     }
+    // vms.notifyDeviceStatus -> parser FUN_180360120: deviceCode + onlineStatus(int) + offlineReason + syncChannelStauts (typo)
+    const dev = byMethod.get('vms.notifyDeviceStatus');
+    assert.equal(dev.info.deviceCode, 'D0238JDG3016', 'deviceCode obligatoria');
+    assert.strictEqual(dev.info.onlineStatus, 1, 'onlineStatus INT 1 (1->1, 2->2, resto->0)');
+    assert.ok('offlineReason' in dev.info && 'syncChannelStauts' in dev.info, 'offlineReason + syncChannelStauts (typo SDK) presentes');
+    assert.strictEqual(dev.info.status, '1', 'legacy status STRING "1" kept for SPA');
+    assert.ok(Array.isArray(dev.info.channels) && dev.info.channels.length >= 1, 'channel list present');
+    // vms.notifyDevChannelStatus -> parser FUN_180360450: channelId + onlineStatus(int)
+    const ch = byMethod.get('vms.notifyDevChannelStatus');
+    assert.equal(ch.info.channelId, 'D0238JDG3016$1$0$0', 'channelId obligatoria');
+    assert.strictEqual(ch.info.onlineStatus, 1, 'channel onlineStatus INT 1');
+    // brms.notifyChannelStatuses -> misma handler, info como ARRAY de {channelId, onlineStatus}
+    const flat = byMethod.get('brms.notifyChannelStatuses');
+    assert.ok(Array.isArray(flat.info), 'flat topic info en forma array');
+    assert.equal(flat.info[0].channelId, 'D0238JDG3016$1$0$0');
+    assert.strictEqual(flat.info[0].onlineStatus, 1);
+    // offline case normalizes to 0
+    const off = buildDeviceStatusNotifyEnvelopes({ deviceCode: 'X1', channelNum: 1 }, false);
+    assert.strictEqual(JSON.parse(off[0]).info.onlineStatus, 0, 'offline -> onlineStatus 0');
   });
 
   it('E-025 network / timezone / role / function / subsystem / omms alert types', async () => {
