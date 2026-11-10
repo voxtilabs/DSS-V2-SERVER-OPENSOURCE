@@ -234,3 +234,44 @@ local health OK + sondeos (BRMS.Alarm.GetPageAlarmRecords, SS.Record P0,
 /arms/api label, OBMS door open, v1.1 BRMS.Storage); e2e 12/12 (server sigue
 en E-134b). E-136-B en curso (subagente `ses_e3dea7bcaffe2…`).
 
+
+### Iteracion 7 cerrada (2026-11-09/10, commits 6dbd9fc E-135 + 154797f E-136)
+
+**E-136 (commit 154797f, 10 archivos, +3.125 lineas)**: 4 flujos async del
+cliente nativo, cableados por el supervisor en `index.js`:
+- **WS hub MSG.exe** (`e136-ws-hub.js`): parche `WebSocketServer.prototype.on`
+  instalado ANTES de `createWebSocketServer` (start()); frames texto
+  `subscribe`/`unsubscribe` con `methods[]`+`siteSessionId` -> ACK
+  `{type:'ACK',code:1000}`; push `NotifyNormalMsg`/`NotifyFrequentMsg`.
+- **Event Center** (`e136-eventcenter.js`): 23 RPC `BRMS.*` + 14 REST
+  (Rights/Nodes, user/self/password, ...) via preHandler + 14 rutas nuevas;
+  pull-queue `eventCenter/messages/subscribe` (msgId/seq, initMessageId);
+  stores persistentes `data/{alarms,alarm-plans,users,roles}.json`.
+- **Alarmas**: ingesta (`/brms/api/v1.x/alarm/general/event`,
+  `/admin/API/GenericEvent/Report`) -> store + cola + NOTIFY.alarmEvent;
+  `HandleAlarm`/`BatchHandleAlarms`/`DisarmAlarm` matchean por cualquier id
+  (findIndex robusto, fix verificado en vivo: records=1); cada alarmEvent se
+  rutea ademas al hub WS (`brms.notifyAlarms`).
+- **e039**: 93 topics (+5), `alarmMqTopics(userId)` publica
+  `mq.*.msg.topic.<UserId>` via STOMP 61613 con `amq-msg-type:text`
+  (TextMessage para el consumer OpenWire de MSG.exe).
+
+**Verificacion en vivo server (10.10.20.120, post `docker compose up -d --build`)**:
+health 200 en 11443 y 1443; logs `[E135-RPC] catalog=2024`,
+`[E135-ROOTS] roots=18 routes=72`, `[E136-WS] hub listo (ws-patch=true)`,
+`[E136-EVENTCENTER] rpc=23 rest=14 routes added=14`; **live-verify 15/15**.
+Probe flujo completo: login 2-step OK -> WS WELCOME+subscribe ACK OK ->
+ingesta alarma OK -> **WS NotifyNormalMsg OK** -> eventCenter pull #1
+msgId=1 messages=1 -> HandleAlarm records=1 -> pull #2 msgId=2 messages=1;
+E-135 en server OK (BRMS.Storage code 1000, `/arms/api/BRM/label/addLabel`
+echo query OK); Users/Roles/Rights-Nodes OK. **STOMP probe crudo 61613**:
+5/5 topics (`brms.notifyAlarms`, `mq.alarm.msg.topic.1`, `mq.event.msg.topic.1`,
+`mq.common.msg.topic.1`, `aps.notifyAlarmProcessRecord`) reciben MESSAGE con
+envelope nativo `{method:"vms.alarm.msg", timestamp, info:{...}, ...VO}`.
+**MQTT 1883** (dual lab): `brms.notifyAlarms` mismo envelope dual.
+Tests: unit **225 tests, 224 pass / 0 fail / 1 skip** (skip preexistente
+brms.test.js:1451); e2e **12/12 x2** post-deploy contra el server.
+
+**Pendiente D8**: probar el DSS Client real (toasts 3101) con sesion viva
+post E-132..E-136 - tabla de evidencias flujo a flujo en el cierre.
+
