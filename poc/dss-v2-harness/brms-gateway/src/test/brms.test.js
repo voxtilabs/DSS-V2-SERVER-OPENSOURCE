@@ -940,6 +940,9 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(root.pId, '0', 'org pId = parentCode');
     const vig = root.organizations.find((o) => o.orgCode === 'VIGILAB');
     assert.strictEqual(vig.pId, '001', 'child org pId = 001');
+    // E-137: top-level organizations[] is FLAT (every org present, linked by
+    // pId) so the native parentCode parser can mount VIGILAB under 001.
+    assert.ok(g.data.organizations.some((o) => o.orgCode === 'VIGILAB'), 'VIGILAB also present as a flat top-level org node');
     const dev = (vig.devices[0] || g.data.devices[0]);
     assert.ok(dev && dev.pId, 'device pId present');
     assert.ok(dev.channels[0].pId === dev.deviceCode, 'channel pId = deviceCode');

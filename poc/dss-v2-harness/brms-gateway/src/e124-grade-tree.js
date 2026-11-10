@@ -120,8 +120,12 @@ export function buildFullGradeDeviceTreePayload(query = {}) {
   const adminChecked = roleId === '1' || roleType === 'administrator' || roleType === '1' || query.admin === '1';
   const allDevices = [...DEVICE_REGISTRY.values()];
   const orgs = listOrgs();
-  const roots = orgs.filter((o) => !orgs.some((p) => p.code === o.parentCode) || o.parentCode === '0');
-  const organizations = (roots.length ? roots : orgs).map((o) => orgNode(o, allDevices, allDevices, adminChecked));
+  // E-137: serve organizations/departments FLAT (every org, linked by pId)
+  // AND keep the nested `organizations` children inside each node. The native
+  // parser builds the hierarchy from parentCode over the flat list, while the
+  // role-dialog renderer walks nested children; serving roots-only collapsed
+  // the Monitoring Center Resources tree to the static "Browser" node.
+  const organizations = orgs.map((o) => orgNode(o, allDevices, allDevices, adminChecked));
   const flatDevices = allDevices.map((d) => deviceNode(d, adminChecked));
   const flatChannels = [];
   for (const d of allDevices) {

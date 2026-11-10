@@ -528,6 +528,14 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
         mqttPublish(TOPIC_BATCH_ADD_DEVICES, envelope);
         mqttPublish(TOPIC_CHANNEL_STATUSES, envelope);
       }
+      // E-137: DEVICE_STATUS must also reach the flat brms.notifyChannelStatuses
+      // topic as a {method, info} envelope (the client parser expects method+info,
+      // not a bare device VO) - otherwise the native rows stay offline.
+      if (type === 'DEVICE_STATUS') {
+        for (const envelope of buildDeviceStatusNotifyEnvelopes(d, true)) {
+          mqttPublish(TOPIC_CHANNEL_STATUSES, envelope);
+        }
+      }
     }
     // E-040: the REAL client bus - ActiveMQ topic via STOMP publisher.
     if (amqPublish) {
@@ -549,6 +557,9 @@ export function createNotifyHub({ wsClients, mqttPublish, amqPublish, mqUserId =
         // is emitted by scheduleStreamProvisioning after every add funnel.
         if (type === 'DEVICE_STATUS') {
           for (const envelope of buildDeviceStatusNotifyEnvelopes(d, true)) {
+            // E-137: publish the method envelope to the flat status topic too,
+            // not only to the mq.*.msg.topic.<UserId> pool.
+            amqPublish(TOPIC_CHANNEL_STATUSES, envelope);
             for (const t of clientMqTopics(mqUserId)) amqPublish(t, envelope);
           }
         }
