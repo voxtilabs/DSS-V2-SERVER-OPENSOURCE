@@ -460,6 +460,7 @@ export function buildNativeDeviceInfoVo(d) {
     deviceCategory: str(d.deviceCategory || '1'),
     protocolType: str(d.protocolType || ''),
     onlineStatus: status,
+    online: status, // E-139: paged tree FUN_18071dac0 reads `online` (string), not onlineStatus
     source: str(d.source || ''),
     addType: dssAddType(d),
     channelNum: Math.max(1, Number(d.channelNum) || 1)

@@ -113,6 +113,49 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(j.data?.channelList?.some(c => c.channelId.includes('$') && c.channelId.split('$').length === 4));
   });
 
+  it('E-139 paged tree contract FUN_18071dac0 on v1.0/tree/orgs|devices|channels', async () => {
+    // {totalCount, results[]} with online STRING, parentId, nodeType, hasChild
+    const orgs = await (await fetch(`${BASE}/brms/api/v1.0/tree/orgs`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' })).json();
+    assert.equal(orgs.status, undefined); // envelope: {code, message, data}
+    const od = orgs.data;
+    assert.ok(Number(od.totalCount) > 0 && Array.isArray(od.results) && od.results.length === Number(od.totalCount), 'orgs: totalCount+results paged root');
+    assert.ok(od.departments?.length > 0, 'orgs: legacy departments alias kept');
+    const vig = od.results.find((n) => n.orgCode === 'VIGILAB');
+    assert.ok(vig, 'VIGILAB present in results[]');
+    assert.strictEqual(vig.parentId, '001', 'org linkage = parentId (paged schema), not pId');
+    assert.strictEqual(vig.online, '1', 'online is STRING "1" (typeCode=2; number would be dropped)');
+    assert.strictEqual(vig.hasChild, '1', 'hasChild "1" (role 0x2ff mandatory to expand)');
+    assert.strictEqual(vig.nodeType, '0', 'org nodeType 0');
+    const root = od.results.find((n) => n.orgCode === '001');
+    assert.ok(root && root.hasChild === '1' && root.parentId === '0', 'root 001 expandable, parentId 0');
+
+    const devs = await (await fetch(`${BASE}/brms/api/v1.0/tree/devices`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' })).json();
+    const dd = devs.data;
+    assert.ok(Array.isArray(dd.results) && dd.results.length === Number(dd.totalCount), 'devices: totalCount+results');
+    assert.ok(dd.deviceList?.length > 0, 'devices: legacy deviceList alias kept');
+    const dev = dd.results[0];
+    const devAlias = dd.deviceList.find((n) => n.deviceCode === dev.deviceCode);
+    assert.ok(dev, 'device in results[]');
+    assert.strictEqual(dev.parentId, dev.orgCode, 'device parentId = orgCode');
+    assert.strictEqual(dev.online, '1', 'device online STRING');
+    assert.strictEqual(dev.nodeType, '1', 'device nodeType 1');
+    assert.strictEqual(devAlias.online, '1', 'deviceList alias also carries online string');
+
+    const chans = await (await fetch(`${BASE}/brms/api/v1.0/tree/channels`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' })).json();
+    const cd = chans.data;
+    assert.ok(Array.isArray(cd.results) && cd.results.length === Number(cd.totalCount), 'channels: totalCount+results');
+    assert.ok(cd.channelList?.length > 0, 'channels: legacy channelList alias kept');
+    const ch = cd.results[0];
+    assert.ok(ch && ch.channelId.includes('$'), 'channel in results[] with channelId');
+    assert.strictEqual(ch.parentId, ch.deviceCode, 'channel parentId = deviceCode');
+    assert.strictEqual(ch.online, '1', 'channel online STRING');
+    assert.strictEqual(ch.nodeType, '2', 'channel nodeType 2');
+
+    // GET variants carry the paged contract too
+    const g = await (await fetch(`${BASE}/brms/api/v1.0/tree/orgs`)).json();
+    assert.ok(Array.isArray(g.data?.results) && g.data.results.length === Number(g.data.totalCount), 'GET tree/orgs also paged');
+  });
+
   it('MTS/Video/StartVideo returns RealTimeVideoVo with all fields', async () => {
     const r = await fetch(`${BASE}/brms/api/v1.0/MTS/Video/StartVideo`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId: '1000171$1$0$0', streamType: 1, dataType: 1 }) });
     assert.equal(r.status, 200);

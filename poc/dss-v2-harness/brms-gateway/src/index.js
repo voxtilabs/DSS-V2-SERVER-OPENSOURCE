@@ -139,6 +139,13 @@ import {
   buildNativeOrgTreePayload,
   buildNativeAllOrgPayload
 } from './e037-native-tree.js';
+// E-139: paged tree contract FUN_18071dac0 ({totalCount, results[]}, online string,
+// parentId, nodeType, hasChild) for v1.0/tree/orgs|devices|channels
+import {
+  buildPagedOrgsPayload,
+  buildPagedDevicesPayload,
+  buildPagedChannelsPayload
+} from './e139-paged-tree.js';
 loadViewsFromDisk();
 // E-120: Monitoring Center opens populated (VIGILAB dir + operator camera view)
 try {
@@ -2344,11 +2351,20 @@ app.post('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(build
 
 // --- GET variants of the tree (launcher prefetch used GET -> fallback) ---
 // E-037: they answer with the REAL native contract (departments/devices).
-app.get('/brms/api/v1.0/tree/orgs', async () => envelope(buildNativeOrgTreePayload()));
-app.get('/brms/api/v1.0/tree/devices', async () => envelope(buildNativeDeviceTreePayload({})));
+// E-139: each GET/POST also merges the PAGED contract ({totalCount, results[]}
+// with online string / parentId / nodeType / hasChild) that FUN_18071dac0 parses.
+app.get('/brms/api/v1.0/tree/orgs', async () => {
+  const paged = buildPagedOrgsPayload();
+  return envelope({ ...buildNativeOrgTreePayload(), totalCount: paged.totalCount, results: paged.results });
+});
+app.get('/brms/api/v1.0/tree/devices', async () => {
+  const paged = buildPagedDevicesPayload({});
+  return envelope({ ...buildNativeDeviceTreePayload({}), totalCount: paged.totalCount, results: paged.results });
+});
 app.get('/brms/api/v1.0/tree/channels', async () => {
   const channelList = allChannels();
-  return envelope({ channelList, list: channelList, total: channelList.length });
+  const paged = buildPagedChannelsPayload();
+  return envelope({ channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results });
 });
 
 // ===== E-021: exact contracts for the routes that hit [FALLBACK] in the live
@@ -2740,12 +2756,19 @@ app.get('/brms/api/v1.0/license', { preHandler: auth }, async () => envelope({
 // and after an add; they must return the live device registry so a manually
 // added / discovered / auto-registered device shows up in the client tree.
 // E-037: they now answer with the REAL native contract (departments/devices).
-app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => envelope(buildNativeOrgTreePayload()));
-app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async (req) =>
-  envelope(buildNativeDeviceTreePayload(req.body || {})));
+app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => {
+  const paged = buildPagedOrgsPayload();
+  return envelope({ ...buildNativeOrgTreePayload(), totalCount: paged.totalCount, results: paged.results });
+});
+app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async (req) => {
+  const body = req.body || {};
+  const paged = buildPagedDevicesPayload(body);
+  return envelope({ ...buildNativeDeviceTreePayload(body), totalCount: paged.totalCount, results: paged.results });
+});
 app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => {
   const channelList = allChannels();
-  return envelope({ channelList, list: channelList, total: channelList.length });
+  const paged = buildPagedChannelsPayload();
+  return envelope({ channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results });
 });
 // E-037: the v1.1 tree helpers of the web SPA and of the native stack.
 app.get('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgTreePayload()));
