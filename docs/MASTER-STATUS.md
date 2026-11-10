@@ -355,3 +355,44 @@ shape del contrato paged 	ree/orgs|devices|channels (FUN_18071dac0:
 {totalCount, results[]} con online string, parentId, isParent,
 
 odeType) - REA MainFormPlugin en curso (ses_e3c06c344ffennJpZfYkJQlPBF).
+
+### Iteracion 10 cerrada (2026-11-10, commit 233d4ae E-139)
+
+**REA ses_e3c06c344ffennJpZfYkJQlPBF (MainFormPlugin/UICommonModule/GroupLogical)
+entrego el segundo contrato** -> %TEMP%\opencode\rea-resourcemanager.md:
+- El arbol de Resources vive en UICommonModule.dll (CGradeGroupCtrl /
+  CGroupSortFilterProxyModel), no en MainFormPlugin. Carga perezosa via
+  \1.1/tree/grade-device-tree\ al expandir + timer de arranque
+  (OnLoadGroupTimeout). El literal "Browser" es una etiqueta CLIENTE para sitio
+  tipo 8 (UICommonModule 0x1809c06f0 / helper 0x180544220) y aparece SIEMPRE
+  junto a la raiz code=\"001\" - no es sintoma de arbol vacio por si solo.
+- Filtro clave: \SetShowOfflineNode\ escribe flag 0x67 en el proxy
+  (0x18001d624); si es 0, los nodos device/canal (tipos 1/2) con estado rol
+  1=OFFLINE se OCULTAN (filterAcceptsRow 0x18001e2a9). hasChild rol 0x2ff en
+  orgs es obligatorio para expandir. Refresco push: notify tipo 0x7C ->
+  OnNotifyGroupManagerState (0x180016cc0) -> HanldeQueryGradeDeviceTree.
+- \MoidfyDevStatus updateStatus=\ es de GroupLogical.dll FUN_18004ecf0
+  (Device.cpp:2441), no de DPSDK.
+
+**E-139 (commit 233d4ae, 4 archivos, +213/-7)**: contrato PAGED
+FUN_18071dac0 (rea-grade-tree.md Q2.3) para \1.0/tree/orgs|devices|channels\
+- el cliente real llama estos 3 POST en cada login (journal 09:10 UTC) pero el
+server servia solo \departments/deviceList/channelList\ con \parentCode\;
+este esquema usa \{totalCount, results[]}\ con \parentId\, \online\ STRING
+(typeCode=2), \
+odeType\ (0 org / 1 device / 2 canal), \isParent\, \hasChild\.
+- Nuevo \e139-paged-tree.js\ (buildPagedOrgs/Devices/ChannelsPayload) mergeado
+  como superset en los 6 handlers GET+POST (aliases legacy se conservan);
+  alias \online\ anadido a DeviceInfoVo en e037.
+
+**Verificacion**: unit 226 tests / 225 pass / 0 fail / 1 skip; e2e 12/12 x2;
+deploy server health 1443 HTTP 200; live-verify 15/15; check en vivo con login:
+orgs totalCount=2 (001 parentId=0 hasChild=1; VIGILAB parentId=001 online=\"1\"
+hasChild=1 nodeType=0), devices 3 (D0238JDG3016 parentId=VIGILAB online=\"1\"
+nodeType=1), channels 10 (D0238JDG3016\\\ parentId=D0238JDG3016 online=\"1\"
+nodeType=2), GET tambien paged.
+
+**Estado global post E-137+E-138+E-139**: arbol de grado plano pId + status
+string (E-137), notify onlineStatus int contrato exacto (E-138), contrato paged
+en v1.0 tree trio (E-139). Pendiente: retest cliente real - Resources deberia
+mostrar 001 -> VIGILAB -> D0238JDG3016 -> canal y updateStatus=1.
