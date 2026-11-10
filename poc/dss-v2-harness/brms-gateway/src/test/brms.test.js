@@ -949,6 +949,58 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(rpc.data.organizations));
   });
 
+  it('E-140 grade-device-tree is scoped by orgCode (lazy: 001 -> VIGILAB -> devices -> channels)', async () => {
+    // REA rea-dataflow-resources.md: the native Resources tree calls
+    // GET /v1.1/tree/full/grade-device-tree?orgCode=<node>&roleId=1 and the
+    // client does NOT re-parent (CreateChildItem appends everything as direct
+    // children) -> the server MUST scope by orgCode, one level per request.
+    // Expand hardcoded root "001": exactly its child orgs, no devices.
+    const r1 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree?orgCode=001&roleId=1`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(r1.code, 1000);
+    assert.equal(typeof r1.desc, 'string', 'envelope desc present (parser reads data only when desc exists)');
+    assert.equal(r1.data.organizations.length, 1, 'orgCode=001 -> exactly one child org');
+    assert.equal(r1.data.organizations[0].orgCode, 'VIGILAB');
+    assert.equal(r1.data.organizations[0].pId, '001', 'org parent key pId');
+    assert.equal(r1.data.organizations[0].hasChild, '1', 'expander visible (devices exist under VIGILAB)');
+    assert.equal(r1.data.organizations[0].organizations.length, 0, 'scoped mode: no nested recursion');
+    // scoping invariant (registry-agnostic): only devices of org 001 come back
+    assert.ok(r1.data.devices.every((d) => d.orgCode === '001'), 'orgCode=001 -> only devices of 001');
+    assert.ok(r1.data.channels.every((c) => c.orgCode === '001'), 'orgCode=001 -> only channels of 001');
+    // Expand VIGILAB: its devices, each with nested channels[] (dev+0x110).
+    const r2 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree?orgCode=VIGILAB&roleId=1`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(r2.data.organizations.length, 0, 'VIGILAB has no child orgs');
+    assert.ok(r2.data.devices.length >= 1, 'devices under VIGILAB');
+    for (const d of r2.data.devices) {
+      assert.equal(d.orgCode, 'VIGILAB', 'device orgCode binding (rol 0x2f8)');
+      assert.ok(Array.isArray(d.channels) && d.channels.length >= 1, 'channels[] nested inside the device');
+      assert.equal(typeof d.status, 'string', 'device status is STRING (typeCode 2)');
+      assert.ok(d.channels[0].channelCode.startsWith(d.deviceCode), 'channel hangs under its device');
+      assert.equal(d.channels[0].pId, d.deviceCode, 'channel pId = deviceCode');
+      assert.equal(typeof d.channels[0].status, 'string', 'channel status is STRING');
+    }
+    assert.ok(r2.data.channels.length >= r2.data.devices.length, 'root-level channels mirror the scoped devices');
+    // No orgCode -> FULL tree (role dialog / SPA consumers keep everything).
+    const r3 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(r3.data.organizations.some((o) => o.orgCode === '001'), 'full mode: root org present');
+    assert.ok(r3.data.organizations.some((o) => o.orgCode === 'VIGILAB'), 'full mode: flat org list');
+    assert.ok(r3.data.devices.length >= 1, 'full mode: devices present');
+    // POST plain variant scoped by body orgCode (SPA BatchLoadingTree, one level per request).
+    const r4 = await (await fetch(`${BASE}/brms/api/v1.1/tree/grade-device-tree`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ orgCode: 'VIGILAB', treeType: '2' }) })).json();
+    assert.ok(r4.data.devices.length >= 1 && r4.data.devices.every((d) => d.orgCode === 'VIGILAB'), 'POST body orgCode scopes the plain variant');
+    assert.equal(r4.data.organizations.length, 0);
+    // Admin RPC mirror stays FULL even when an orgCode sneaks into the body.
+    const rpc = await (await fetch(`${BASE}/admin/API/BRM/Tree/GetFullGradeDeviceTree`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ orgCode: 'VIGILAB' }) })).json();
+    assert.ok(rpc.data.organizations.some((o) => o.orgCode === '001'), 'mirror forces the full tree');
+    assert.ok(rpc.data.devices.length >= 1, 'mirror keeps all devices');
+    // Query wins over body on conflict (DPSDK sends orgCode as query on GET).
+    const r5 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree?orgCode=001`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ orgCode: 'VIGILAB' }) })).json();
+    assert.equal(r5.data.organizations.length, 1, 'query orgCode=001 wins over body orgCode=VIGILAB');
+    assert.ok(r5.data.devices.every((d) => d.orgCode === '001'), 'query orgCode=001 wins over body orgCode=VIGILAB');
+    // Search always scans the full tree even if orgCode is present.
+    const s = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree/search/list`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orgCode: '001', keyword: '' }) })).json();
+    assert.ok(s.data.devices.length >= 1, 'search/list forces full scope');
+  });
+
   it('E-125 admin-API MTS mirrors + journal catch-all closures (StartVideo on /admin/API)', async () => {
     // the real client called POST /admin/API/MTS/Video/StartVideo and got the
     // 40B catch-all -> Live View empty. Now it must return a full RTSP session.

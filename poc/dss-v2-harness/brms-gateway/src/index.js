@@ -1862,8 +1862,12 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
 // (organizations -> devices -> channels, every node with checked/hasAuthority
 // as STRING so the native tree renders the checkboxes enabled/clickable).
 import { buildFullGradeDeviceTreePayload, buildFullGradeDeviceTreeSearchPayload } from './e124-grade-tree.js';
-const gdtHandler = async (req) => envelope(buildFullGradeDeviceTreePayload({ ...req.query, ...(req.body || {}) }));
-const gdtSearchHandler = async (req) => envelope(buildFullGradeDeviceTreeSearchPayload({ ...req.query, ...(req.body || {}) }));
+// E-140: query wins over body so `orgCode` is always the one DPSDK sends as a
+// query parameter on GET /v1.1/tree/full/grade-device-tree?orgCode=<node>&roleId=1
+// (the native Resources tree lazy-loads one level per request; see
+// e124-grade-tree.js buildFullGradeDeviceTreePayload scope logic).
+const gdtHandler = async (req) => envelope(buildFullGradeDeviceTreePayload({ ...(req.body || {}), ...req.query }));
+const gdtSearchHandler = async (req) => envelope(buildFullGradeDeviceTreeSearchPayload({ ...(req.body || {}), ...req.query }));
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/tree/grade-device-tree`, gdtHandler);
   app.post(`${host}/tree/grade-device-tree`, gdtHandler);
@@ -1875,8 +1879,11 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.post(`${host}/tree/grade-device-tree/search/list`, gdtSearchHandler);
 }
 // admin RPC mirror (BRMS.Tree.GetFullGradeDeviceTree, DPSDK 0xcdb070)
+// E-140: the role/permission dialog must ALWAYS see the full tree, even if an
+// orgCode sneaks into the request -> scope:'full' is evaluated before orgCode
+// inside buildFullGradeDeviceTreePayload, so it wins over any incoming orgCode.
 app.post('/admin/API/BRM/Tree/GetFullGradeDeviceTree', async (req) => {
-  const p = buildFullGradeDeviceTreePayload({ ...(req.query || {}), ...(req.body || {}) });
+  const p = buildFullGradeDeviceTreePayload({ scope: 'full', ...(req.body || {}), ...(req.query || {}) });
   return envelope({ method: 'BRMS.Tree.GetFullGradeDeviceTree', ...p, info: p, data: p });
 });
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {

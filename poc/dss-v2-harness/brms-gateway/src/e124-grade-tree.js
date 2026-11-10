@@ -83,9 +83,17 @@ function deviceNode(device, adminChecked) {
   };
 }
 
-function orgNode(org, devices, allDevices, adminChecked) {
-  const children = listOrgs().filter((o) => o.parentCode === org.code && o.code !== org.code);
-  const own = devices.filter((d) => deviceOrgCode(d) === org.code);
+function orgNode(org, scopedDevices, allDevices, adminChecked, scopeCode) {
+  // E-140: in scoped (lazy) mode the response must carry ONLY the direct
+  // children of the requested orgCode. The native Resources tree does NOT
+  // re-parent by pId/orgCode (UICommonModule CreateChildItem 0x1804f2200 ->
+  // QStandardItem::appendRows hangs EVERY organizations[]/devices[] element
+  // as a direct child of the expanded node), so the SERVER must scope.
+  const scoped = scopeCode !== '';
+  const realChildren = listOrgs().filter((o) => o.parentCode === org.code && o.code !== org.code);
+  const children = scoped ? [] : realChildren; // no recursion in lazy mode
+  const ownAll = allDevices.filter((d) => deviceOrgCode(d) === org.code);
+  const own = scopedDevices.filter((d) => deviceOrgCode(d) === org.code);
   const devNodes = own.map((d) => deviceNode(d, adminChecked));
   const checked = adminChecked ? '1' : '0';
   const node = {
@@ -95,8 +103,11 @@ function orgNode(org, devices, allDevices, adminChecked) {
     pId: org.parentCode,
     parentCode: org.parentCode, parentName: (listOrgs().find((o) => o.code === org.parentCode) || {}).name || '',
     orgType: str(org.orgType || '1'), domainId: str(org.domainId || '0'),
-    isParent: children.length ? '1' : '0',
-    hasChild: (children.length || devNodes.length) ? '1' : '0',
+    isParent: realChildren.length ? '1' : '0',
+    // hasChild is computed against ALL devices/org children (not only the
+    // scoped ones) so the expander arrow still shows in lazy mode; the
+    // parser discards it anyway (client-side rol 0x2ff is written after load)
+    hasChild: (realChildren.length || ownAll.length) ? '1' : '0',
     checked, hasAuthority: '1', hasPermission: '1', authority: '1',
     disabled: '0', selectable: '1',
     deparmentsCount: String(children.length), deviceCount: String(devNodes.length),
@@ -104,7 +115,7 @@ function orgNode(org, devices, allDevices, adminChecked) {
     // E-126: remaining native descriptor keys
     sourceType: '', associateId: '', sourceId: '', autoAuthorize: '1',
     capability: '', deviceCapability: '1',
-    organizations: children.map((c) => orgNode(c, devices, allDevices, adminChecked)),
+    organizations: children.map((c) => orgNode(c, scopedDevices, allDevices, adminChecked, scopeCode)),
     devices: devNodes, device: devNodes.map((d) => ({ id: d.deviceCode, sort: '0' })),
     deviceList: devNodes, deivceNodes: devNodes, // SDK typo key kept (0xcd9348)
     channel: devNodes.flatMap((d) => d.channels.map((c) => ({ id: c.channelCode, sort: c.channelSeq })))
@@ -120,15 +131,35 @@ export function buildFullGradeDeviceTreePayload(query = {}) {
   const adminChecked = roleId === '1' || roleType === 'administrator' || roleType === '1' || query.admin === '1';
   const allDevices = [...DEVICE_REGISTRY.values()];
   const orgs = listOrgs();
-  // E-137: serve organizations/departments FLAT (every org, linked by pId)
-  // AND keep the nested `organizations` children inside each node. The native
-  // parser builds the hierarchy from parentCode over the flat list, while the
-  // role-dialog renderer walks nested children; serving roots-only collapsed
-  // the Monitoring Center Resources tree to the static "Browser" node.
-  const organizations = orgs.map((o) => orgNode(o, allDevices, allDevices, adminChecked));
-  const flatDevices = allDevices.map((d) => deviceNode(d, adminChecked));
+  // ===== E-140: scope the payload by orgCode (lazy expansion) =====
+  // REA (rea-dataflow-resources.md, 2026-11-10): the native Monitoring Center
+  // Resources tree is populated ONLY by GET /brms/api/v1.1/tree/full/grade-device-tree
+  // ?orgCode=<node>&roleId=1 (HanldeQueryGradeDeviceTree 0x1804f1d70 ->
+  // IGroupManager::GetGradeDeviceTree vfunc +0x3c0). CreateChildItem 0x1804f2200
+  // does NOT re-pair by pId/orgCode: it appends EVERY organizations[]/devices[]
+  // of the response as DIRECT children of the expanded node. The server MUST
+  // therefore return only the direct children of the requested orgCode:
+  //   orgCode absent/'' or scope=full -> full tree (role dialog + admin mirror)
+  //   orgCode = '001'    -> orgs with parentCode==='001' (VIGILAB), devices orgCode==='001' (none)
+  //   orgCode = 'VIGILAB'-> devices with orgCode==='VIGILAB' + nested channels[]
+  // (E-137's "client rebuilds the hierarchy from the flat list" premise was
+  // refuted by REA - the flattening is client-side by design.)
+  const requested = str(query.orgCode ?? query.org ?? '').trim();
+  const forceFull = str(query.scope || '').toLowerCase() === 'full';
+  const scopeCode = (requested === '' || forceFull) ? '' : requested;
+  const scopedDevices = scopeCode === ''
+    ? allDevices
+    : allDevices.filter((d) => deviceOrgCode(d) === scopeCode);
+  const scopedOrgs = scopeCode === ''
+    ? orgs
+    : orgs.filter((o) => o.parentCode === scopeCode && o.code !== scopeCode);
+  // Full mode (no orgCode): organizations/departments FLAT (every org, linked
+  // by pId) AND nested children inside each node - the role-dialog renderer
+  // walks nested children while other consumers bind the flat list by pId.
+  const organizations = scopedOrgs.map((o) => orgNode(o, scopedDevices, allDevices, adminChecked, scopeCode));
+  const flatDevices = scopedDevices.map((d) => deviceNode(d, adminChecked));
   const flatChannels = [];
-  for (const d of allDevices) {
+  for (const d of scopedDevices) {
     const count = Math.max(1, Number(d.channelNum) || 1);
     for (let s = 0; s < count; s++) flatChannels.push(channelNode(d, s));
   }
@@ -146,6 +177,8 @@ export function buildFullGradeDeviceTreePayload(query = {}) {
     results: organizations,
     roleType: adminChecked ? '1' : '2',
     hasData: '1',
+    orgCode: scopeCode,
+    scopeOrgCode: scopeCode,
     // EXCEEDED_FLAG_ENUM values ("0" = UNDER, nothing truncated) - the SPA
     // BatchLoadingTree.load asserts them on the grade-device-tree payload
     deviceExceeded: '0',
@@ -158,7 +191,9 @@ export function buildFullGradeDeviceTreePayload(query = {}) {
 
 export function buildFullGradeDeviceTreeSearchPayload(query = {}) {
   const kw = str(query.keyword || query.keywords || '').toLowerCase();
-  const full = buildFullGradeDeviceTreePayload(query);
+  // E-140: search always scans the FULL tree (scope=full), regardless of any
+  // orgCode that came along with the search request.
+  const full = buildFullGradeDeviceTreePayload({ ...query, scope: 'full' });
   if (!kw) return full;
   const hitDev = full.devices.filter((d) =>
     d.deviceCode.toLowerCase().includes(kw) || d.deviceName.toLowerCase().includes(kw));

@@ -396,3 +396,60 @@ nodeType=2), GET tambien paged.
 string (E-137), notify onlineStatus int contrato exacto (E-138), contrato paged
 en v1.0 tree trio (E-139). Pendiente: retest cliente real - Resources deberia
 mostrar 001 -> VIGILAB -> D0238JDG3016 -> canal y updateStatus=1.
+
+### Iteracion 11 cerrada (2026-11-10, commit E-140)
+
+**2 subagentes REA nuevos entregaron los 2 informes que faltaban**
+(`%TEMP%\opencode\rea-dataflow-resources.md` 575 lin + `rea-controlplane-status.md`
+312 lin):
+
+- **Resources se puebla SOLO por** `HanldeQueryGradeDeviceTree`
+  (UICommonModule `0x1804f1d70`) -> `IGroupManager::GetGradeDeviceTree` (vfunc
+  `+0x3c0`) -> GroupLogical `0x1800f2c90` -> **GET
+  `/brms/api/v1.1/tree/full/grade-device-tree?orgCode=<nodo>&roleId=1`**.
+  FINISH_GROUP es del path B (deviceOrg) y NUNCA puebla este arbol.
+- **REGLA DE APLANADO (verificada, no hipotesis)**: `CreateChildItem`
+  `0x1804f2200` cuelga TODO `organizations[]`+`devices[]` recibido como hijos
+  DIRECTOS del nodo expandido (`appendRows` en `0x1804f1d70`). El cliente NO
+  re-empareja por pId/orgCode ⇒ **el servidor debe scopear por orgCode** (lazy,
+  1 nivel por request). La hipotesis E-137 (parser reconstruye por pId) quedo
+  REFUTADA. Canales cuelgan del device (`dev+0x110` = `channels[]`).
+- Raiz hardcodeada `"001"` (`0x18002eec4`); "Browser" es etiqueta 100% cliente
+  (tipo sitio 8, `0x1809c06f0`/`0x180544220`).
+- Envelope HTTP obligatorio `{code:number, desc:string, data:object}` - la
+  clave es **`desc`** (no `message`); si falta, el parser lee la raiz ⇒ arrays
+  vacios. Ya cumplido por `envelope()` (index.js:544). `status` del arbol =
+  STRING (typeCode 2); `onlineStatus` del notify = INT (E-138). No mezclarlos.
+- **Control plane**: `updateStatus=1` es 100% server-driven: solo con
+  `vms.notifyDeviceStatus.info.onlineStatus` = int 1 + `deviceCode` exacto,
+  publicado tambien en `mq.*.msg.topic.<UserId>` (MSG.exe escucha ese pool,
+  ConsumerCount=0 en brms.notify*). `MoidfyDevStatus` = GroupLogical
+  `FUN_18004ecf0` (Device.cpp:2441), unico caller `0x180055760` <-
+  `FUN_1800cde90` <- notify MQ. `originStatus` se siembra del REST (arbol).
+  Correccion: rol de estado del arbol = `0x2fe` (0x376 = preview).
+  Verificado en gateway: MQ_USER_ID='1' = userId del login = GetMqConfig, y
+  los envelopes DEVICE_STATUS ya se publican en `clientMqTopics('1')` +
+  `brms.notifyChannelStatuses` (E-088/E-097/E-137).
+
+**E-140 (3 archivos: e124-grade-tree.js, index.js, test/brms.test.js)**: scope
+por `orgCode` en `buildFullGradeDeviceTreePayload` —
+`orgCode` ausente/`scope=full` ⇒ arbol completo (dialog de roles + espejo
+admin RPC); `orgCode=001` ⇒ solo orgs con `parentCode==='001'` (VIGILAB, sin
+recursion, `hasChild` calculado contra todos los devices para el expander) y
+devices con `orgCode==='001'`; `orgCode=VIGILAB` ⇒ devices de VIGILAB con
+`channels[]` anidados + canales root. En `index.js` la query gana sobre el body
+(DPSDK manda orgCode como query en el GET) y el espejo
+`/admin/API/BRM/Tree/GetFullGradeDeviceTree` fuerza `scope:'full'`.
+`search/list` siempre busca en el arbol completo. Nuevo test E-140 (scope
+001/VIGILAB/full/mirror/query-wins/search-full).
+
+**Verificacion**: unit 227 tests / 226 pass / 0 fail / 1 skip; e2e 12/12 x2;
+live-verify 15/15; check en vivo con login real: orgCode=001 -> organizations
+=[VIGILAB(pId="001",hasChild="1")] devices=[]; orgCode=VIGILAB -> 3 devices
+con channels anidados (D0238JDG3016$1$0$0), status string; sin orgCode ->
+arbol completo; espejo admin -> full.
+
+**Retest cliente pendiente**: abrir Monitoring Center -> Resources, EXPANDIR
+la raiz ("Browser"/001): request `full/grade-device-tree?orgCode=001` debe
+devolver 1-3 KB con VIGILAB; expandir VIGILAB -> devices con canal; log
+`MoidfyDevStatus ... updateStatus = 1` por el notify E-138.
