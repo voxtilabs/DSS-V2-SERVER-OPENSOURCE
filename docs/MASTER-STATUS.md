@@ -453,3 +453,54 @@ arbol completo; espejo admin -> full.
 la raiz ("Browser"/001): request `full/grade-device-tree?orgCode=001` debe
 devolver 1-3 KB con VIGILAB; expandir VIGILAB -> devices con canal; log
 `MoidfyDevStatus ... updateStatus = 1` por el notify E-138.
+
+### Iteracion 12 cerrada (2026-11-10, commit E-141)
+
+**2 subagentes REA nuevos entregaron `rea-media-path-noroute.md` y
+`rea-remaining-gaps.md`**:
+
+- **Media path SIN ruta a camara (confirmado por REA)**: `StartVideo` no lleva
+  `deviceIp`; el TCP connect del cliente va a candidatos server-provided
+  (`server/video/list`, `server/serviceStatus`) y el host de la URL RTSP solo
+  ordena por distancia de octetos 0..15 sin umbral. No hay ICMP ni ruta directa
+  a `192.168.0.238` desde el cliente. Estado online/offline es 100%
+  server-driven (REST tree + MQ `vms.notifyDeviceStatus`).
+- **Contratos nuevos del cliente**: `StartVideo` puede leer `rtspUrl`/`rtspUrls`
+  en base64 ademas de `url`/`url2`; `server/video/list` y `serviceStatus`
+  deben exponer `ip/port/url` del servidor de media (nunca la IP de la camara).
+- **Unico gap P1 real restante**: contratos exactos de
+  `storage/configure/picture/warning` -> `{warningServers:[], warningHappened:"0"}`
+  y `subsystem/register/warning` -> `{warningSubsystems:[], warningHappened:"0",...}`.
+  Los 38 FALLBACK restantes del barrido v2 son sondas del analista, no gaps.
+
+**E-141 (3 archivos: index.js, e109-storage.js, test/brms.test.js)**:
+- `StartVideo` ahora incluye `rtspUrl`/`rtspUrls` base64 (decode == `url`) y
+  sigue devolviendo `url`/`url2` planos; nunca expone `192.168.0.238`.
+- Nuevas rutas `server/video/list` (GET/POST) en `/brms/api/v1.x`,
+  `/ipms/api/v1.1`, `/admin/API`, `/admin/api` con candidato `video#local` ->
+  `PUBLIC_HOST:RTSP_PORT` (`rtsp://10.10.20.120:9100`), via
+  `buildVideoServerListPayload()` en `e109-storage.js`.
+- `serviceStatus/:svc` y `allServiceStatus` enriquecidos con
+  `ip/port/url/s/ports` apuntando solo al host publico; fix ruta duplicada
+  `/admin/API/server/allServiceStatus` (Fastify lanzaba
+  `Method 'GET' already declared` al importar).
+- P1 cerrado: `GET/POST /brms/api/v1.1/storage/configure/picture/warning` y
+  `/brms/api/v1.1/subsystem/register/warning` con los contratos exactos de REA.
+- Nuevo test E-141: StartVideo base64, video/list en ambas bases sin IP de
+  camara y con ip/port iguales al host de la URL RTSP, serviceStatus con
+  ip/port/url, y los dos contratos warning.
+
+**Verificacion**: unit 228 tests / 227 pass / 0 fail / 1 skip; e2e 12/12 x2;
+deploy a `10.10.20.120` (scp + docker cp + restart), health 200,
+`GET /brms/api/v1.1/server/video/list` 200 con `ip=10.10.20.120 port=9100
+url=rtsp://10.10.20.120:9100`; live-verify dentro del contenedor
+**15/15** (StartVideo `rtsp://10.10.20.120:9100/cam_D0238JDG3016?token=...`,
+RTSP DESCRIBE 200 OK).
+
+**Retest cliente pendiente**: Monitoring Center -> Resources -> expandir
+raiz "Browser"/001 -> VIGILAB -> D0238JDG3016 -> canal
+`D0238JDG3016$1$0$0`; en `C:\Users\Public\DSS Client\log\` debe aparecer
+`MoidfyDevStatus ... updateStatus = 1`; en el journal del server solo 2
+requests grade-tree (`orgCode=001`, `orgCode=VIGILAB`), ya no uno plano de
+962 KB. El cliente debe tomar el stream desde `server/video/list`/
+`serviceStatus` (10.10.20.120:9100) sin route a la camara.
