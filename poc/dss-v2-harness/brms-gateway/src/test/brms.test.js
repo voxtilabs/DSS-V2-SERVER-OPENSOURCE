@@ -1001,6 +1001,39 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(s.data.devices.length >= 1, 'search/list forces full scope');
   });
 
+  it('E-141 media candidates (server/video/list + serviceStatus), base64 rtspUrl and warning contracts', async () => {
+    // StartVideo: native parser FUN_1802145f0 reads rtspUrl/rtspUrls base64.
+    const sv = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ channelId: 'D0238JDG3016$1$0$0', streamType: 0, dataType: 0 })
+    })).json();
+    assert.equal(sv.code, 1000);
+    assert.ok(sv.data.url && sv.data.url.startsWith('rtsp://'), 'StartVideo still returns plain url');
+    assert.ok(sv.data.rtspUrl && sv.data.rtspUrls, 'rtspUrl/rtspUrls present');
+    assert.equal(Buffer.from(sv.data.rtspUrl, 'base64').toString('utf8'), sv.data.url, 'rtspUrl base64 decodes to url');
+    assert.ok(!sv.data.url.includes('192.168.0.238'), 'StartVideo never exposes the camera IP');
+    const u = new URL(sv.data.url);
+    // server/video/list on both bases must publish the media server candidate.
+    for (const host of ['/brms/api/v1.1', '/admin/API']) {
+      const vl = await (await fetch(`${BASE}${host}/server/video/list`, { headers: { 'X-Subject-Token': token } })).json();
+      const rows = vl.data.servers || vl.data.list || [];
+      assert.ok(rows.length >= 1, `${host}/server/video/list returns servers`);
+      assert.ok(!JSON.stringify(vl.data).includes('192.168.0.238'), `${host}/server/video/list leaks no camera IP`);
+      assert.equal(String(rows[0].ip), u.hostname, `${host} candidate ip = StartVideo host`);
+      assert.equal(Number(rows[0].port), Number(u.port), `${host} candidate port = rtsp port`);
+      assert.ok(String(rows[0].url).startsWith('rtsp://'), `${host} candidate url is rtsp`);
+    }
+    // serviceStatus is the 2nd candidate source: must carry ip/port/url too.
+    const st = await (await fetch(`${BASE}/admin/API/server/serviceStatus/DA_SCS`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(st.data.ip && st.data.port && st.data.url, 'serviceStatus carries ip/port/url');
+    assert.ok(!JSON.stringify(st.data).includes('192.168.0.238'), 'serviceStatus leaks no camera IP');
+    // P1 gap from rea-remaining-gaps.md: exact warning contracts.
+    const pw = await (await fetch(`${BASE}/brms/api/v1.1/storage/configure/picture/warning`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(pw.data.warningServers) && pw.data.warningHappened === '0', 'picture/warning contract');
+    const sw = await (await fetch(`${BASE}/brms/api/v1.1/subsystem/register/warning?accessKey=`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(sw.data.warningSubsystems) && sw.data.warningHappened === '0', 'subsystem/register/warning contract');
+  });
+
   it('E-125 admin-API MTS mirrors + journal catch-all closures (StartVideo on /admin/API)', async () => {
     // the real client called POST /admin/API/MTS/Video/StartVideo and got the
     // 40B catch-all -> Live View empty. Now it must return a full RTSP session.

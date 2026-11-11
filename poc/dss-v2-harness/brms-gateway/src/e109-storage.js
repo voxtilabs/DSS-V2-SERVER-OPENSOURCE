@@ -49,6 +49,36 @@ export function buildServerListPayload() {
   };
 }
 
+// E-141: server/video/list (REA rea-media-path-noroute.md §5.3) is the main
+// source of the client's TCP candidates. FUN_18025fdf0 expects per entry
+// url[250] @+0x44 + ip[64] @+0x04 (stride 0x13a). The candidate MUST be the
+// DSS/media server (same host as the login/StartVideo url => octet distance 0);
+// never publish a camera IP here.
+export function buildVideoServerListPayload() {
+  const host = process.env.PUBLIC_HOST || '127.0.0.1';
+  const rtspPort = process.env.RTSP_PORT || '9100';
+  const httpsPort = process.env.HTTPS_PORT || '1443';
+  const url = `rtsp://${host}:${rtspPort}`;
+  const list = [{
+    serverCode: LOCAL_SERVER_CODE,
+    serverName: 'Video Server',
+    ip: host,
+    port: Number(rtspPort),
+    portStr: String(rtspPort),
+    httpsPort: Number(httpsPort),
+    url,
+    rtspUrl: url,
+    status: '1', online: '1', isOnline: '1', serviceStatus: 'online',
+    isLocal: '1', local: '1', locale: '', uiBufLen: '0'
+  }];
+  return {
+    list, servers: list, results: list, items: list, pageData: list, serverList: list,
+    serverCode: LOCAL_SERVER_CODE, serverName: 'Video Server', locale: '', uiBufLen: '0',
+    total: String(list.length), totalCount: String(list.length),
+    pageNo: '1', pageSize: '100', pageCount: '1'
+  };
+}
+
 // GetPageDeviceStoragePositionList: devices with their storage/record state.
 export function buildStoragePositionDevicePagePayload(query = {}) {
   const q = (k) => String(query?.[k] ?? '').trim();

@@ -1156,13 +1156,33 @@ for (const v of ['v1.0', 'v1.1']) {
 // ===== E-019: post-login bootstrap unblocks (all observed 404 in live trace) =====
 
 // Service status probes: /admin/API/server/serviceStatus/DA_SCS, DA_POC, ...
+// E-141 (REA rea-media-path-noroute.md §5.3): this is one of the two
+// server-side sources of the client's TCP candidates. FUN_1801f4ce0 expects
+// s[250] @+0x01 plus two int ports @+0x40/+0x41 (stride 0x104); serve a
+// superset that ALWAYS points at the DSS server/media host, never at a
+// camera IP (the client must not learn 192.168.0.238 from here).
 app.get('/admin/API/server/serviceStatus/:svc', async (req) => envelope({
   svc: String(req.params.svc),
-  status: 'online',
-  serviceStatus: 'online',
-  state: 'online',
-  online: true
+  serverCode: String(req.params.svc),
+  s: `rtsp://${PUBLIC_HOST}:${RTSP_PORT}`,
+  ip: PUBLIC_HOST, host: PUBLIC_HOST, serverIp: PUBLIC_HOST,
+  port: RTSP_PORT, rtspPort: RTSP_PORT, httpsPort: HTTPS_PORT,
+  port1: RTSP_PORT, port2: HTTPS_PORT, ports: [RTSP_PORT, HTTPS_PORT],
+  url: `rtsp://${PUBLIC_HOST}:${RTSP_PORT}`,
+  status: 'online', serviceStatus: 'online', serverStatus: '1', state: 'online',
+  online: true, onlineStatus: 1
 }));
+app.get('/admin/API/server/allServiceStatus', async () => envelope({
+  list: [{ serverCode: 'DA_SCS', ip: PUBLIC_HOST, port: RTSP_PORT, url: `rtsp://${PUBLIC_HOST}:${RTSP_PORT}`, serviceStatus: 'online', online: true }],
+  results: [{ serverCode: 'DA_SCS', ip: PUBLIC_HOST, port: RTSP_PORT, url: `rtsp://${PUBLIC_HOST}:${RTSP_PORT}`, serviceStatus: 'online', online: true }],
+  serviceStatus: [], subServerIds: [], backupServerIds: [], switchType: '0', serverStatus: '1'
+}));
+// E-141: admin-API mirrors of the media-candidate list (allServiceStatus is
+// registered once above for /admin/API; the /admin/api alias reuses it).
+for (const host of ['/admin/API', '/admin/api']) {
+  app.get(`${host}/server/video/list`, async () => envelope(buildVideoServerListPayload()));
+  app.post(`${host}/server/video/list`, async () => envelope(buildVideoServerListPayload()));
+}
 
 // Device/org tree for the Qt stack (the "failed to get device data" blocker).
 // E-037: the tree is now built with the REAL native contract recovered from
@@ -1242,11 +1262,21 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/brms/api/v2.0', '/ipms
 // ===== E-109: server list + storage endpoints (client FALLBACK hits) =======
 import {
   buildServerListPayload, buildStoragePositionDevicePagePayload,
-  buildLocalDiskListPayload, buildNetDiskListPayload, buildDiskGroupListPayload
+  buildLocalDiskListPayload, buildNetDiskListPayload, buildDiskGroupListPayload,
+  buildVideoServerListPayload
 } from './e109-storage.js';
+// E-141: server/video/list carries the media candidates the client will TCP
+// connect to (server host only). Register it explicitly so it never falls into
+// the E-135 RPC catalog stub ('server.video.list' with servers: []).
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/brms/api/v2.0', '/ipms/api/v1.1']) {
   app.get(`${host}/server/list`, async () => envelope(buildServerListPayload()));
   app.post(`${host}/server/list`, async () => envelope(buildServerListPayload()));
+  app.get(`${host}/server/video/list`, async () => envelope(buildVideoServerListPayload()));
+  app.post(`${host}/server/video/list`, async () => envelope(buildVideoServerListPayload()));
+  // E-141 P1 (rea-remaining-gaps.md): real DPSDK FALLBACK still live.
+  // data.warningServers[] + data.warningHappened STRING (SDK does atoi()).
+  app.get(`${host}/storage/configure/picture/warning`, async () => envelope({ warningServers: [], warningHappened: '0' }));
+  app.post(`${host}/storage/configure/picture/warning`, async () => envelope({ warningServers: [], warningHappened: '0' }));
   app.get(`${host}/storage/position/device/page`, async (req) => envelope(buildStoragePositionDevicePagePayload({ ...req.query, ...(req.body || {}) })));
   app.post(`${host}/storage/position/device/page`, async (req) => envelope(buildStoragePositionDevicePagePayload({ ...req.query, ...(req.body || {}) })));
   app.get(`${host}/storage/disk/local-disk/list`, async () => envelope(buildLocalDiskListPayload()));
@@ -2351,7 +2381,12 @@ const fnAvailHandler = async () => {
 app.get('/brms/api/v1.1/function/available/list', fnAvailHandler);
 app.post('/brms/api/v1.1/function/available/list', fnAvailHandler);
 app.get('/brms/api/v1.1/subsystem/available/list', async () => envelope(buildSubsystemAvailablePayload()));
-app.get('/brms/api/v1.1/subsystem/register/warning', async () => envelope({ warningList: [], list: [], total: 0 }));
+// E-141 (rea-remaining-gaps.md §3.3): real contract is warningSubsystems[]
+// {subsystemCode, center, subsystemName, subsystemIp} + warningHappened STRING.
+app.get('/brms/api/v1.1/subsystem/register/warning', async () => envelope({
+  warningSubsystems: [], warningHappened: '0',
+  warningList: [], list: [], total: '0', totalCount: '0'
+}));
 // OMMS (alarm service) previously 404'd -> "abnormal data" in the Event Center.
 app.get('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(buildAlertTypeListPayload()));
 app.post('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(buildAlertTypeListPayload()));
@@ -2813,7 +2848,11 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
+    token, trackId: trackId || '', url, url2: url + '&sub=1',
+    // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
+    // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
+    rtspUrl: Buffer.from(url).toString('base64'), rtspUrls: Buffer.from(url).toString('base64'),
+    vkId, vkValue: genToken().slice(0, 16),
     hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
 });
@@ -2861,7 +2900,11 @@ app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
+    token, trackId: trackId || '', url, url2: url + '&sub=1',
+    // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
+    // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
+    rtspUrl: Buffer.from(url).toString('base64'), rtspUrls: Buffer.from(url).toString('base64'),
+    vkId, vkValue: genToken().slice(0, 16),
     hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
 });
@@ -2890,7 +2933,11 @@ const mtsStartVideo = async (req) => {
   return envelope({
     connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
     port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1', vkId, vkValue: genToken().slice(0, 16),
+    token, trackId: trackId || '', url, url2: url + '&sub=1',
+    // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
+    // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
+    rtspUrl: Buffer.from(url).toString('base64'), rtspUrls: Buffer.from(url).toString('base64'),
+    vkId, vkValue: genToken().slice(0, 16),
     hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
 };
