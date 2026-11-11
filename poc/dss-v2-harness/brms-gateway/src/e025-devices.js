@@ -600,7 +600,10 @@ export function buildDeviceAddPayload(body, identity = {}, publicHost = '10.10.2
     channelList: channels,
     channelCount: channels.length,
     total: 1,
-    success: true
+    success: true,
+    // E-142 (rea-flows-v3 §5): native BRMS.Device.AddDevice response also walks
+    // failedDevices:[{errorMsg,deviceIp}] — keep it as a real empty array.
+    failedDevices: []
   };
 }
 

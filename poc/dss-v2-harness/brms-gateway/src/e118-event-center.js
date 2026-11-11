@@ -46,29 +46,57 @@ export const DSS_ALARM_TYPE_CATALOG = [
 ];
 
 export function buildEventCenterAlarmTypesPayload() {
+  // E-142 (rea-flows-v3 §2): the native parser expects NESTED groups:
+  // groups[] = {groupId, groupName, alarmTypes:[{other, alarmTypeId, alarmTypeName}]}.
+  const cats = [...new Set(DSS_ALARM_TYPE_CATALOG.map((a) => a.category || 'custom'))];
+  const groups = cats.map((c) => ({
+    groupId: String(c),
+    groupName: String(c).toUpperCase(),
+    alarmTypes: DSS_ALARM_TYPE_CATALOG.filter((a) => (a.category || 'custom') === c)
+      .map((a) => ({ other: '', alarmTypeId: String(a.alarmTypeId), alarmTypeName: a.alarmTypeName }))
+  }));
   return {
     list: DSS_ALARM_TYPE_CATALOG, results: DSS_ALARM_TYPE_CATALOG, items: DSS_ALARM_TYPE_CATALOG,
-    alarmTypeList: DSS_ALARM_TYPE_CATALOG, groups: DSS_ALARM_TYPE_CATALOG,
+    alarmTypeList: DSS_ALARM_TYPE_CATALOG, groups,
     total: String(DSS_ALARM_TYPE_CATALOG.length), totalCount: String(DSS_ALARM_TYPE_CATALOG.length)
   };
 }
 
-// query alarm message count for the Event Center badge
+// query alarm message count for the Event Center badge.
+// E-142 (rea-flows-v3 §3): response is a SINGLE numeric totalCount (INT),
+// not a bag of string counters.
 export function buildEventCenterAlarmCountPayload() {
-  return { count: '0', unhandledCount: '0', handledCount: '0', total: '0', todayCount: '0', status: '1' };
+  return { totalCount: 0, count: '0', unhandledCount: '0', handledCount: '0', total: '0', todayCount: '0', status: '1' };
 }
 
-// subscription ACK: the client posts subscribeAddress/AddrType/User/Password/
-// initMessageId and expects msgId + a polling/push channel back
+// subscription/pull ACK. E-142 P0 (rea-flows-v3 §1, FUN_1804d2d80): the client
+// polls GET /videoService/eventCenter/messages/subscribe?msgNum&type&userCode&msgId
+// and parses data.totalCount INT, data.results ARRAY-OF-STRING and
+// data.nextMsgId STRING. A missing nextMsgId becomes atoi(NULL) = -1 and the
+// polling loop never advances.
 export function buildEventCenterSubscribePayload(body = {}) {
-  const msgId = String(body.initMessageId || '0');
+  const b = body && typeof body === 'object' ? body : {};
+  const cursor = String(b.msgId ?? b.initMessageId ?? '0') || '0';
+  const msgNum = String(parseInt(b.msgNum ?? '200', 10) || 200);
+  const type = String(b.type ?? '1');
+  const userCode = String(b.userCode ?? '');
+  // results MUST be an array of serialized event strings (the client re-wraps
+  // each one as {"method":"vms.vslalarm.msg","info":"<str>","id":30}).
+  const raw = Array.isArray(b.results) ? b.results : [];
+  const results = raw.map((m) => (typeof m === 'string' ? m : JSON.stringify(m)));
   return {
-    msgId: String(Number(msgId) || 0),
+    totalCount: results.length,
+    results,
+    nextMsgId: cursor,
+    msgId: cursor,
+    msgNum,
+    type,
+    userCode,
     subscribeId: 'sub-' + Date.now(),
-    subscribeAddress: String(body.subscribeAddress || ''),
+    subscribeAddress: String(b.subscribeAddress || ''),
     interval: '1000',
     status: '1', success: true,
-    messages: [], list: [], results: [], items: []
+    messages: [], list: [], items: []
   };
 }
 

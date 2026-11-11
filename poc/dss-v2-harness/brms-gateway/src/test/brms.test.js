@@ -1034,6 +1034,58 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.ok(Array.isArray(sw.data.warningSubsystems) && sw.data.warningHappened === '0', 'subsystem/register/warning contract');
   });
 
+  it('E-142 rea-flows-v3: Event Center P0 pull cursor, alarm count POST, nested catalogs, QueryRecords plural', async () => {
+    // P0: subscribe pull must expose totalCount INT + nextMsgId STRING + results ARRAY-of-STRING.
+    const q = new URLSearchParams({ msgNum: '200', type: '1', userCode: 'admin', msgId: '7' });
+    const sub = await (await fetch(`${BASE}/videoService/eventCenter/messages/subscribe?${q}`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(sub.code, 1000);
+    assert.equal(typeof sub.data.totalCount, 'number', 'subscribe totalCount is INT');
+    assert.ok(/^\d+$/.test(String(sub.data.nextMsgId)) && sub.data.nextMsgId !== '-1', 'subscribe nextMsgId is a numeric cursor (never -1)');
+    assert.ok(Array.isArray(sub.data.results), 'subscribe results is an array');
+    assert.ok(sub.data.results.every((r) => typeof r === 'string'), 'subscribe results are strings');
+    const subPost = await (await fetch(`${BASE}/brms/api/v1.1/eventCenter/messages/subscribe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ msgId: '9', results: ['{"method":"vms.vslalarm.msg","info":"{}","id":30}'] })
+    })).json();
+    assert.ok(/^\d+$/.test(String(subPost.data.nextMsgId)) && subPost.data.nextMsgId !== '-1', 'POST subscribe nextMsgId numeric cursor');
+    assert.ok(subPost.data.results.length === 0 || typeof subPost.data.results[0] === 'string', 'results elements stay strings');
+    // alarm count: native client uses POST and reads a single numeric totalCount.
+    const cnt = await (await fetch(`${BASE}/brms/api/v1.1/eventCenter/alarm/messages/count`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ alarmStatus: '0;1', alarmGrade: '1', alarmType: '2', handleStatus: '0', deviceCode: 'D0238JDG3016', channelCode: 'D0238JDG3016$1$0$0', startAlarmDate: '', endAlarmDate: '', startHandleDate: '', endHandleDate: '' })
+    })).json();
+    assert.equal(cnt.code, 1000);
+    assert.equal(typeof cnt.data.totalCount, 'number', 'alarm count totalCount is INT');
+    // alarmTypes: nested groups[] with alarmTypes[] inside.
+    const at = await (await fetch(`${BASE}/brms/api/v1.1/eventCenter/alarmTypes`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(at.data.groups) && at.data.groups.length > 0, 'alarmTypes groups present');
+    assert.ok(at.data.groups.every((g) => 'groupId' in g && 'groupName' in g && Array.isArray(g.alarmTypes)), 'alarmTypes groups nested');
+    assert.ok(at.data.groups.every((g) => g.alarmTypes.every((a) => 'alarmTypeId' in a && 'alarmTypeName' in a && 'other' in a)), 'alarmTypes item keys');
+    // subscribeAddress: full VSL GetMQConfig keys.
+    const sa = await (await fetch(`${BASE}/brms/api/v1.1/eventCenter/messages/subscribeAddress?msgId=0`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok('subscribePassword' in sa.data && 'subscribeUser' in sa.data, 'subscribeAddress user/pass keys');
+    assert.equal(typeof sa.data.subscribeAddrType, 'number', 'subscribeAddrType is INT');
+    assert.ok(Array.isArray(sa.data.initMessageId) && sa.data.initMessageId.every((x) => typeof x.msgId === 'string' && typeof x.type === 'number'), 'initMessageId array of {msgId,type}');
+    // devicesManager/deviceTypes: nested groups for the native deviceType parser.
+    const dt = await (await fetch(`${BASE}/brms/api/v1.1/devicesManager/deviceTypes?local=en`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.ok(Array.isArray(dt.data.groups) && dt.data.groups.length > 0, 'deviceTypes groups present');
+    assert.ok(dt.data.groups.every((g) => 'categoryId' in g && 'categoryName' in g && Array.isArray(g.deviceTypes)), 'deviceTypes groups nested');
+    assert.ok(dt.data.groups.every((g) => g.deviceTypes.every((t) => 'typeCode' in t && 'typeId' in t && 'typeName' in t)), 'deviceTypes item keys');
+    // SS.Record.QueryRecords PLURAL: pageCount STRING root + totalCount INT + 13-string record schema.
+    const qr = await (await fetch(`${BASE}/brms/api/v1.1/SS/Record/QueryRecords`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ page: '1', startIndex: '0', endIndex: '100', channelId: 'D0238JDG3016$1$0$0', startTime: '2026-11-10 00:00:00', endTime: '2026-11-11 00:00:00', streamType: '0', recordType: '1', recordSource: '0', session: '' })
+    })).json();
+    assert.equal(qr.code, 1000);
+    assert.equal(typeof qr.data.pageCount, 'string', 'QueryRecords pageCount is STRING');
+    assert.equal(typeof qr.data.totalCount, 'number', 'QueryRecords totalCount is INT');
+    assert.ok(Array.isArray(qr.data.records) && qr.data.records.length >= 1, 'QueryRecords returns records');
+    const r0 = qr.data.records[0];
+    for (const k of ['ssId', 'forgotten', 'endTime', 'streamType', 'recordName', 'diskId', 'recordType', 'streamId', 'planId', 'recordSource', 'startTime', 'channelId', 'fileLength']) {
+      assert.equal(typeof r0[k], 'string', `record.${k} is STRING`);
+    }
+  });
+
   it('E-125 admin-API MTS mirrors + journal catch-all closures (StartVideo on /admin/API)', async () => {
     // the real client called POST /admin/API/MTS/Video/StartVideo and got the
     // 40B catch-all -> Live View empty. Now it must return a full RTSP session.

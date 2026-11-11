@@ -130,8 +130,17 @@ export function buildEventCenterSubscribePayload(queue, body = {}) {
   const b = body && typeof body === 'object' ? body : {};
   const initMessageId = str(b.initMessageId ?? b.msgId ?? '0');
   const pulled = queue.pull(initMessageId);
+  // E-142 P0 (rea-flows-v3 §1): data.results must be ARRAY-OF-STRING and
+  // data must carry totalCount INT + nextMsgId STRING or the native cursor
+  // becomes -1 and the alarm polling loop stalls.
+  const results = pulled.messages.map((m) => (typeof m === 'string' ? m : JSON.stringify(m)));
   return {
+    totalCount: pulled.count,
+    results,
+    nextMsgId: pulled.next,
     msgId: pulled.msgId,
+    next: pulled.next,
+    count: pulled.count,
     subscribeId: `sub-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
     subscribeAddress: str(b.subscribeAddress),
     subscribeAddrType: str(b.subscribeAddrType ?? b.AddrType ?? 'http'),
@@ -143,10 +152,7 @@ export function buildEventCenterSubscribePayload(queue, body = {}) {
     success: true,
     messages: pulled.messages,
     list: pulled.messages,
-    results: pulled.messages,
-    items: pulled.messages,
-    next: pulled.next,
-    count: pulled.count
+    items: pulled.messages
   };
 }
 
@@ -445,13 +451,27 @@ export const RPC_HANDLERS = {
 export const REST_HANDLERS = {
   'eventCenter/messages/subscribe': (s, body) => buildEventCenterSubscribePayload(s.queue, body),
 
-  'eventCenter/messages/subscribeAddress': (s, body) => ({
-    success: true,
-    subscribeAddress: str(body.subscribeAddress ?? ''),
-    publishAddress: str(body.publishAddress ?? ''),
-    topic: 'brms.notify',
-    subscribeTopics: []
-  }),
+  'eventCenter/messages/subscribeAddress': (s, body) => {
+    // E-142 (rea-flows-v3 §4, FUN_18068b720): full VSL GetMQConfig shape.
+    // subscribeAddrType is INT and initMessageId is an ARRAY of
+    // {msgId STRING, type INT} (type 1 = alarm, 2 = other).
+    const b = bodyData(body);
+    const msgId = str(b.msgId ?? b.initMessageId ?? '0') || '0';
+    return {
+      success: true,
+      subscribeAddress: str(b.subscribeAddress ?? ''),
+      publishAddress: str(b.publishAddress ?? ''),
+      topic: 'brms.notify',
+      subscribeTopics: [],
+      subscribeUser: str(b.subscribeUser ?? b.User ?? ''),
+      subscribePassword: str(b.subscribePassword ?? b.Password ?? ''),
+      subscribeAddrType: Number(b.subscribeAddrType ?? b.AddrType ?? 1) || 0,
+      initMessageId: [
+        { msgId, type: 1 },
+        { msgId, type: 2 }
+      ]
+    };
+  },
 
   'alarmBusiness/pendAlarmList': (s, body) => {
     const d = bodyData(body);

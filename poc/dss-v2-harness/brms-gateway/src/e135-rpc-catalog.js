@@ -193,7 +193,9 @@ const OK_BASE = { success: true };
 export const P0_EXACT = {
   // ===== SS/Record (playback/almacenamiento) =====
   'SS.Record.QueryRecords': {
-    ...LIST_BASE, records: [], session: '', startTime: '', endTime: '', channelId: '',
+    // E-142: pageCount is STRING at the root and totalCount is INT (LIST_BASE
+    // has totalCount as string; the native parser does atoi() on it).
+    ...LIST_BASE, totalCount: 0, pageCount: '1', records: [], session: '', startTime: '', endTime: '', channelId: '',
     recordType: '', streamType: '', streamId: '', ssId: '', diskId: '', diskPath: '',
     planId: '', recordName: '', cardNo: '', page: '1', startIndex: '0', endIndex: '0',
     fileLength: '0', forgotten: '0', recordSource: '', optional: ''

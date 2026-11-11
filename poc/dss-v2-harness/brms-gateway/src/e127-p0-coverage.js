@@ -4,6 +4,7 @@
 // offsets. Registered on every plausible root; hasRoute + try/catch guard
 // so a duplicate can NEVER abort the Fastify boot.
 import crypto from 'node:crypto';
+import { buildDeviceTypeResults } from './e024-catalogs.js';
 
 const P0 = [
   // device / privileges / PTZ (DPSDK device block)
@@ -76,7 +77,19 @@ function customData(base) {
     case 'config/key/generate':
       return { ...DEFAULT_DATA, key: crypto.randomBytes(32).toString('hex'), publicKey: '', privateKey: '', expireTime: '' };
     case 'eventCenter/messages/subscribeAddress':
-      return { ...DEFAULT_DATA, subscribeAddress: 'tcp://127.0.0.1:61616', publishAddress: 'tcp://127.0.0.1:61616', topic: 'brms.notify', subscribeTopics: [] };
+      // E-142 (rea-flows-v3 §4): full VSL subscribeAddress contract —
+      // subscribeAddrType INT + initMessageId ARRAY of {msgId,type}.
+      return {
+        ...DEFAULT_DATA,
+        subscribeAddress: '/videoService/eventCenter/messages/subscribe',
+        publishAddress: 'ssl://127.0.0.1:61616',
+        topic: 'brms.notify',
+        subscribeTopics: [],
+        subscribeUser: '',
+        subscribePassword: '',
+        subscribeAddrType: 1,
+        initMessageId: [{ msgId: '0', type: 1 }, { msgId: '0', type: 2 }]
+      };
     case 'alarm/disarm': case 'alarm/handle/batch': case 'alarm/link/output/channel/close':
     case 'alarm/soft-trigger/generate': case 'accounts/users/password/':
     case 'account/security/secret/deliver': case 'common/request/':
@@ -86,6 +99,22 @@ function customData(base) {
     case 'map/raster': case 'map/vector/status':
       return { ...DEFAULT_DATA, status: '0', rasterList: [], vectorList: [] };
     default:
+      if (base === 'devicesManager/deviceTypes') {
+        // E-142 (rea-flows-v3 §6, FUN_180664240): nested groups[] with
+        // deviceTypes[{typeCode,typeId,typeName}] + categoryId/categoryName.
+        const groups = buildDeviceTypeResults().map((g) => ({
+          categoryId: String(g.deviceCategory),
+          categoryName: g.deviceCategoryName,
+          deviceTypes: (g.deviceTypes || []).map((t) => ({
+            typeCode: String(t.deviceType), typeId: String(t.deviceType), typeName: t.deviceTypeName
+          }))
+        }));
+        return {
+          ...DEFAULT_DATA, groups, results: groups, list: groups,
+          deviceTypes: groups.flatMap((g) => g.deviceTypes),
+          total: groups.length, totalCount: groups.length
+        };
+      }
       if (base.startsWith('devicesManager/')) return { ...DEFAULT_DATA, tree: [], devices: [], organizations: [], deviceList: [] };
       if (base.startsWith('omc/')) return { ...DEFAULT_DATA, plans: [], tasks: [], packages: [], upgradeable: false };
       if (base.startsWith('alarm') || base.startsWith('alarmBusiness')) return { ...DEFAULT_DATA, alarms: [], duties: [], templates: [], zones: [], areas: [] };

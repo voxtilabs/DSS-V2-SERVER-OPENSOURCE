@@ -1103,13 +1103,14 @@ async function brmRpcHandler(req) {
     try { NOTIFY.deviceEvent('DEVICE_ADDED', created); } catch { /* best effort */ }
     // E-034: the RPC path provisions the same per-device RTSP path.
     scheduleStreamProvisioning(created);
+    // E-142 (rea-flows-v3 §5, FUN_1806e8170): the native AddDevice parser reads
+    // exactly {deviceCode STRING, failedDevices:[{errorMsg,deviceIp}]}.
     return rpcEnvelope(method, {
-      code: 1000,
-      desc: 'Success',
       id: created.deviceCode,
-      deviceCode: created.deviceCode,
-      code: created.deviceCode,
+      deviceCode: String(created.deviceCode),
+      failedDevices: [],
       results: [created],
+      list: [created],
       device: created,
       deviceVo: created
     });
@@ -1391,7 +1392,11 @@ for (const host of ['/videoService', '/brms/api/v1.1', '/brms/api/v1.0']) {
   app.post(`${host}/eventCenter/messages/subscribe`, async (req) => envelope(buildEventCenterSubscribePayload({ ...req.query, ...(req.body || {}) })));
   app.get(`${host}/eventCenter/messages/subscribe`, async (req) => envelope(buildEventCenterSubscribePayload({ ...req.query, ...(req.body || {}) })));
   app.get(`${host}/eventCenter/alarmTypes`, async () => envelope(buildEventCenterAlarmTypesPayload()));
+  app.post(`${host}/eventCenter/alarmTypes`, async (req) => envelope(buildEventCenterAlarmTypesPayload(req.body || req.query || {})));
+  // E-142: the native client calls alarm count with POST (FUN_180248de0) and
+  // parses a single numeric totalCount.
   app.get(`${host}/eventCenter/alarm/messages/count`, async () => envelope(buildEventCenterAlarmCountPayload()));
+  app.post(`${host}/eventCenter/alarm/messages/count`, async () => envelope(buildEventCenterAlarmCountPayload()));
 }
 
 // ===== E-121: Event Config completion + TVWall + OMMS alert + subscription ===
@@ -3011,6 +3016,30 @@ app.post('/brms/api/v1.0/SS/Record/LockRecord', { preHandler: auth }, async () =
 app.post('/brms/api/v1.0/SS/Record/UnlockRecord', { preHandler: auth }, async () => envelope({ success: true }));
 app.post('/brms/api/v1.0/SS/Record/QueryLock', { preHandler: auth }, async () => envelope({ lockInfos: [] }));
 app.post('/brms/api/v1.0/SS/Record/DeleteRecord', { preHandler: auth }, async () => envelope({ success: true }));
+
+// E-142 (rea-flows-v3 §7, FUN_180211270): the native client calls the PLURAL
+// `SS/Record/QueryRecords`. Response root needs pageCount STRING + session
+// STRING + totalCount INT; each record carries 13 STRING keys.
+const ssQueryRecordsPlural = async (req) => {
+  const b = { ...(req.query || {}), ...(req.body || {}) };
+  const session = genToken().slice(0, 16);
+  const fmt = (ts) => new Date(ts).toISOString().slice(0, 19).replace('T', ' ');
+  const now = Date.now();
+  const channelId = String(b.channelId || 'D0238JDG3016$1$0$0');
+  const records = [{
+    ssId: 'ss-1', forgotten: '0', endTime: fmt(now), streamType: String(b.streamType ?? '0'),
+    recordName: `rec-${channelId}`, diskId: 'disk-1', recordType: String(b.recordType ?? '1'),
+    streamId: 'main', planId: '', recordSource: String(b.recordSource ?? '0'),
+    startTime: fmt(now - 3600000), channelId, fileLength: '1024000'
+  }];
+  return envelope({
+    pageCount: '1', totalCount: records.length, session, records,
+    page: String(b.page ?? '1'), startIndex: String(b.startIndex ?? '0'), endIndex: String(b.endIndex ?? '3600')
+  });
+};
+for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '/videoService']) {
+  app.post(`${host}/SS/Record/QueryRecords`, { preHandler: auth }, ssQueryRecordsPlural);
+}
 
 // ===== EVENTS =====
 // (E-121: event/subscription POST moved into the E-121 loop above)
