@@ -504,3 +504,44 @@ raiz "Browser"/001 -> VIGILAB -> D0238JDG3016 -> canal
 requests grade-tree (`orgCode=001`, `orgCode=VIGILAB`), ya no uno plano de
 962 KB. El cliente debe tomar el stream desde `server/video/list`/
 `serviceStatus` (10.10.20.120:9100) sin route a la camara.
+
+### Iteracion 13 cerrada (2026-11-11, commit E-142)
+
+**Subagente REA `ses_e378213d8ffebzE70Lc8VPPjdW` entrego
+`%TEMP%\opencode\rea-flows-v3.md` + `rea-evidence-dpsdk-v3.json` (93 records)**:
+quedaba **1 P0 real** (Event Center pull) y **6 P1 reales**. Veredicto clave:
+el cliente DSS 8.006 **no usa DHIP/DVRIP/ARS contra el servidor DSS** (0 hits
+en DPSDK.dll) — esos quedan P2.
+
+**E-142 (7 archivos: index.js, e118, e136, e127, e135, e025, test/brms.test.js)**:
+- **P0 Event Center subscribe** (`FUN_1804d2d80`): `data.totalCount` INT +
+  `data.nextMsgId` STRING + `data.results` ARRAY-of-STRING (cada evento
+  serializado; el cliente re-envuelve `vms.vslalarm.msg`). Arreglado en
+  `e118.buildEventCenterSubscribePayload` y en la cola real de
+  `e136.buildEventCenterSubscribePayload` (antes `nextMsgId` ausente ⇒ cursor
+  -1 y el polling de alarmas no avanzaba).
+- **alarm count**: ruta **POST** `eventCenter/alarm/messages/count` añadida y
+  respuesta con `totalCount` INT único (acepta los 4 arrays INT + 6 STRING).
+- **alarmTypes**: `groups[]` anidado `{groupId, groupName, alarmTypes:[{other,
+  alarmTypeId, alarmTypeName}]}` en vez de catálogo plano.
+- **subscribeAddress**: contrato VSL completo — `subscribePassword`,
+  `subscribeUser`, `subscribeAddrType` INT, `initMessageId` ARRAY
+  `{msgId STRING, type INT}` (e127 + e136 REST handler).
+- **SS.Record.QueryRecords (plural)**: rutas POST explícitas en
+  `/brms/api/v1.1|v1.0`, `/admin/API`, `/videoService`; raíz `pageCount`
+  STRING + `totalCount` INT + `session`; `records[]` con las 13 claves STRING
+  (`ssId, forgotten, endTime, streamType, recordName, diskId, recordType,
+  streamId, planId, recordSource, startTime, channelId, fileLength`). P0_EXACT
+  también corregido (`pageCount:'1'`, `totalCount:0` int).
+- **BRMS.Device.AddDevice**: respuesta `{deviceCode STRING,
+  failedDevices:[{errorMsg, deviceIp}]}` (quitada la clave `code` duplicada
+  que pisaba el envelope; `failedDevices:[]` añadido en e025).
+- **devicesManager/deviceTypes**: `groups[]` anidado con
+  `categoryId/categoryName` + `deviceTypes:[{typeCode,typeId,typeName}]`.
+- Nuevo test E-142 cubre los 6 contratos.
+
+**Verificacion**: unit 229 tests / 228 pass / 0 fail / 1 skip; e2e 12/12 x2;
+deploy a `10.10.20.120` (scp + docker cp + restart), health 200, subscribe
+200 con `totalCount:0 nextMsgId:"0" results:[]`, alarm count POST 200
+`totalCount:0`, `devicesManager/deviceTypes` 200 con grupos anidados;
+live-verify dentro del contenedor **15/15**.
