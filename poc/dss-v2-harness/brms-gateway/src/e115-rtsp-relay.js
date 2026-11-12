@@ -161,6 +161,11 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     let auHead = null;
     const annexState = {};   // codec sniffing state for rtpToAnnexB
     let annexInjected = false;
+    // E-172: we re-mux (many upstream fragments -> one packet per AU), so the
+    // outgoing RTP sequence numbers MUST be contiguous: reusing the upstream
+    // seq made every AU look like "N packets lost" and the player waited for
+    // them forever (infinite spinner). Timestamps stay the upstream ones.
+    let outSeq = null;
     const MAX_INTERLEAVED = 60000;
 
     function sendInterleaved(channel, buf) {
@@ -195,20 +200,35 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
       }
       if (start >= 0) nals.push(frame.subarray(start));
       if (!nals.length) nals.push(frame);
-      const maxPayload = MAX_INTERLEAVED - head.length;
+      // E-173: the production server (200.54.10.50:9100, captured from MDP's
+      // own socket) sends ~1400-byte RTP packets, several per access unit,
+      // marker only on the last one. Emitting the whole AU (up to 60 kB) in one
+      // packet made the client's parser reject the stream. Split on NAL
+      // boundaries, and mid-NAL only for a NAL bigger than the packet budget.
+      const RTP_BUDGET = 1400;
+      const maxPayload = RTP_BUDGET - head.length;
       const chunks = [];
       let cur = [];
       let curLen = 0;
       for (const nal of nals) {
+        if (nal.length > maxPayload) {
+          if (curLen) { chunks.push(Buffer.concat(cur)); cur = []; curLen = 0; }
+          for (let off = 0; off < nal.length; off += maxPayload) {
+            chunks.push(nal.subarray(off, Math.min(nal.length, off + maxPayload)));
+          }
+          continue;
+        }
         if (curLen && curLen + nal.length > maxPayload) { chunks.push(Buffer.concat(cur)); cur = []; curLen = 0; }
         cur.push(nal);
         curLen += nal.length;
       }
       if (cur.length) chunks.push(Buffer.concat(cur));
       const baseSeq = head.readUInt16BE(2);
+      if (outSeq === null) outSeq = baseSeq;
       chunks.forEach((chunk, idx) => {
         const h = Buffer.from(head);
-        h.writeUInt16BE((baseSeq + idx) & 0xffff, 2);
+        h.writeUInt16BE(outSeq & 0xffff, 2);
+        outSeq = (outSeq + 1) & 0xffff;
         h[1] = idx === chunks.length - 1 ? (h[1] | 0x80) : (h[1] & 0x7f);
         sendInterleaved(CL_CH.from, Buffer.concat([h, chunk]));
       });
@@ -291,7 +311,11 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
                 }
                 if (dhav) {
                   const body = wrapWithDhav(frame, dhav);
-                  sendInterleaved(CL_CH.from, Buffer.concat([auHead, body]));
+                  const h = Buffer.from(auHead);
+                  if (outSeq === null) outSeq = h.readUInt16BE(2);
+                  h.writeUInt16BE(outSeq & 0xffff, 2);
+                  outSeq = (outSeq + 1) & 0xffff;
+                  sendInterleaved(CL_CH.from, Buffer.concat([h, body]));
                 } else {
                   sendAnnexAu(auHead, frame);
                 }
