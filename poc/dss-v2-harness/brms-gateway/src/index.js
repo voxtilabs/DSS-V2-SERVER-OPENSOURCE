@@ -1909,10 +1909,37 @@ app.post('/brms/api/v1.1/device/add/batch', async (req) => envelope(buildDeviceA
 app.post('/brms/api/v1.1/device/check/exist', async (req) => envelope(buildDeviceCheckExistPayload(req.body)));
 app.post('/brms/api/v1.1/device/delete/batch', async (req) => {
   const codes = [].concat(req.body?.deviceCodes || req.body?.codes || req.body?.list || []).filter(Boolean);
+  // E-178: snapshot the record BEFORE deleting. The client removes tree nodes
+  // by (orgCode + channel codes) produced from the device record; publishing
+  // the delete with an empty orgCode made Monitoring Center keep the node
+  // forever even though the server had already dropped the device.
+  // E-178: the delete notification must carry orgCode + channel count, or the
+  // client cannot locate the node in its org tree. Prefer the live record; fall
+  // back to the request's explicit metadata (ops / already-removed devices).
+  const hinted = new Map();
+  for (const d of [].concat(req.body?.devices || req.body?.deviceList || [])) {
+    if (d && d.deviceCode) hinted.set(String(d.deviceCode), d);
+  }
+  const snapshots = codes.map((code) => {
+    const rec = DEVICE_REGISTRY.get(String(code));
+    const hint = hinted.get(String(code)) || {};
+    return {
+      deviceCode: String(code), deviceId: String(code),
+      deviceName: rec?.deviceName || hint.deviceName,
+      orgCode: rec?.orgCode || hint.orgCode,
+      channelNum: rec?.channelNum || rec?.encoderChannelCount || rec?.channelCount || hint.channelNum
+    };
+  });
   const payload = buildDeviceDeleteBatchPayload(req.body);
-  // E-039: deleted devices are pushed too (tree must drop them without relogin).
-  for (const code of codes) {
-    try { NOTIFY.deviceEvent('DEVICE_DELETED', { deviceCode: String(code), deviceId: String(code) }); } catch { /* best effort */ }
+  // E-039/E-178: deleted devices are pushed with the org + channels so the
+  // org tree and Monitoring Center drop the node without a relogin.
+  for (const snap of snapshots) {
+    try { NOTIFY.deviceEvent('DEVICE_DELETED', snap); } catch { /* best effort */ }
+    // the tree node may be booked under the site root (001) instead of the
+    // device's own org: publish both so whichever the client holds is dropped.
+    if (snap.orgCode && snap.orgCode !== '001') {
+      try { NOTIFY.deviceEvent('DEVICE_DELETED', { ...snap, orgCode: '001' }); } catch { /* best effort */ }
+    }
   }
   return envelope(payload);
 });
