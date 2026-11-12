@@ -300,6 +300,48 @@ const SSL_CERT_2 = process.env.SSL_CERT_2 || '/certs/cert_9443.pem';
 const USE_HTTPS = process.env.HTTPS === 'true';
 
 const TOKENS = new Map();
+
+// ===== E-180: account data scope helpers ===================================
+// The session token carries the grants resolved at login (userId + roleIds +
+// {all|orgCodes|deviceCodes|channelIds}); these helpers trim the list payloads.
+function scopeForRequest(req) {
+  const tok = req && req.headers ? req.headers['x-subject-token'] : null;
+  const t = tok ? TOKENS.get(tok) : null;
+  return (t && t.grants) || { all: true, orgCodes: [], deviceCodes: [], channelIds: [] };
+}
+
+function trimListPayload(payload, grants, allowed, keyOf) {
+  if (!grants || grants.all || !payload) return payload;
+  const data = payload && payload.data && typeof payload.data === 'object' ? payload.data : payload;
+  const field = ['pageData', 'list', 'results', 'items', 'channelList', 'deviceList']
+    .find((f) => Array.isArray(data[f]));
+  if (!field) return payload;
+  const kept = data[field].filter((row) => allowed(grants, keyOf(row)));
+  data[field] = kept;
+  for (const f of ['pageData', 'list', 'results', 'items', 'channelList', 'deviceList']) {
+    if (Array.isArray(data[f])) data[f] = kept;
+  }
+  data.total = kept.length;
+  data.totalCount = String(kept.length);
+  data.totalCountStr = String(kept.length);
+  if (data.pageCount !== undefined) data.pageCount = kept.length ? '1' : '0';
+  return payload;
+}
+
+// E-180: normalize a list field coming from the dialog (array or CSV string).
+function toArray(v) {
+  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
+  if (v === undefined || v === null || v === '') return [];
+  return String(v).split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function trimDevicePage(payload, grants) {
+  return trimListPayload(payload, grants, deviceAllowed, (r) => r.deviceCode || r.deviceId || r.id);
+}
+
+function trimChannels(payload, grants) {
+  return trimListPayload(payload, grants, channelAllowed, (r) => r.channelId || r.channelCode || r.resourceId || r.id);
+}
 const PENDING = new Map();
 
 // RTSP session management
@@ -571,7 +613,22 @@ function envelope(data, code = 1000, desc = 'Success') {
 // passwordRemainValidityPeriod, ...). Unknown keys are ignored by the client.
 function buildLoginSuccess(userName) {
   const token = genToken();
-  TOKENS.set(token, { userName, expires: Date.now() + 86400000 });
+  // E-180: the session carries the account's data scope so every tree/list
+  // endpoint can filter without re-reading the stores on each request.
+  let acct = null;
+  try { acct = getUserAccount(userName); } catch { acct = null; }
+  const grants = grantsFor(acct);
+  console.log('[E180-LOGIN]', JSON.stringify({
+    user: String(userName), found: !!acct, userType: acct ? String(acct.userType) : '',
+    roleIds: acct ? acct.roleIds : null, all: grants.all,
+    channels: grants.channelIds.length, devices: grants.deviceCodes.length
+  }));
+  TOKENS.set(token, {
+    userName, expires: Date.now() + 86400000,
+    userId: acct ? String(acct.userId || acct.username || '') : '1',
+    roleIds: acct ? acct.roleIds : ['1'],
+    grants
+  });
   // E-134 D1/D4 (REA auditor ses_e41b71d20, FUN_18072a2b0 descriptor de 26
   // claves + FUN_1806771a0 keepalive): faltaban secretKey/secretVector/
   // credential/reused/verification/userLevel/pocId/userGroupId/
@@ -2012,7 +2069,36 @@ import { buildFullGradeDeviceTreePayload, buildFullGradeDeviceTreeSearchPayload 
 // query parameter on GET /v1.1/tree/full/grade-device-tree?orgCode=<node>&roleId=1
 // (the native Resources tree lazy-loads one level per request; see
 // e124-grade-tree.js buildFullGradeDeviceTreePayload scope logic).
-const gdtHandler = async (req) => envelope(buildFullGradeDeviceTreePayload({ ...(req.body || {}), ...req.query }));
+// E-180: the Resources/Monitoring tree is served by grade-device-tree - a
+// restricted account must not see the devices/channels outside its scope.
+function trimGradeTree(payload, grants) {
+  if (!grants || grants.all || !payload) return payload;
+  const data = payload && payload.data && typeof payload.data === 'object' ? payload.data : payload;
+  const pickArray = (name) => (Array.isArray(data[name]) ? data[name] : []);
+  const channels = pickArray('channels').filter((c) => channelAllowed(grants, c.channelId || c.channelCode || c.id));
+  const devices = pickArray('devices').filter((d) => deviceAllowed(grants, d.deviceCode || d.deviceId || d.id));
+  const allowedDevices = new Set(devices.map((d) => String(d.deviceCode || d.deviceId || d.id)));
+  const orgs = pickArray('organizations').filter((o) => {
+    if (grants.orgCodes.length && !grants.orgCodes.includes(String(o.orgCode || o.id || ''))) return false;
+    return true;
+  });
+  data.channels = channels;
+  data.devices = devices;
+  data.organizations = orgs;
+  for (const f of ['list', 'results', 'items', 'pageData', 'deviceList', 'channelList']) {
+    if (Array.isArray(data[f])) {
+      data[f] = data[f].filter((row) => {
+        const code = String(row.channelId || row.channelCode || row.deviceCode || row.deviceId || row.id || '');
+        if (code.includes('$')) return channelAllowed(grants, code);
+        if (allowedDevices.has(code)) return true;
+        return orgs.some((o) => String(o.orgCode || o.id) === code);
+      });
+    }
+  }
+  return payload;
+}
+
+const gdtHandler = async (req) => envelope(trimGradeTree(buildFullGradeDeviceTreePayload({ ...(req.body || {}), ...req.query }), scopeForRequest(req)));
 const gdtSearchHandler = async (req) => envelope(buildFullGradeDeviceTreeSearchPayload({ ...(req.body || {}), ...req.query }));
 for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/tree/grade-device-tree`, gdtHandler);
@@ -2060,13 +2146,14 @@ app.get('/brms/api/v1.1/user/list', async (req) => {
 });
 
 // --- device lists ---
-app.get('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
-app.get('/brms/api/v1.0/device/page', async (req) => envelope(buildDevicePagePayload(req.query)));
-app.post('/brms/api/v1.1/device/page', async (req) => envelope(buildDevicePagePayload({ ...req.query, ...(req.body || {}) })));
+app.get('/brms/api/v1.1/device/page', async (req) => envelope(trimDevicePage(buildDevicePagePayload(req.query), scopeForRequest(req))));
+app.get('/brms/api/v1.0/device/page', async (req) => envelope(trimDevicePage(buildDevicePagePayload(req.query), scopeForRequest(req))));
+app.post('/brms/api/v1.1/device/page', async (req) => envelope(trimDevicePage(buildDevicePagePayload({ ...req.query, ...(req.body || {}) }), scopeForRequest(req))));
 app.get('/brms/api/v1.1/discover/device/page', async (req) => envelope(buildDiscoverDevicePagePayload(req.query)));
-app.get('/brms/api/v1.1/device/channel/page', async () => {
+app.get('/brms/api/v1.1/device/channel/page', async (req) => {
   const list = allChannels();
-  return envelope({ list, results: list, channelList: list, items: list, total: list.length, pageNo: 1, pageSize: list.length || 20 });
+  const payload = { list, results: list, channelList: list, items: list, total: list.length, pageNo: 1, pageSize: list.length || 20 };
+  return envelope(trimChannels(payload, scopeForRequest(req)));
 });
 
 // E-094: the REAL web bundle's Device page (deviceTable, useDeviceApi
@@ -2288,7 +2375,42 @@ app.get('/brms/api/v1.1/device/statistics/count-by-device-category/list', async 
 app.get('/brms/api/v1.1/system/network/list', async () => envelope(buildNetworkListPayload()));
 app.get('/brms/api/v1.1/config/server/timezone', async () => envelope(buildServerTimezonePayload('UTC')));
 app.get('/brms/api/v1.1/config/timezone/list', async () => envelope(buildTimezoneListPayload()));
-const roleHandler = async () => envelope(buildRolePagePayload());
+const roleHandler = async () => {
+  const payload = buildRolePagePayload();
+  try {
+    const data = payload && payload.data ? payload.data : payload;
+    const rows = data.pageData || data.list || data.results || [];
+    const seen = new Set(rows.map((r) => String(r.roleId || r.id || '')));
+    for (const role of rolesStore().all()) {
+      const rid = String(role.roleId || '');
+      if (!rid || seen.has(rid)) continue;
+      rows.push({
+        roleId: rid, id: rid,
+        roleCode: String(role.roleCode || ('role' + rid)),
+        roleName: String(role.roleName || ''),
+        description: String(role.memo || ''), memo: String(role.memo || ''),
+        roleType: String(role.roleType || '2'), allowEdit: '1', userCount: '0',
+        status: '1', statusName: 'Enable', level: '3', roleLevel: '3',
+        default: '0', editable: '1', deletable: '1', checked: '1',
+        permission: '1', operate: '1', hasAuthority: '1',
+        orgCode: String(role.orgCode || '001'),
+        orgCodes: toArray(role.orgCodes), deviceCodes: toArray(role.deviceCodes),
+        channelIds: toArray(role.channelIds), channelList: toArray(role.channelIds),
+        deviceList: toArray(role.deviceCodes),
+        menuCodes: toArray(role.menuCodes), functionCodes: toArray(role.functionCodes),
+        createTime: String(role.createTime || ''), modifyTime: String(role.updateTime || '')
+      });
+      seen.add(rid);
+    }
+    for (const f of ['pageData', 'list', 'results', 'items']) {
+      if (Array.isArray(data[f])) data[f] = rows;
+    }
+    data.total = rows.length;
+    data.totalCount = String(rows.length);
+    data.totalCountStr = String(rows.length);
+  } catch (err) { console.log('[E180-ROLE-PAGE]', err.message); }
+  return envelope(payload);
+};
 app.get('/brms/api/v1.1/role/page', roleHandler);
 app.post('/brms/api/v1.1/role/page', roleHandler);
 app.get('/brms/api/v1.1/role/list', roleHandler);
@@ -2312,7 +2434,41 @@ for (const host of ['/brms/api/v1.0', '/ipms/api/v1.1', '/ipms/api/v1.0', '/brms
 // and /config/ldap hit the generic fallback -> the User Management view showed
 // an empty table (no admin row) and Role/x buttons had no data. Contracts from
 // the DPSDK.dll string pool (@0xc9cfe0-0xc9d898) - see e025-devices.js E-096.
-const userPageHandler = async (req) => envelope(buildUserPagePayload({ ...req.query, ...(req.body || {}) }));
+// E-180: the page merges the static native seed with the PERSISTED accounts so
+// a user created from the dialog actually shows up (before, the write was a
+// no-op ack and the row never existed).
+const userPageHandler = async (req) => {
+  const payload = buildUserPagePayload({ ...req.query, ...(req.body || {}) });
+  try {
+    const data = payload && payload.data ? payload.data : payload;
+    const rows = data.pageData || data.list || data.results || [];
+    const seen = new Set(rows.map((r) => String(r.username || r.name || '')));
+    for (const u of usersStore().all()) {
+      const username = String(u.username || '');
+      if (!username || seen.has(username)) continue;
+      const roleIds = Array.isArray(u.roleIds) ? u.roleIds : [];
+      const roles = roleIds.map((rid) => {
+        const role = rolesStore().get(rid);
+        return { roleId: String(rid), roleName: String(role?.roleName || '') };
+      });
+      rows.push({
+        id: String(u.userId || ''), userId: String(u.userId || ''),
+        username, name: String(u.name || username),
+        online: String(u.online || '0'), enableMPT: String(u.enableMPT || '0'),
+        status: String(u.status || '1'), userType: String(u.userType || '0'),
+        roles
+      });
+      seen.add(username);
+    }
+    for (const f of ['pageData', 'list', 'results', 'items']) {
+      if (Array.isArray(data[f])) data[f] = rows;
+    }
+    data.total = rows.length;
+    data.totalCount = String(rows.length);
+    data.totalCountStr = String(rows.length);
+  } catch (err) { console.log('[E180-USER-PAGE]', err.message); }
+  return envelope(payload);
+};
 app.get('/brms/api/v1.1/user/page', userPageHandler);
 app.post('/brms/api/v1.1/user/page', userPageHandler);
 app.get('/brms/api/v1.1/user/group/list', async (req) => envelope(buildUserGroupListPayload(req.query)));
@@ -2369,6 +2525,41 @@ const userWriteOk = async (req, reply) => {
   }
   const target = buildUserDetailPayload(code);
   const out = { success: true, userId: code, username: target?.username || '' };
+  // E-180: persist AddUser/SaveUser + the account's own scope override.
+  const isLockOrDelete = /lock|delete/i.test(String(req.url || ''));
+  const b = req.body || {};
+  const username = String(b.username || b.userName || b.loginName || '');
+  if (!isLockOrDelete && username && (req.method === 'POST' || req.method === 'PUT')) {
+    try {
+      // E-180b: `code` defaults to '1' when the route has no :userId (POST
+      // /user = AddUser). Using it as the update key silently overwrote the
+      // admin record with the new account's fields.
+      const paramId = req.params?.userId ? String(req.params.userId) : '';
+      const existing = usersStore().get(username) || (paramId ? usersStore().get(paramId) : null);
+      const patch = {
+        username,
+        name: String(b.name || b.realName || b.employeeName || username),
+        roleIds: toArray(b.roleIds || b.roleId || b.roleIdList),
+        orgCode: String(b.orgCode || '001'),
+        status: String(b.status || '1'),
+        userType: String(b.userType || '0'),
+        enableMPT: String(b.enableMPT || '0'),
+        password: String(b.password || ''),
+        digestPassword: String(b.digestPassword || '')
+      };
+      if (existing) usersStore().update(existing.userId, patch); else usersStore().add(patch);
+      setUserScope(username, {
+        orgCodes: b.orgCodes,
+        deviceCodes: b.deviceCodes || b.deviceList,
+        channelIds: b.channelIds || b.channelList || b.channelCodes,
+        dataScope: String(b.dataScope || (toArray(b.channelIds || b.channelList).length ? 'channel' : ''))
+      });
+      out.username = username;
+      console.log('[E180-USER-SAVE]', username, JSON.stringify({
+        roles: patch.roleIds, channels: toArray(b.channelIds || b.channelList).length
+      }));
+    } catch (err) { console.log('[E180-USER-SAVE] failed:', err.message); }
+  }
   return envelope({ success: true, ...out, out, data: out });
 };
 for (const m of ['post', 'put', 'get']) {
@@ -2422,6 +2613,28 @@ const roleWriteOk = async (req) => {
     channelIds: b.channelIds || [], deviceCodes: b.deviceCodes || [],
     createTime: '2026-01-01 00:00:00', modifyTime: '2026-01-01 00:00:00'
   };
+  // E-180: persist the role + its grants. Before this the dialog "saved" and the
+  // data evaporated, so no scope could ever be applied to an account.
+  try {
+    const existing = rolesStore().get(id);
+    const base = {
+      roleName: role.roleName,
+      roleType: String(b.roleType || existing?.roleType || '2'),
+      orgCode: role.orgCode,
+      memo: String(b.memo || b.description || existing?.memo || '')
+    };
+    if (existing) rolesStore().update(id, base); else rolesStore().add({ roleId: id, ...base });
+    setRoleGrants(id, {
+      orgCodes: b.orgCodes, deviceCodes: b.deviceCodes || b.deviceList,
+      channelIds: b.channelIds || b.channelList || b.channelCodes,
+      menuCodes: b.menuCodes, functionCodes: b.functionCodes
+    });
+    console.log('[E180-ROLE-SAVE]', id, JSON.stringify({
+      channels: toArray(b.channelIds || b.channelList).length,
+      devices: toArray(b.deviceCodes || b.deviceList).length,
+      orgs: toArray(b.orgCodes).length
+    }));
+  } catch (err) { console.log('[E180-ROLE-SAVE] failed:', err.message); }
   return envelope({ success: true, ...role, role, data: role });
 };
 app.post('/brms/api/v1.1/role', roleWriteOk);
@@ -2493,7 +2706,26 @@ app.post('/brms/api/v1.1/domain/import/organization/page', domainOrgHandler);
 // BEFORE opening Live View; we grant the full catalog (liveView 8, playback
 // 9, ptzOperate 13, download 10, ...) on every registered channel, so
 // D0238JDG3016$1$0$0 (org VIGILAB) opens immediately. All flags STRING.
-const chFnCheck = async (req) => envelope(buildChannelFunctionCheckPayload({ ...req.query, ...(req.body || {}) }));
+// E-180: a restricted account must NOT get rights on channels outside its
+// scope - this is the gate the client evaluates before opening Live View.
+const chFnCheck = async (req) => {
+  const body = { ...req.query, ...(req.body || {}) };
+  const payload = buildChannelFunctionCheckPayload(body);
+  const grants = scopeForRequest(req);
+  if (grants.all) return envelope(payload);
+  const data = payload && payload.data ? payload.data : payload;
+  const asked = String(body.channelCode || body.channelId || body.channel || '');
+  const deny = (row) => ({ ...row, functionCodes: [], checkResult: '0', available: '0', hasRight: '0', hasFunction: '0', hasAuthority: '0' });
+  if (asked && !channelAllowed(grants, asked)) {
+    return envelope(deny({ ...data, channelCode: asked, channelId: asked, list: [], results: [], total: '0', totalCount: '0' }));
+  }
+  const rows = (data.list || data.results || []).filter((c) => channelAllowed(grants, c.channelId || c.channelCode));
+  const kept = rows.length ? rows : (channelAllowed(grants, data.channelId || data.channelCode) ? [data] : []);
+  data.list = kept; data.results = kept; data.pageData = kept;
+  data.total = String(kept.length); data.totalCount = String(kept.length);
+  if (!kept.length) Object.assign(data, deny({}));
+  return envelope(payload);
+};
 app.get('/brms/api/v1.1/account/function/channel/check', chFnCheck);
 app.post('/brms/api/v1.1/account/function/channel/check', chFnCheck);
 app.get('/brms/api/v1.1/account/function/channel/check/batch', chFnCheck);
@@ -2555,14 +2787,16 @@ app.get('/brms/api/v1.0/tree/orgs', async () => {
   const base = buildNativeOrgTreePayload();
   return envelope({ ...base, orgList: base.departments, totalCount: paged.totalCount, results: paged.results });
 });
-app.get('/brms/api/v1.0/tree/devices', async () => {
+app.get('/brms/api/v1.0/tree/devices', async (req) => {
   const paged = buildPagedDevicesPayload({});
-  return envelope({ ...buildNativeDeviceTreePayload({}), deviceList: paged.results, list: paged.results, items: paged.results, total: paged.totalCount, totalCount: paged.totalCount, results: paged.results });
+  const payload = { ...buildNativeDeviceTreePayload({}), deviceList: paged.results, list: paged.results, items: paged.results, total: paged.totalCount, totalCount: paged.totalCount, results: paged.results };
+  return envelope(trimDevicePage(payload, scopeForRequest(req)));
 });
-app.get('/brms/api/v1.0/tree/channels', async () => {
+app.get('/brms/api/v1.0/tree/channels', async (req) => {
   const channelList = allChannels().map((c) => ({ ...c, deviceIp: maskDeviceIp(c) }));
   const paged = buildPagedChannelsPayload();
-  return envelope({ channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results });
+  const payload = { channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results };
+  return envelope(trimChannels(payload, scopeForRequest(req)));
 });
 
 // ===== E-021: exact contracts for the routes that hit [FALLBACK] in the live
@@ -2962,13 +3196,15 @@ app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => {
 app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async (req) => {
   const body = req.body || {};
   const paged = buildPagedDevicesPayload(body);
-  return envelope({ ...buildNativeDeviceTreePayload(body), deviceList: paged.results, list: paged.results, items: paged.results, total: paged.totalCount, totalCount: paged.totalCount, results: paged.results });
+  const payload = { ...buildNativeDeviceTreePayload(body), deviceList: paged.results, list: paged.results, items: paged.results, total: paged.totalCount, totalCount: paged.totalCount, results: paged.results };
+  return envelope(trimDevicePage(payload, scopeForRequest(req)));
 });
-app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => {
+app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async (req) => {
   // E-143a: the channelList alias of this tree endpoint is masked too
   const channelList = allChannels().map((c) => ({ ...c, deviceIp: maskDeviceIp(c) }));
   const paged = buildPagedChannelsPayload();
-  return envelope({ channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results });
+  const payload = { channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results };
+  return envelope(trimChannels(payload, scopeForRequest(req)));
 });
 // E-037: the v1.1 tree helpers of the web SPA and of the native stack.
 app.get('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgTreePayload()));
@@ -2979,7 +3215,7 @@ app.post('/brms/api/v1.1/tree/device-tree', async () => envelope(buildNativeOrgT
 app.get('/brms/api/v1.1/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
 app.post('/brms/api/v1.1/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
 app.post('/brms/api/v1.0/tree/deviceOrg', async () => envelope(buildNativeOrgTreePayload()));
-app.post('/brms/api/v1.1/tree/devices', async (req) => envelope(buildNativeDeviceTreePayload(req.body || {})));
+app.post('/brms/api/v1.1/tree/devices', async (req) => envelope(trimDevicePage(buildNativeDeviceTreePayload(req.body || {}), scopeForRequest(req))));
 app.post('/brms/api/v1.0/tree/deviceOrgs', async () => envelope(buildNativeOrgTreePayload()));
 
 // ===== MTS VIDEO =====
@@ -3620,6 +3856,9 @@ function createWebSocketServer(httpsServer) {
 // E-119: accept BOTH framings - the RE-verified binary header + JSON payload
 // (Dahua AutoRegister.cpp @0x01366578) and the legacy 32B string framing.
 import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson, ARS_MAX_PAYLOAD, ARS_MAX_BUFFER } from './e119-ars-protocol.js';
+// E-180: account data scope (site / device / channel) resolved from the
+// persistent user+role stores; every list/tree/gate endpoint filters with it.
+import { getUser as getUserAccount, grantsFor, channelAllowed, deviceAllowed, usersStore, rolesStore, setUserScope, setRoleGrants } from './e180-authz.js';
 import { registerP0Coverage } from './e127-p0-coverage.js';
 import { registerP1Coverage } from './e129-p1-coverage.js';
 // E-135: motor del catalogo RPC (2.024 metodos cosechados del string-pool del

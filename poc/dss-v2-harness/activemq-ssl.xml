@@ -117,7 +117,14 @@
                  failover:(ssl://%s?startupMaxReconnectAttempts=1&...)); the plain
                  OpenWire connector only produced "Frame size of 352 MB" WARNs
                  (TLS ClientHello parsed as an OpenWire frame). -->
-            <transportConnector name="openwire-ssl" uri="ssl://0.0.0.0:61616?maximumConnections=1000&amp;wireFormat.maxFrameSize=104857600"/>
+            <!-- E-179: the native client's MQ stack negotiates inconsistently -
+                 GetMqConfig advertises SSLEnable "0" while MQInit builds
+                 failover:(ssl://...) depending on the build. A TLS-only
+                 connector made every MSG.exe attempt die with "SSL peer shut
+                 down incorrectly" (handshake abort) and NO notify ever reached
+                 the UI. auto:// sniffs the first bytes: TLS ClientHello gets
+                 ssl://, plain OpenWire gets tcp:// - same port, both work. -->
+            <transportConnector name="openwire-auto" uri="auto://0.0.0.0:61616?maximumConnections=1000&amp;wireFormat.maxFrameSize=104857600"/>
             <transportConnector name="amqp" uri="amqp://0.0.0.0:5672?maximumConnections=1000&amp;wireFormat.maxFrameSize=104857600"/>
             <transportConnector name="stomp" uri="stomp://0.0.0.0:61613?maximumConnections=1000&amp;wireFormat.maxFrameSize=104857600"/>
             <transportConnector name="mqtt" uri="mqtt://0.0.0.0:1883?maximumConnections=1000&amp;wireFormat.maxFrameSize=104857600"/>
