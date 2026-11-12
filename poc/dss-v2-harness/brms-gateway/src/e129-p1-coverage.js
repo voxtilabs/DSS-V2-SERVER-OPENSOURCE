@@ -39,7 +39,9 @@ const P1 = {
   'alarm/combination/rule/list': { ...DEFAULT_DATA, list: [], results: [] },
   'config/alarm/handle/comment': { ...DEFAULT_DATA, success: true },
   // monitor URIs (0x0C963F0-0x0C90898)
-  'realmonitor/uri': { ...DEFAULT_DATA, uri: '', url: '' },
+  // E-148: 'realmonitor/uri' is served for real in index.js (per-device URL,
+  // exact 11-string Media.RealMonitor.Uri DTO) — do NOT register the static
+  // stub here or Fastify would duplicate the route.
   'playback/uri': { ...DEFAULT_DATA, uri: '', url: '' },
   'capture/getCaptureChnByUserId': { ...DEFAULT_DATA, list: [], results: [] },
   'resource/videoRealation': { ...DEFAULT_DATA, list: [], results: [] },

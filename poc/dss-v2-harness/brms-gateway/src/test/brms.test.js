@@ -823,6 +823,28 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-148 Media.RealMonitor.Uri (realmonitor/uri) serves the 11-string DTO with a dialable url', async () => {
+    // REA DSS_RESIDUAL_PASS3.md: native StartRealPlay -> GET/POST
+    // realmonitor/uri; response descriptor FUN_180680310 = 11 string keys.
+    const keys = ['connectType', 'protocol', 'trackId', 'ip', 'port', 'token', 'stunPort', 'url', 'stunEnable', 'session', 'minRate'];
+    for (const method of ['GET', 'POST']) {
+      const url = method === 'GET'
+        ? `${BASE}/brms/api/v1.0/realmonitor/uri?channelId=D0238W9Q1004$1$0$0&urlType=1&scheme=RTSP&duration=600&subType=0&trackId=0`
+        : `${BASE}/brms/api/v1.0/realmonitor/uri`;
+      const r = await fetch(url, method === 'GET'
+        ? { method }
+        : { method, headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ channelId: 'D0238W9Q1004$1$0$0', urlType: '1', scheme: 'RTSP', duration: '600', subType: '0', trackId: '0' }) });
+      const j = await r.json();
+      assert.equal(j.code, 1000, method + ' code');
+      assert.equal(j.data.url.startsWith('rtsp://'), true, method + ' url is dialable');
+      assert.ok(j.data.url.includes('cam_D0238W9Q1004'), method + ' url resolves the device OWN path');
+      for (const k of keys) assert.equal(typeof j.data[k], 'string', `${method} ${k} is a STRING`);
+      const ghost = await (await fetch(`${BASE}/brms/api/v1.0/realmonitor/uri?channelId=GHOST$1$0$0`)).json();
+      assert.notEqual(ghost.code, 1000, 'unknown channel is an error');
+      assert.strictEqual(ghost.data, null, 'unknown channel has no url');
+    }
+  });
+
   it('E-114 keepalive renews the token (session never dies ~30min)', async () => {
     // RE evidence: CRestLogicalImplPro::Heartbeat stores the token from the
     // keepalive response ("Heartbeat is success, m_strToken = %s" @0xc95670) -

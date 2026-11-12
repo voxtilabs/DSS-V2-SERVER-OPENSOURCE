@@ -2878,6 +2878,43 @@ function resolvePlaybackTarget(channelId) {
   if (!device) return { error: envelope(null, 1001, 'channel not found: ' + String(channelId || '')) };
   return { device, path: device.mediamtxPath || mediaMtxPathForDevice(device) };
 }
+// E-148 (REA DSS_RESIDUAL_PASS3.md): the NATIVE Live View path is
+// Dpsdk::CRestLogicalImplVSL::StartRealPlay -> REST `realmonitor/uri`
+// (Media.RealMonitor.Uri). Its response descriptor FUN_180680310 declares
+// ELEVEN string keys (offsets 0x00..0x50): connectType, protocol, trackId, ip,
+// port, token, stunPort, url, stunEnable, session, minRate. `url` is THE
+// dialable RTSP URL. Our previous static stub answered url:'' (dead) — now it
+// resolves the real per-device stream exactly like StartVideo.
+const realMonitorUri = async (req) => {
+  const body = mtsBody(req);
+  const channelId = body.channelId || req.query?.channelId || '';
+  // Probe without a channel (capability check / coverage suite): answer the
+  // descriptor shape with no session. A channel id that does not exist is a
+  // real error (1001), never a URL to somebody else's stream.
+  if (!channelId) {
+    return envelope({
+      connectType: '0', protocol: 'RTSP', trackId: '0', ip: PUBLIC_HOST, port: String(RTSP_PORT),
+      token: '', stunPort: '3478', url: '', uri: '', stunEnable: '0', session: '', minRate: '0'
+    });
+  }
+  const target = resolvePlaybackTarget(channelId);
+  if (target.error) return target.error;
+  const token = genToken();
+  const session = genToken().slice(0, 16);
+  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${target.path}?token=${token}`;
+  RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: target.path, deviceCode: target.device?.deviceCode || '' });
+  // Exactly the 11 string keys of the DTO (no extras) + legacy `uri` alias.
+  return envelope({
+    connectType: '1', protocol: 'RTSP', trackId: String(body.trackId || '0'),
+    ip: PUBLIC_HOST, port: String(RTSP_PORT), token, stunPort: '3478',
+    url, uri: url, stunEnable: '1', session, minRate: '0'
+  });
+};
+for (const base of ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '/admin/api', '/v1.1', '/v1.0', '/videoService']) {
+  app.get(`${base}/realmonitor/uri`, realMonitorUri);
+  app.post(`${base}/realmonitor/uri`, realMonitorUri);
+}
+
 app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
   const { channelId, streamType, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, trackId } = mtsBody(req);
   const token = genToken();
