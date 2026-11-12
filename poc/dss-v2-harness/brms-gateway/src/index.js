@@ -104,7 +104,7 @@ import {
   FALLBACK_ROUTES
 } from './e026-video.js';
 // E-034: every registered device owns its own MediaMTX RTSP path.
-import { ensureDeviceStream, findDeviceByChannelId } from './e025-devices.js';
+import { ensureDeviceStream, findDeviceByChannelId, buildDeviceModifyBatchPayload, setDeviceNotifier } from './e025-devices.js';
 // E-033: real monitor/view contract (saved layouts) extracted from the
 // original DSS Server V8.008 package (ViewController / ViewTreeVo / ...).
 import {
@@ -317,6 +317,9 @@ const NOTIFY = createNotifyHub({
   // the ones MSG.exe subscribed to (mq.<x>.msg.topic.<UserId>).
   mqUserId: MQ_USER_ID
 });
+// E-144: wire the device-notify hook so device modify pushes DEVICE_STATUS
+// from e025-devices.js without importing the hub there.
+setDeviceNotifier(NOTIFY);
 
 // ===== ARS TCP Binary Protocol (DVRIP/DHIP) =====
 // Dahua Auto Register Service - TCP 9500 (VMS_ARCMS.exe)
@@ -1850,6 +1853,19 @@ app.post('/brms/api/v1.1/device/delete/batch', async (req) => {
 app.post('/brms/api/v1.1/device/move/batch', async (req) => envelope(buildDeviceMoveBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/password/change/batch', async (req) => envelope(buildDevicePasswordChangeBatchPayload(req.body)));
 app.post('/brms/api/v1.1/device/timezone/update/batch', async (req) => envelope(buildDeviceTimezoneUpdateBatchPayload(req.body)));
+// E-144: device modify (Device Management edit). Updates name/ip/port/creds,
+// invalidates the cached RTSP source and re-provisions the MediaMTX path
+// inside the running process, then pushes DEVICE_STATUS so the tree refreshes.
+for (const p of ['/brms/api/v1.1/device/modify/batch', '/brms/api/v1.0/device/modify/batch', '/brms/api/v1.1/device/update/batch', '/brms/api/v1.1/device/modify']) {
+  app.post(p, async (req) => {
+    const payload = buildDeviceModifyBatchPayload(req.body);
+    // E-039: modified devices push too (tree reflects the edit without relogin).
+    for (const r of payload.results || []) {
+      if (r.success) { try { NOTIFY.deviceEvent('DEVICE_STATUS', { deviceCode: r.deviceCode, deviceId: r.deviceCode }); } catch { /* best effort */ } }
+    }
+    return envelope(payload);
+  });
+}
 
 // ===== E-027: STORAGE PLAN / SS RECORD ROUTES =====
 // Needed by the Storage Plan tab (003005) and the Device Config dialogs.

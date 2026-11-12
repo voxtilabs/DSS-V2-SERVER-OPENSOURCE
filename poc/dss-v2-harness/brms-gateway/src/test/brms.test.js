@@ -37,6 +37,18 @@ function waitForServer() {
 
 describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 }, () => {
   before(async () => {
+    // E-144: seed the store with a VIGILAB device so the tree tests do not
+    // depend on left-over state from previous runs (the org tree needs a
+    // VIGILAB device at boot; an empty/foreign store flipped E-139's
+    // hasChild='1' -> '0').
+    try {
+      const { createDeviceRecord } = await import('../e025-devices.js');
+      const seed = createDeviceRecord(
+        { deviceIp: '192.168.0.238', devicePort: 8021, protocolType: '99', deviceName: 'EBA1', channelCount: 1, orgCode: 'VIGILAB', serverCode: 'video#local', userName: USER, deviceCategory: '1', deviceType: '1', deviceCode: 'D0238W9Q1004', manufacturer: 'Dahua' },
+        { source: 'seed', manufacturer: 'Dahua', serialNumber: 'E2E-TREE-SEED' }
+      );
+      fs.writeFileSync(STORE_PATH, JSON.stringify([seed], null, 2));
+    } catch (err) { console.log('[seed] skipped:', err.message); }
     serverProc = spawn('node', ['src/index.js'], { cwd: 'C:/Users/bruno/Downloads/LOCURA DSS/poc/dss-v2-harness/brms-gateway', stdio: ['ignore', 'pipe', 'pipe'] });
     // CRITICAL: consume the server pipes. The gateway logs every request
     // ([REQ]/[RES] debug lines); with stdio:'pipe' and NO reader the OS pipe
@@ -1928,6 +1940,72 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
       body: JSON.stringify({ deviceCodes: [code] })
     });
+  });
+
+  // ===== E-144: bogus loopback sources rejected + device modify re-provisions =====
+  it('E-144a ensureDeviceStream rejects a loopback deviceIp instead of configuring a dead pull', async () => {
+    const add = await (await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceName: 'E144-BOGUS', deviceIp: '127.0.0.9', devicePort: 1, protocolType: '99', channelCount: 1 })
+    })).json();
+    const code = add.data.deviceCode || add.data.device?.deviceCode;
+    assert.ok(code, 'device created');
+    // provisioning runs in the background; poll device/page for the rejection
+    let row = null;
+    for (let i = 0; i < 24 && !row?.streamSource; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const page = await (await fetch(`${BASE}/brms/api/v1.1/device/page?pageSize=100`, { headers: { 'X-Subject-Token': token } })).json();
+      row = (page.data.results || page.data.list || []).find((d) => d.deviceCode === code);
+    }
+    assert.ok(row, 'device visible in page');
+    assert.equal(row.mediamtxPath, `cam_${code}`);
+    assert.equal(row.streamSource, 'rejected-loopback', 'loopback source rejected, no dahua-convention pull to 127.0.0.x');
+    assert.equal(row.streamConfigured, false);
+    assert.equal(row.rtspUri || '', '', 'no bogus rtspUri persisted');
+    await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [code] })
+    });
+  });
+
+  it('E-144b device/modify/batch updates ip/name/creds inside the running process', async () => {
+    const add = await (await fetch(`${BASE}/brms/api/v1.1/device`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceName: 'E144-BROKEN', deviceIp: '127.0.0.8', devicePort: 1, protocolType: '99', channelCount: 1 })
+    })).json();
+    const code = add.data.deviceCode || add.data.device?.deviceCode;
+    assert.ok(code, 'bogus device created');
+    const mod = await (await fetch(`${BASE}/brms/api/v1.1/device/modify/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({
+        deviceCodes: [code],
+        device: { deviceCode: code, deviceName: 'E144-FIXED', deviceIp: '192.0.2.55', devicePort: 8021, userName: 'admin', password: 'admin' }
+      })
+    })).json();
+    assert.equal(mod.code, 1000);
+    assert.equal(mod.data.modified, 1, 'one device modified');
+    assert.ok((mod.data.results || []).every((r) => r.success), 'modify results ok');
+    // the record must show the new identity immediately (persist is synchronous)
+    const page = await (await fetch(`${BASE}/brms/api/v1.1/device/page?pageSize=100`, { headers: { 'X-Subject-Token': token } })).json();
+    const row = (page.data.results || page.data.list || []).find((d) => d.deviceCode === code);
+    assert.ok(row, 'device still visible');
+    assert.equal(row.deviceIp, '192.0.2.55', 'deviceIp updated');
+    assert.equal(row.deviceName, 'E144-FIXED', 'deviceName updated');
+    assert.equal(row.devicePort, 8021, 'devicePort updated');
+    await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: [code] })
+    });
+  });
+
+  it('E-144c modify of an unknown device reports a per-row failure', async () => {
+    const mod = await (await fetch(`${BASE}/brms/api/v1.1/device/modify/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ deviceCodes: ['E144-NO-SUCH-CODE'], device: { deviceName: 'X' } })
+    })).json();
+    assert.equal(mod.code, 1000);
+    assert.equal(mod.data.modified, 0);
+    assert.equal((mod.data.results || [])[0]?.success, false);
   });
 
   // ===== E-033: real monitor/view contract =====

@@ -144,6 +144,37 @@ export async function ensureDeviceStream(device) {
   let rtspUri = String(device.rtspUri || '');
   let source = 'cached';
 
+  // E-144: a loopback deviceIp can never carry a real camera stream. Some
+  // registration funnels (LAN-scan join / P2P fallback) materialized records
+  // with deviceIp=127.0.0.1 (observed: "EBA1" D7001SHX9002 @127.0.0.1:1) and
+  // the 60 s provisioning loop then configured a dahua-convention pull to
+  // 127.0.0.1:554 forever (MediaMTX: "connection refused", path notReady ->
+  // client "RTSP SETUP timed out"). Reject the bogus source instead of
+  // configuring a pull that can never work, and vacate the dead path so the
+  // client gets an immediate 400 instead of a hanging SETUP.
+  const isLoopback = (h) => /^(127\.|localhost$|::1$|0\.0\.0\.0$)/.test(String(h).toLowerCase());
+  const uriHost = (() => { try { return new URL(rtspUri).hostname; } catch { return ''; } })();
+  // E-144: provisioning runs in a setImmediate closure; the device may have
+  // been deleted meanwhile (delete/batch removes it from the registry while
+  // the background ensureDeviceStream still holds the old object). Never
+  // resurrect a deleted device: persist only when the registry still owns it.
+  if (DEVICE_REGISTRY.get(device.deviceCode) !== device) {
+    console.log('[E034-STREAM] skip provisioning for removed device', String(device.deviceCode));
+    return device;
+  }
+  if (isLoopback(ip) || isLoopback(uriHost)) {
+    const pathName = device.mediamtxPath || mediaMtxPathForDevice(device);
+    device.rtspUri = '';
+    device.streamSource = 'rejected-loopback';
+    device.streamConfigured = false;
+    persistDevice(device);
+    setImmediate(() => { removeMediaMTXPath(pathName); });
+    console.log('[E034-STREAM] REJECT bogus loopback source', JSON.stringify({
+      deviceCode: device.deviceCode, deviceIp: ip, devicePort: port
+    }));
+    return device;
+  }
+
   if (!rtspUri) {
     const creds = { userName: device.userName || device.loginName, password: device.loginPass || device.password };
     if (protocol === '99' || port === 8021) {
@@ -1103,8 +1134,80 @@ export function buildDeviceDeleteBatchPayload(body = {}) {
 }
 
 export function buildDeviceMoveBatchPayload() { return { success: true, results: [], list: [] }; }
+
+// E-144: notify hook injected by index.js (this data module must not import
+// the MQ hub directly); falls back to a no-op so unit tests stay quiet.
+let DEVICE_NOTIFIER = { deviceEvent: () => {} };
+export function setDeviceNotifier(n) { DEVICE_NOTIFIER = n || { deviceEvent: () => {} }; }
+export function getDeviceNotifier() { return DEVICE_NOTIFIER; }
 export function buildDevicePasswordChangeBatchPayload() { return { success: true, results: [], list: [], failList: [] }; }
 export function buildDeviceTimezoneUpdateBatchPayload() { return { success: true, results: [], list: [], failList: [] }; }
+
+// E-144: device modify (Device Management edit). Accepts the common DSS
+// shapes: { deviceCodes:[code], device:{...fields} } and
+// { list:[{ deviceCode, ...fields }] }. Editable fields: deviceName,
+// deviceIp, devicePort, userName, loginPass/password, protocolType,
+// deviceCategory, deviceType, orgCode, serverCode. When the stream-relevant
+// identity (deviceIp / devicePort / userName / credentials) changes, the
+// cached RTSP source is invalidated so ensureDeviceStream re-discovers the
+// real stream (ONVIF or Dahua convention) and re-provisions the MediaMTX
+// path inside the RUNNING process (an external store edit is overwritten by
+// the 60 s provisioning loop - observed 2026-11-12 on D7001SHX9002).
+export function buildDeviceModifyBatchPayload(body = {}) {
+  const rows = [];
+  if (Array.isArray(body.list) && body.list.length) {
+    for (const row of body.list) {
+      if (row && (row.deviceCode || row.deviceId)) rows.push({ ...row, deviceCode: String(row.deviceCode || row.deviceId) });
+    }
+  } else {
+    const dev = body.device || body;
+    const code = String(dev.deviceCode || dev.deviceId || (Array.isArray(body.deviceCodes) ? body.deviceCodes[0] : '') || '');
+    if (code) rows.push({ ...dev, deviceCode: code });
+  }
+
+  const results = [];
+  let modified = 0;
+  for (const row of rows) {
+    const device = DEVICE_REGISTRY.get(row.deviceCode);
+    if (!device) {
+      results.push({ deviceCode: row.deviceCode, success: false, errorCode: 1001, errorMsg: 'Device not found' });
+      continue;
+    }
+    const STREAM_ID_FIELDS = ['deviceIp', 'devicePort', 'userName', 'loginPass', 'password'];
+    let streamDirty = false;
+    for (const f of ['deviceName', 'deviceIp', 'devicePort', 'userName', 'loginPass', 'password', 'protocolType', 'deviceCategory', 'deviceType', 'orgCode', 'serverCode']) {
+      if (row[f] !== undefined && row[f] !== null && row[f] !== '') {
+        if (device[f] !== row[f]) {
+          device[f] = row[f];
+          if (STREAM_ID_FIELDS.includes(f)) streamDirty = true;
+        }
+      }
+    }
+    if (row.devicePort !== undefined) {
+      const p = Number(row.devicePort);
+      if (Number.isFinite(p) && p > 0) device.devicePort = p;
+    }
+    if (streamDirty) {
+      // force re-discovery of the stream source on the next provisioning tick
+      device.rtspUri = '';
+      device.streamSource = '';
+      device.streamConfigured = false;
+    }
+    persistDevice(device);
+    modified += 1;
+    results.push({ deviceCode: device.deviceCode, success: true });
+    setImmediate(async () => {
+      try {
+        const fresh = DEVICE_REGISTRY.get(device.deviceCode) || device;
+        await ensureDeviceStream(fresh);
+        DEVICE_NOTIFIER.deviceEvent('DEVICE_STATUS', fresh);
+      } catch (err) {
+        console.log('[E025-MODIFY] stream re-provision failed:', err.message);
+      }
+    });
+  }
+  return { success: true, modified, results, list: results, total: modified, failList: results.filter((r) => !r.success) };
+}
 
 export function buildDeviceDiscoverAsyncBatchPayload() {
   return { taskId: 'disc-' + Date.now().toString(36), status: 'success', progress: 100, results: [], total: 0 };
