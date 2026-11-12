@@ -23,6 +23,10 @@ services:
       # vanishes from the tree after each deploy. The bind mount also matches
       # the path used by the local dev server (brms-gateway/data/devices.json).
       - ./brms-gateway/data:/app/data
+      # E-176: the gateway source is a bind mount so a container recreation
+      # (`up -d`, host reboot) can never silently roll the code back to the
+      # image's stale copy. Every restart used to lose the ARS/RTSP fixes.
+      - ./brms-gateway/src:/app/src
     environment:
       - PORT=11443
       - HTTPS=true

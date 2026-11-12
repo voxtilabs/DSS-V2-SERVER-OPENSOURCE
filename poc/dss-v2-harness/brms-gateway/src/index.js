@@ -1799,6 +1799,58 @@ app.post('/brms/api/v1.1/device/discover/async/batch', async () => envelope(buil
 
 // --- add device (the ONVIF failure root cause) ---
 const addDeviceHandler = async (req) => {
+  const body = req.body || {};
+  // E-177: "Add Type: Auto Register" (addType "4"). The client sends the
+  // operator-defined registerId and an EMPTY deviceIp - the server is the one
+  // that resolves it (netsdk CLIENT_GetDVRIPByResolveSvr). Accepted even when
+  // the device has not dialled 9500 yet: it must show up in the catalog
+  // (offline), never be silently dropped.
+  if (String(body.addType) === '4' || (body.registerId && !body.deviceIp)) {
+    const registerId = String(body.registerId || body.deviceSn || '').trim();
+    if (!registerId) {
+      return envelope({ success: false, errorCode: 1002, errorMsg: 'registerId is required', results: [] }, 1000, 'registerId is required');
+    }
+    const arsRec = ARS_DEVICES.get(registerId)
+      || [...ARS_DEVICES.values()].find((d) => String(d.originalId) === registerId)
+      || null;
+    const resolvedIp = arsRec?.ip || String(body.deviceIp || '');
+    const resolvedPort = arsRec?.port || String(body.devicePort || '37777');
+    const channelCount = String(body.encoderChannelCount || arsRec?.channelNum || '1');
+    const rec = registerArsDevice({
+      deviceId: registerId,
+      deviceName: String(body.deviceName || arsRec?.deviceName || registerId),
+      ip: resolvedIp,
+      port: resolvedPort,
+      username: String(body.loginName || arsRec?.username || 'admin'),
+      password: arsRec?.password || String(body.loginPass || ''),
+      deviceType: String(body.deviceType || '2'),
+      channelCount,
+      protocol: 'Dahua',
+      registerFromIp: String(body.clientMac || '')
+    });
+    rec.authorized = '1';
+    rec.authorizedAt = Date.now();
+    if (body.orgCode) rec.orgCode = String(body.orgCode);
+    if (!resolvedIp) {
+      // Registered by the operator but never dialled 9500 (or offline): the row
+      // must exist and read as OFFLINE in every field the client matches on.
+      rec.online = '0';
+      rec.status = '0';
+      rec.onlineStatus = '0';
+      rec.deviceStatus = 'offline';
+      rec.statusName = 'Offline';
+      rec.isOnline = 0;
+      rec.isOnLine = 0;
+    }
+    persistDevice(rec);
+    console.log('[E177-ARS-ADD]', JSON.stringify({
+      registerId, resolved: !!arsRec, deviceCode: rec.deviceCode,
+      deviceIp: resolvedIp, online: rec.online
+    }));
+    try { NOTIFY.deviceEvent('DEVICE_ADDED', rec); } catch { /* best effort */ }
+    if (resolvedIp) scheduleStreamProvisioning(rec, { notify: true });
+    return envelope({ success: true, device: rec, deviceCode: rec.deviceCode, registerId, results: [rec] });
+  }
   const input = normalizeDeviceInput(req.body || {});
   if (!input.deviceIp && !input.devSequence) {
     return envelope({ success: false, errorCode: 1002, errorMsg: 'deviceIp (or devSequence for P2P) is required', results: [] }, 1000, 'deviceIp (or devSequence for P2P) is required');
