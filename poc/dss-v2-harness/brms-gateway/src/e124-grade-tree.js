@@ -1,4 +1,4 @@
-// ===== E-124: full grade device tree for the Role/User permission dialogs ===
+// ===== E-124: full grade device tree for the Role/User permission dialogs ====
 //
 // RE evidence (DPSDK.dll string pool, subagent 2026-11-08):
 //   GET v1.1/tree/full/grade-device-tree            @0xc9cc40
@@ -19,16 +19,48 @@
 //   checked binds (string) and hasAuthority is "1" - there is NO "disabled"
 //   JSON field; the grey state came from authority/checked never binding.
 //
-// Shape served (superset, all flags STRING per the E-095/E-087 lesson):
-//   { organizations: [ OrgNode ], devices: [...], channels: [...], ... }
-//   OrgNode: { orgCode, orgName, code, name, parentCode, isParent, hasChild,
-//              checked, hasAuthority, hasPermission, authority,
-//              organizations: [children], devices: [DeviceNode] }
+// ---------------------------------------------------------------------------
+// E-163 - IDEMPOTENT TREE (duplicate accumulation fix)
+// ---------------------------------------------------------------------------
+// Symptom: the Monitoring Center Resources tree accumulated duplicate rows
+// forever (2 -> 6 -> 44 -> 58 -> 156 -> 324 -> 352 -> ... -> 562) while the
+// server only ever held 2 devices.
+//
+// Measured (2026-11-12, gateway request journal + Frida on DSS Client 5344):
+//   * the growth is NOT driven by a new HTTP request: 0 grade-device-tree
+//     requests are logged while the counter climbs (the client re-appends the
+//     children it already holds from its parsed model).
+//   * every rebuild appends ONE QStandardItem::appendRows batch of EXACTLY 4
+//     items (Qt5Gui ?appendRows@QStandardItem@@QEAAXAEBV?$QList@...), i.e. the
+//     2 element copies the old payload served twice: data.devices[] (2) +
+//     data.channels[] (2).
+//   * the old payload repeated the same channel in FOUR arrays and the same
+//     device in THREE (data.devices[] + organizations/001/VIGILAB.devices[] +
+//     organizations/VIGILAB.devices[]): 6 device nodes / 6+2 channel nodes for
+//     2 devices (measured with /tmp/e163-measure.js against the live gateway).
+//
+// Contract now served: EXACTLY ONE copy of every node.
+//   organizations[] : org nodes. Each org carries its own devices (canonical
+//                     location of a device) and each device its channels.
+//                     Scoped (lazy) requests return only the DIRECT children
+//                     of the requested orgCode, with hasChild coherent so the
+//                     expander arrow still renders.
+//   devices[]       : []  - the device nodes already live under their org
+//                     (serving them again made the client append a second
+//                     copy to the expanded node on every rebuild).
+//   channels[]      : []  - the channel nodes already live under their device.
+// Every flag stays a STRING (the native matchers never coerce).
+//
+// Shape:
+//   { organizations: [ OrgNode ], devices: [], channels: [], ... }
+//   OrgNode: { orgCode, orgName, checked, domainId, autoAuthorize, sourceType,
+//              sourceId, associateId, hasChild, pId, organizations: [children],
+//              devices: [DeviceNode] }
 //   DeviceNode: { deviceCode, deviceName, code, name, orgCode, checked,
 //                 hasAuthority, hasChild, isParent, status, channels: [...] }
-//   ChannelNode: { channelCode, channelName, id, name, deviceCode, orgCode,
+//   ChannelNode: { channelId, channelName, id, name, deviceCode, orgCode,
 //                  checked, hasAuthority, hasChild: '0', isParent: '0', status }
-import { DEVICE_REGISTRY, allChannels, dssChannelCode } from './e025-devices.js';
+import { DEVICE_REGISTRY, dssChannelCode } from './e025-devices.js';
 import { listOrgs, deviceOrgCode } from './e041-orgs.js';
 import { maskDeviceIp } from './e143-ip-mask.js';
 
@@ -92,22 +124,21 @@ function deviceNode(device, adminChecked) {
   };
 }
 
-function orgNode(org, scopedDevices, allDevices, adminChecked, scopeCode) {
-  // E-140: in scoped (lazy) mode the response must carry ONLY the direct
-  // children of the requested orgCode. The native Resources tree does NOT
-  // re-parent by pId/orgCode (UICommonModule CreateChildItem 0x1804f2200 ->
-  // QStandardItem::appendRows hangs EVERY organizations[]/devices[] element
-  // as a direct child of the expanded node), so the SERVER must scope.
-  const scoped = scopeCode !== '';
-  const realChildren = listOrgs().filter((o) => o.parentCode === org.code && o.code !== org.code);
-  const children = scoped ? [] : realChildren; // no recursion in lazy mode
-  const ownAll = allDevices.filter((d) => deviceOrgCode(d) === org.code);
-  const own = scopedDevices.filter((d) => deviceOrgCode(d) === org.code);
-  const devNodes = own.map((d) => deviceNode(d, adminChecked));
-  // E-143b: real shape (gdt org "001001" Patronato) - 9 keys ONLY:
-  // {orgCode, pId, orgName, checked, domainId, sourceType, sourceId,
-  //  associateId, hasChild, autoAuthorize}. The real hasChild reflects the
-  // full (unscoped) children so the expander arrow still renders in lazy mode.
+function devicesOf(orgCode, allDevices) {
+  return allDevices.filter((d) => deviceOrgCode(d) === orgCode);
+}
+
+function childOrgsOf(orgCode, orgs) {
+  return orgs.filter((o) => o.parentCode === orgCode && o.code !== orgCode);
+}
+
+// OrgNode (9 real keys + pId + the two child arrays the client walks).
+// E-143b: real shape (gdt org "001001" Patronato) - {orgCode, pId, orgName,
+// checked, domainId, sourceType, sourceId, associateId, hasChild,
+// autoAuthorize}. E-163: hasChild is coherent with what THIS response serves
+// (children of the node) so the expander arrow is only drawn when a child
+// request can return something.
+function orgNodeShape(org, childCount, deviceCount, adminChecked) {
   const isRoot = str(org.code) === '001';
   return {
     orgCode: org.code,
@@ -118,10 +149,52 @@ function orgNode(org, scopedDevices, allDevices, adminChecked, scopeCode) {
     sourceType: '1',
     sourceId: null,
     associateId: '',
-    hasChild: (realChildren.length || ownAll.length) ? '1' : '0',
+    hasChild: (childCount || deviceCount) ? '1' : '0',
+    autoAuthorize: '1'
+  };
+}
+
+// SCOPED (lazy) node: only the direct children of the requested orgCode are
+// served. E-163: the node itself carries NO children (the client asks again
+// with orgCode=<child> when the user expands it) - its devices come back in
+// data.devices[] of the CHILD request, so a device is never served twice.
+function scopedOrgNode(org, orgs, allDevices, adminChecked) {
+  const kids = childOrgsOf(org.code, orgs);
+  const own = devicesOf(org.code, allDevices);
+  return {
+    ...orgNodeShape(org, kids.length, own.length, adminChecked),
+    organizations: [],
+    devices: []
+  };
+}
+
+// FULL node: complete canonical tree - every org once, every device once,
+// every channel once, linked by hasChild/organizations[]/devices[].
+function fullOrgNode(org, orgs, allDevices, adminChecked, seen) {
+  const nextSeen = new Set(seen);
+  nextSeen.add(org.code);
+  const kids = childOrgsOf(org.code, orgs).filter((o) => !nextSeen.has(o.code));
+  const own = devicesOf(org.code, allDevices);
+  return {
+    ...orgNodeShape(org, kids.length, own.length, adminChecked),
+    organizations: kids.map((c) => fullOrgNode(c, orgs, allDevices, adminChecked, nextSeen)),
+    devices: own.map((d) => deviceNode(d, adminChecked))
+  };
+}
+
+function scopedHeader(scopeCode, orgs, requested) {
+  const isFull = scopeCode === '';
+  const root = orgs.find((o) => o.code === '001') || orgs[0] || { code: '001', name: 'Current Site' };
+  const scopeOrg = isFull ? root : (orgs.find((o) => o.code === scopeCode) || null);
+  return {
+    orgCode: isFull ? str(root.code) : scopeCode,
+    orgName: scopeOrg ? str(scopeOrg.name) : '',
+    checked: '1',
+    domainId: isFull ? '0' : '',
     autoAuthorize: '1',
-    organizations: children.map((c) => orgNode(c, scopedDevices, allDevices, adminChecked, scopeCode)),
-    devices: devNodes
+    sourceType: '1',
+    sourceId: null,
+    associateId: null
   };
 }
 
@@ -142,48 +215,62 @@ export function buildFullGradeDeviceTreePayload(query = {}) {
   // of the response as DIRECT children of the expanded node. The server MUST
   // therefore return only the direct children of the requested orgCode:
   //   orgCode absent/'' or scope=full -> full tree (role dialog + admin mirror)
-  //   orgCode = '001'    -> orgs with parentCode==='001' (VIGILAB), devices orgCode==='001' (none)
-  //   orgCode = 'VIGILAB'-> devices with orgCode==='VIGILAB' + nested channels[]
-  // (E-137's "client rebuilds the hierarchy from the flat list" premise was
-  // refuted by REA - the flattening is client-side by design.)
+  //   orgCode = '001'    -> orgs with parentCode==='001' (VIGILAB)
+  //   orgCode = 'VIGILAB'-> the org node with its devices + nested channels
+  // E-163: no node is served twice (see the header note).
   const requested = str(query.orgCode ?? query.org ?? '').trim();
   const forceFull = str(query.scope || '').toLowerCase() === 'full';
   const scopeCode = (requested === '' || forceFull) ? '' : requested;
-  const scopedDevices = scopeCode === ''
-    ? allDevices
-    : allDevices.filter((d) => deviceOrgCode(d) === scopeCode);
-  const scopedOrgs = scopeCode === ''
-    ? orgs
-    : orgs.filter((o) => o.parentCode === scopeCode && o.code !== scopeCode);
-  // Full mode (no orgCode): organizations/departments FLAT (every org, linked
-  // by pId) AND nested children inside each node - the role-dialog renderer
-  // walks nested children while other consumers bind the flat list by pId.
-  const organizations = scopedOrgs.map((o) => orgNode(o, scopedDevices, allDevices, adminChecked, scopeCode));
-  const flatDevices = scopedDevices.map((d) => deviceNode(d, adminChecked));
-  const flatChannels = [];
-  for (const d of scopedDevices) {
-    const count = Math.max(1, Number(d.channelNum) || 1);
-    for (let s = 0; s < count; s++) flatChannels.push(channelNode(d, s));
+  const header = scopedHeader(scopeCode, orgs, requested);
+  if (scopeCode === '') {
+    // FULL: top-level = only the true roots (E-163: the old payload listed
+    // every org flat AND nested, so VIGILAB and its devices appeared twice).
+    // Devices live nested under their org - the single canonical copy.
+    const roots = orgs.filter((o) => !orgs.some((p) => p.code === o.parentCode && p.code !== o.code));
+    const organizations = (roots.length ? roots : orgs)
+      .map((o) => fullOrgNode(o, orgs, allDevices, adminChecked, new Set()));
+    return { ...header, organizations, devices: [], channels: [] };
   }
-  // E-143b: real shape (gdt root real "001") - data carries EXACTLY these 11
-  // keys: {orgCode, orgName, checked, domainId, autoAuthorize, sourceType,
-  // sourceId, associateId, organizations, devices, channels}. Every harness
-  // alias (orgList/departments/deivceNodes/roleType/hasData/*Exceeded/total)
-  // was a hypothesis the real server never sends.
-  const rootOrg = orgs.find((o) => o.code === '001') || orgs[0] || { code: '001', name: 'Current Site' };
-  return {
-    orgCode: scopeCode || str(rootOrg.code),
-    orgName: scopeCode ? (orgs.find((o) => o.code === scopeCode) || {}).name || '' : str(rootOrg.name),
-    checked: '1',
-    domainId: scopeCode ? '' : '0',
-    autoAuthorize: '1',
-    sourceType: '1',
-    sourceId: null,
-    associateId: null,
-    organizations,
-    devices: flatDevices,
-    channels: flatChannels
+  // SCOPED: the direct child orgs of the requested node plus that node's own
+  // devices (each device exactly once, its channels nested inside it). The
+  // flat channel array stays empty: a channel already hangs under its device,
+  // and the client appends channels[] as sibling rows on every rebuild
+  // (E-163: that duplicate produced half of the accumulated rows).
+  const organizations = childOrgsOf(scopeCode, orgs)
+    .map((o) => scopedOrgNode(o, orgs, allDevices, adminChecked));
+  const devices = devicesOf(scopeCode, allDevices).map((d) => deviceNode(d, adminChecked));
+  return { ...header, organizations, devices, channels: [] };
+}
+
+// Channel list of one device (kept for consumers that need a flat channel
+// feed - the search endpoint and the /admin RPC mirror).
+function flatChannelsOf(devices) {
+  const out = [];
+  for (const d of devices) {
+    const count = Math.max(1, Number(d.channelNum) || 1);
+    for (let s = 0; s < count; s++) out.push(channelNode(d, s));
+  }
+  return out;
+}
+
+// E-163: keyword filtering walks the canonical nested tree; the result keeps
+// the same single-copy layout (orgs that survive keep only matching devices).
+function filterFullTree(organizations, kw) {
+  const hitDevice = (d) =>
+    str(d.deviceCode).toLowerCase().includes(kw) ||
+    str(d.deviceName).toLowerCase().includes(kw) ||
+    (d.channels || []).some((c) =>
+      str(c.channelId).toLowerCase().includes(kw) || str(c.channelName).toLowerCase().includes(kw));
+  const walk = (nodes) => {
+    const out = [];
+    for (const o of nodes) {
+      const kids = walk(o.organizations || []);
+      const devs = (o.devices || []).filter(hitDevice);
+      if (kids.length || devs.length) out.push({ ...o, organizations: kids, devices: devs });
+    }
+    return out;
   };
+  return walk(organizations);
 }
 
 export function buildFullGradeDeviceTreeSearchPayload(query = {}) {
@@ -191,14 +278,36 @@ export function buildFullGradeDeviceTreeSearchPayload(query = {}) {
   // E-140: search always scans the FULL tree (scope=full), regardless of any
   // orgCode that came along with the search request.
   const full = buildFullGradeDeviceTreePayload({ ...query, scope: 'full' });
-  if (!kw) return full;
-  const hitDev = full.devices.filter((d) =>
-    d.deviceCode.toLowerCase().includes(kw) || d.deviceName.toLowerCase().includes(kw));
-  const hitCh = full.channels.filter((c) =>
-    c.channelId.toLowerCase().includes(kw) || c.channelName.toLowerCase().includes(kw));
-  return {
-    ...full,
-    devices: hitDev,
-    channels: hitCh
+  // An empty keyword lists everything (filterFullTree keeps every node), so the
+  // result is always the flat device feed + the canonical nested tree.
+  // The search view renders a FLAT result list, so the matched devices are
+  // returned both where they belong (nested under their org) and once in
+  // devices[] - this endpoint never feeds a tree rebuild (E-163).
+  const matched = [];
+  const collect = (nodes) => {
+    for (const o of nodes) {
+      matched.push(...(o.devices || []));
+      collect(o.organizations || []);
+    }
   };
+  const organizations = filterFullTree(full.organizations, kw);
+  collect(organizations);
+  return { ...full, organizations, devices: matched, channels: [] };
+}
+
+// E-163: exported for the tests - the exact number of device nodes a payload
+// serves (must equal the number of registered devices in scope, no copies).
+export function countDeviceNodes(organizations, devices = []) {
+  let n = devices.length;
+  for (const o of organizations || []) {
+    n += (o.devices || []).length;
+    n += countDeviceNodes(o.organizations || []);
+  }
+  return n;
+}
+
+// Flat channel catalogue of the deployment (each channel once), for callers
+// that need the feed without walking the tree.
+export function allGradeChannels() {
+  return flatChannelsOf([...DEVICE_REGISTRY.values()]);
 }
