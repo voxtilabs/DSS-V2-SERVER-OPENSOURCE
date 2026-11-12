@@ -37,7 +37,10 @@ services:
       - SSL_KEY_2=/certs/key_9443.pem
       - SSL_CERT_2=/certs/cert_9443.pem
       - REALM=DSS-V2-LAB
-      - PUBLIC_HOST=10.10.20.120
+      # E-184: los equipos Dahua se registran desde WAN (ARS 9500). El ACK de
+      # registro y las URLs RTSP entregadas al cliente deben apuntar a la IP
+      # publica, no al host de la LAN.
+      - PUBLIC_HOST=200.54.10.52
       - RTSP_PORT=9100
       - ARS_PORT=9500
       - SIP_PORT=5080

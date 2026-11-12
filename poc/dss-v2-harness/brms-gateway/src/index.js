@@ -3885,6 +3885,48 @@ app.post('/brms/api/v1.0/device/p2p-list', { preHandler: auth }, async () => {
 // ===== ARS (Auto Register Service) - Device Auto-Registration =====
 const ARS_DEVICES = new Map();
 
+// E-184: la sesion ARS es la UNICA prueba de vida de un equipo detras de NAT
+// (o CGNAT): el equipo marca hacia nosotros cada 60s, nosotros no podemos
+// abrirle un TCP al 37777. El estado del catalogo se deriva de esa sesion.
+const ARS_LIVE = new Map(); // rawId -> { lastSeen, remote, framing }
+
+function markArsLiveness(rawId, online, remote) {
+  const id = String(rawId || '');
+  if (!id) return;
+  if (online) ARS_LIVE.set(id, { lastSeen: Date.now(), remote: remote || '' });
+  else ARS_LIVE.delete(id);
+  const rec = DEVICE_REGISTRY.get('ARS-' + id);
+  if (!rec) return;
+  const isOn = String(rec.online) === '1';
+  if (online) {
+    rec.lastSeenAt = Date.now();
+    if (isOn) return;
+    rec.online = '1'; rec.status = '1'; rec.onlineStatus = '1';
+    rec.deviceStatus = 'online'; rec.statusName = 'Online';
+    rec.isOnline = 1; rec.isOnLine = 1;
+  } else {
+    if (!isOn) return;
+    rec.online = '0'; rec.status = '0'; rec.onlineStatus = '0';
+    rec.deviceStatus = 'offline'; rec.statusName = 'Offline';
+    rec.isOnline = 0; rec.isOnLine = 0;
+  }
+  rec.updateTime = new Date().toISOString();
+  persistDevice(rec);
+}
+
+// Un keepalive que deja de llegar (TCP medio abierto por NAT) se detecta por
+// silencio, no por RST: 3 intervalos sin trafico => offline.
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of ARS_LIVE.entries()) {
+    if (now - s.lastSeen > 200000) {
+      console.log('[ARS TCP] session idle >200s, marking offline:', id);
+      markArsLiveness(id, false);
+    }
+  }
+}, 60000).unref?.();
+
+
 app.post('/brms/api/v1.0/ars/register', async (req, reply) => {
   const { deviceId, deviceName, ip, port, username, password, deviceType, channelNum, protocol, ...rest } = req.body;
   if (!deviceId || !ip) return reply.code(400).send(envelope(null, 400, 'Missing deviceId or ip'));
@@ -4036,7 +4078,7 @@ function createARSTCPServer() {
           // E-128: keepalive / logout also arrive on the binary framing -
           // refresh lastSeen and ACK instead of Ret:400.
           if (/keepalive|keep-alive|heartbeat/i.test(jmethod) || frame.command === 0x0004) {
-            if (session.deviceId) { const d = ARS_DEVICES.get(session.deviceId); if (d) { d.lastSeen = Date.now(); d.status = 1; } }
+            if (session.deviceId) { const d = ARS_DEVICES.get(session.deviceId); if (d) { d.lastSeen = Date.now(); d.status = 1; } markArsLiveness(session.deviceId, true, socket.remoteAddress); }
             socket.write(buildDahuaAck(frame.magic, frame.command || 0x0004, frame.sequence, { Ret: 100, RetMsg: 'OK', KeepAliveSecond: '60' }));
             return;
           }
@@ -4072,6 +4114,7 @@ function createARSTCPServer() {
               scheduleStreamProvisioning(registered, { notify: true });
             } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
             try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
+            markArsLiveness(deviceId, true, socket.remoteAddress);
             socket.write(buildDahuaAck(frame.magic, frame.command || 0x0005, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
             return;
           }
@@ -4158,6 +4201,7 @@ function createARSTCPServer() {
             }
 
             console.log('[ARS TCP] Device registered:', deviceInfo.deviceId, 'from', socket.remoteAddress);
+            markArsLiveness(deviceInfo.deviceId, true, socket.remoteAddress);
 
             // Send REGISTER_ACK
             const ack = createRegisterAck(header.sequence, deviceInfo.deviceId);
@@ -4171,6 +4215,7 @@ function createARSTCPServer() {
             if (session.deviceId) {
               const device = ARS_DEVICES.get(session.deviceId);
               if (device) { device.lastSeen = Date.now(); device.status = 1; }
+              markArsLiveness(session.deviceId, true, socket.remoteAddress);
             }
             break;
           }
@@ -4206,6 +4251,13 @@ function createARSTCPServer() {
       if (session.deviceId) {
         const device = ARS_DEVICES.get(session.deviceId);
         if (device) { device.status = 0; device.lastSeen = Date.now(); }
+        // Solo se marca offline si no queda otra sesion viva del mismo equipo
+        // (un DVR puede reabrir el canal antes de que muera el anterior).
+        let otherAlive = false;
+        for (const [k, other] of ARS_TCP_SESSIONS.entries()) {
+          if (k !== clientKey && other && other.deviceId === session.deviceId) { otherAlive = true; break; }
+        }
+        if (!otherAlive) markArsLiveness(session.deviceId, false);
       }
       ARS_TCP_SESSIONS.delete(clientKey);
     });

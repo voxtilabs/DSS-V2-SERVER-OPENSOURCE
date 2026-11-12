@@ -1986,9 +1986,63 @@ export function buildAlertTypeListPayload() {
 // 7) Auto-register (ARS): native devices registered on TCP 9500 become real
 //    devices in the tree/page/statistics responses.
 // ---------------------------------------------------------------------------
+function isPrivateIp(ip) {
+  const v = String(ip || '').replace(/^::ffff:/, '');
+  if (!v || !/^\d+\.\d+\.\d+\.\d+$/.test(v)) return false;
+  const [a, b] = v.split('.').map(Number);
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 127 || a === 169;
+}
+
 export function registerArsDevice(deviceInfo) {
+  const code = 'ARS-' + String(deviceInfo.deviceId || '');
+  // E-184: a NAT'd device reports its LAN address, which this server cannot
+  // reach. When the register came from a public source address, that address is
+  // the one the operator will port-forward, so it wins over a private literal.
+  const reported = String(deviceInfo.ip || '');
+  const source = String(deviceInfo.registerFromIp || '').replace(/^::ffff:/, '');
+  const reachableIp = (isPrivateIp(reported) && source && !isPrivateIp(source)) ? source : (reported || source);
+
+  // E-184: the operator may have created this row from the client's "Auto
+  // Register" dialog BEFORE the device dialed in (that row has an empty IP and
+  // the organization/authorization they chose). Re-registering must COMPLETE
+  // that row, never replace it - createDeviceRecord() always inserts a fresh
+  // record and persistDevice() overwrites by code, which used to wipe both.
+  const existing = DEVICE_REGISTRY.get(code);
+  if (existing) {
+    existing.deviceIp = reachableIp || existing.deviceIp || '';
+    existing.devicePort = Number(deviceInfo.port) || Number(existing.devicePort) || 37777;
+    existing.protocolType = existing.protocolType || '1';
+    existing.deviceCategory = existing.deviceCategory || '1';
+    const typeIn = String(deviceInfo.deviceType || '');
+    if (typeIn && typeIn !== '1') existing.deviceType = typeIn;
+    if (deviceInfo.deviceName && (!existing.deviceName || existing.deviceName === code)) existing.deviceName = deviceInfo.deviceName;
+    const chans = Number(deviceInfo.channelCount) || 0;
+    if (chans > 0) {
+      existing.channelNum = chans;
+      existing.encoderChannelCount = chans;
+      existing.alarmInNum = chans;
+      existing.alarmOutNum = chans;
+    }
+    if (deviceInfo.username) existing.username = deviceInfo.username;
+    if (deviceInfo.password) existing.password = deviceInfo.password;
+    existing.manufacturer = existing.manufacturer || 'Dahua';
+    existing.registerFromIp = source || existing.registerFromIp || '';
+    existing.lastSeenAt = Date.now();
+    existing.online = '1';
+    existing.status = '1';
+    existing.onlineStatus = '1';
+    existing.deviceStatus = 'online';
+    existing.statusName = 'Online';
+    existing.isOnline = 1;
+    existing.isOnLine = 1;
+    existing.source = existing.source || 'auto-register';
+    existing.updateTime = new Date().toISOString();
+    persistDevice(existing);
+    return existing;
+  }
+
   const input = normalizeDeviceInput({
-    deviceIp: deviceInfo.ip,
+    deviceIp: reachableIp,
     devicePort: deviceInfo.port || 37777,
     protocolType: '1',
     deviceCategory: '1',
@@ -1997,16 +2051,16 @@ export function registerArsDevice(deviceInfo) {
     serverCode: 'video#local',
     channelCount: deviceInfo.channelCount || 1,
     manufacturer: 'Dahua',
-    deviceCode: 'ARS-' + String(deviceInfo.deviceId || '')
+    deviceCode: code
   });
   const record = createDeviceRecord(input, { source: 'auto-register' });
   // E-174: pending authorization until the operator adds it in "Auto Register".
   // E-177: only for a NEW record - a DVR that re-registers after a reboot must
   // not lose the authorization the operator already granted.
   if (record.authorized === undefined) record.authorized = '0';
-  record.registerFromIp = deviceInfo.registerFromIp || deviceInfo.ip || '';
+  record.registerFromIp = source || reachableIp || '';
   record.lastSeenAt = Date.now();
-  if (deviceInfo.ip) {
+  if (reachableIp) {
     record.online = '1';
     record.status = '1';
     record.onlineStatus = '1';
@@ -2015,6 +2069,7 @@ export function registerArsDevice(deviceInfo) {
     record.isOnline = 1;
     record.isOnLine = 1;
   }
+  persistDevice(record);
   return record;
 }
 
