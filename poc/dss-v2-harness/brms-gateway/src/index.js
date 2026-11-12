@@ -1453,8 +1453,22 @@ import {
     app.delete(`${host}/alarm/plan/:planId`, async () => envelope({ success: true }));
     app.post(`${host}/alarm/plan/delete/batch`, async () => envelope({ success: true, failedList: [] }));
     app.post(`${host}/alarm/plan/resource/config-status/fetch/batch/list`, async () => envelope(buildAlarmPlanResourceConfigStatusPayload()));
-    app.post(`${host}/alarm/record/fetch/page`, async (req) => envelope(buildAlarmRecordPagePayload({ ...req.query, ...(req.body || {}) })));
-    app.get(`${host}/alarm/record/fetch/page`, async (req) => envelope(buildAlarmRecordPagePayload({ ...req.query, ...(req.body || {}) })));
+    // E-183: this used to be a hardcoded empty page even with alarms in the
+    // store - it is the list the native Alarm Center reads.
+    const alarmRecordHandler = async (req) => {
+      const q = { ...req.query, ...(req.body || {}) };
+      try {
+        const store = e136Ctx.e136?.stores?.alarms;
+        if (store) {
+          const p = store.page(q);
+          const rows = p.records || p.list || p.pageData || [];
+          return envelope({ ...p, records: rows, recordList: rows, list: rows, results: rows, pageData: rows });
+        }
+      } catch (err) { console.log('[E183-ALARM-RECORDS]', err.message); }
+      return envelope(buildAlarmRecordPagePayload(q));
+    };
+    app.post(`${host}/alarm/record/fetch/page`, alarmRecordHandler);
+    app.get(`${host}/alarm/record/fetch/page`, alarmRecordHandler);
   }
   // --- License module (useLicenseApi) ---
   for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
@@ -1501,8 +1515,30 @@ for (const host of ['/videoService', '/brms/api/v1.1', '/brms/api/v1.0']) {
   app.post(`${host}/eventCenter/alarmTypes`, async (req) => envelope(buildEventCenterAlarmTypesPayload(req.body || req.query || {})));
   // E-142: the native client calls alarm count with POST (FUN_180248de0) and
   // parses a single numeric totalCount.
-  app.get(`${host}/eventCenter/alarm/messages/count`, async () => envelope(buildEventCenterAlarmCountPayload()));
-  app.post(`${host}/eventCenter/alarm/messages/count`, async () => envelope(buildEventCenterAlarmCountPayload()));
+  // E-183: real counters (the badge was pinned to 0 with alarms in the store).
+  const alarmCountHandler = async () => {
+    try {
+      const store = e136Ctx.e136?.stores?.alarms;
+      if (store) {
+        const all = store.all();
+        const unhandled = all.filter((a) => String(a.handleStatus ?? '0') !== '1');
+        return envelope({
+          // E-142: the native parser reads totalCount as a NUMBER on this route
+          // (FUN_180248de0); every other counter stays a string.
+          totalCount: all.length,
+          unhandledCount: String(unhandled.length),
+          handledCount: String(all.length - unhandled.length),
+          count: String(all.length), total: String(all.length),
+          pendingCount: String(unhandled.length),
+          alarmCount: String(all.length), messageCount: String(all.length),
+          unreadCount: String(unhandled.length)
+        });
+      }
+    } catch (err) { console.log('[E183-ALARM-COUNT]', err.message); }
+    return envelope(buildEventCenterAlarmCountPayload());
+  };
+  app.get(`${host}/eventCenter/alarm/messages/count`, alarmCountHandler);
+  app.post(`${host}/eventCenter/alarm/messages/count`, alarmCountHandler);
 }
 
 // ===== E-121: Event Config completion + TVWall + OMMS alert + subscription ===
@@ -1614,6 +1650,32 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
   app.get(`${host}/alarm/combination/source/page`, async (req) => envelope(buildCombinationSourcePagePayload({ ...req.query, ...(req.body || {}) })));
   app.post(`${host}/alarm/combination/source/page`, async (req) => envelope(buildCombinationSourcePagePayload({ ...req.query, ...(req.body || {}) })));
 }
+// E-183: single intake for every device-originated event (DVR/NVR IVS,
+// tripwire, intrusion, camera AI). Normalizes the manufacturer code to the DSS
+// alarmTypeId, persists it, feeds the Event Center queue and pushes the MQ
+// notify that paints the popup.
+const alarmIntake = (body) => {
+  const ev = ingestGeneralEvent(deviceEventToGeneral(body));
+  try { NOTIFY.alarmEvent(ev); } catch { /* hub not ready */ }
+  try { e136Ctx.e136?.eventCenter?.publishAlarm(ev); } catch { /* e136 not wired */ }
+  return ev;
+};
+for (const p of [
+  '/bayonetServer/alarmReport',
+  '/videoService/bayonetServer/alarmReport',
+  '/brms/api/v1.1/bayonetServer/alarmReport',
+  '/brms/api/v1.0/bayonetServer/alarmReport',
+  '/admin/API/bayonetServer/alarmReport'
+]) {
+  app.post(p, async (req) => {
+    const ev = alarmIntake({ ...req.query, ...(req.body || {}) });
+    return envelope({
+      success: true, eventId: String(ev.eventId), alarmId: String(ev.alarmId || ev.eventId),
+      alarmTypeId: String(ev.alarmTypeId || ''), channelId: String(ev.channelId || '')
+    });
+  });
+}
+
 // alert subscription (OMMS) - what the Event Center subscribes to
 app.get('/omms/api/v1.1/alert/subscribe', async () => envelope(buildAlertSubscribePayload()));
 app.post('/omms/api/v1.1/alert/subscribe', async (req) => envelope({ success: true, subscribe: '1' }));
@@ -3635,13 +3697,18 @@ for (const host of ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '/videoSer
 // (E-121: event/subscription POST moved into the E-121 loop above)
 app.post('/brms/api/v1.0/event/query', { preHandler: auth }, async () => envelope({ events: [] }));
 app.post('/brms/api/v1.0/event/push', async (req) => {
-  const { raw, from } = req.body;
-  const event = { type: 'ALARM', source: from, raw, timestamp: new Date().toISOString() };
+  const body = req.body || {};
+  const { raw, from } = body;
+  // E-183: an event push is a REAL event - persist it and fan it out to the
+  // Event Center + MQ (it used to be a WS-only broadcast nobody could query).
+  let ev = null;
+  try { ev = alarmIntake(body); } catch (err) { console.log('[E183-PUSH]', err.message); }
+  const event = { type: 'ALARM', source: from, raw, timestamp: new Date().toISOString(), alarmId: ev?.eventId };
   const msg = JSON.stringify(event);
   for (const ws of WS_CLIENTS) {
     if (ws.readyState === 1) ws.send(msg);
   }
-  return envelope({ success: true, event });
+  return envelope({ success: true, event, alarmId: String(ev?.eventId || ''), alarmTypeId: String(ev?.alarmTypeId || '') });
 });
 
 // ===== VEHICLE / ANPR =====
@@ -3908,6 +3975,8 @@ import { parseDahuaFrame, parseRegisterJson, buildDahuaAck, buildRegisterAckJson
 // E-180: account data scope (site / device / channel) resolved from the
 // persistent user+role stores; every list/tree/gate endpoint filters with it.
 import { getUser as getUserAccount, grantsFor, channelAllowed, deviceAllowed, usersStore, rolesStore, setUserScope, setRoleGrants } from './e180-authz.js';
+// E-183: device event intake (Dahua IVS/AI codes -> DSS alarmTypeId).
+import { deviceEventToGeneral } from './e183-device-events.js';
 import { registerP0Coverage } from './e127-p0-coverage.js';
 import { registerP1Coverage } from './e129-p1-coverage.js';
 // E-135: motor del catalogo RPC (2.024 metodos cosechados del string-pool del
