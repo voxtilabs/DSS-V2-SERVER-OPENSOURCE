@@ -2001,9 +2001,20 @@ export function registerArsDevice(deviceInfo) {
   });
   const record = createDeviceRecord(input, { source: 'auto-register' });
   // E-174: pending authorization until the operator adds it in "Auto Register".
-  record.authorized = '0';
+  // E-177: only for a NEW record - a DVR that re-registers after a reboot must
+  // not lose the authorization the operator already granted.
+  if (record.authorized === undefined) record.authorized = '0';
   record.registerFromIp = deviceInfo.registerFromIp || deviceInfo.ip || '';
   record.lastSeenAt = Date.now();
+  if (deviceInfo.ip) {
+    record.online = '1';
+    record.status = '1';
+    record.onlineStatus = '1';
+    record.deviceStatus = 'online';
+    record.statusName = 'Online';
+    record.isOnline = 1;
+    record.isOnLine = 1;
+  }
   return record;
 }
 
