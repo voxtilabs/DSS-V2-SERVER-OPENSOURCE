@@ -26,9 +26,12 @@ const PRE_EXISTING_CODES = new Set();
 
 // ─── Crypto helpers ──────────────────────────────────────────────────────
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
-function doubleMd5(user, pass) { return md5(md5(user + md5(pass))); }
+// E-147: exact client chain (verified against live captures) —
+// temp = md5(user + md5(pass)); inner = md5(user:realm:temp);
+// sig = md5(md5(inner + ':' + randomKey))
+function clientDigest(user, pass) { return md5(user + md5(pass)); }
 function makeSig(user, realm, temp, randomKey) {
-  return crypto.createHash('md5').update(md5(`${user}:${realm}:${temp}`) + ':' + randomKey).digest('hex');
+  return md5(md5(md5(`${user}:${realm}:${temp}`) + ':' + randomKey));
 }
 
 // ─── HTTPS helper that ignores self-signed cert ──────────────────────────
@@ -377,7 +380,7 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
     assert.ok(realm && randomKey && challengeKey);
 
     // Step 2: Response with signature
-    const temp = doubleMd5(USER, PASS);
+    const temp = clientDigest(USER, PASS);
     const sig = makeSig(USER, realm, temp, randomKey);
     const auth = await request(`${BASE}/brms/api/v1.0/accounts/authorize`, {
       method: 'POST',
