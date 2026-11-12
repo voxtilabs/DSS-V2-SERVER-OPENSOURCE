@@ -99,6 +99,7 @@ loadOrgsFromDisk();
 import {
   discoverOnvifStreamUri,
   configureMediaMTXPath,
+  mediaMtxPathForDevice,
   MEDIAMTX_CAMERA_PATH,
   MEDIAMTX_API_URL,
   FALLBACK_ROUTES
@@ -2861,13 +2862,27 @@ function mtsBody(req) {
   const b = req.body || {};
   return (b.data && typeof b.data === 'object' && !Array.isArray(b.data)) ? b.data : b;
 }
+
+// E-145: playback target resolution WITHOUT a default-camera fallback.
+// Previously an unknown channel id fell back to MEDIAMTX_CAMERA_PATH, so the
+// client played somebody else's stream (or burned 30 s on "RTSP SETUP timed
+// out" for stale tree rows). Now an unknown channel is a real error (1001) and
+// a known device always resolves to its OWN path: if its source is not
+// provisioned MediaMTX answers 404 immediately, which the client surfaces at
+// once instead of timing out.
+function resolvePlaybackTarget(channelId) {
+  const device = findDeviceByChannelId(channelId);
+  if (!device) return { error: envelope(null, 1001, 'channel not found: ' + String(channelId || '')) };
+  return { device, path: device.mediamtxPath || mediaMtxPathForDevice(device) };
+}
 app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
   const { channelId, streamType, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, trackId } = mtsBody(req);
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const device = findDeviceByChannelId(channelId);
-  const pathName = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const target = resolvePlaybackTarget(channelId);
+  if (target.error) return target.error;
+  const { device, path: pathName } = target;
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
@@ -2894,8 +2909,12 @@ app.post('/brms/api/v1.0/MTS/Video/KeepAlive', { preHandler: auth }, async () =>
 const MEDIAMTX_HLS = process.env.MEDIAMTX_HLS_URL || 'http://mediamtx:8888';
 app.get('/brms/api/v1.1/video/live/channel/:channelId/hls', async (req, reply) => {
   const ch = String(req.params?.channelId || '');
-  const device = findDeviceByChannelId(ch);
-  const path = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const target = resolvePlaybackTarget(ch);
+  // E-145: no default-camera fallback. A channel the registry does not know,
+  // or a device without a configured source, is a 404 (not somebody else's
+  // camera).
+  if (target.error) return reply.code(404).send(envelope(null, 404, 'no stream for channel ' + ch));
+  const path = target.path;
   const sub = String(req.query?.sub || '');
   const file = String(req.query?.file || 'index.m3u8');
   try {
@@ -2918,8 +2937,9 @@ app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const device = findDeviceByChannelId(channelId);
-  const pathName = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const target = resolvePlaybackTarget(channelId);
+  if (target.error) return target.error;
+  const { device, path: pathName } = target;
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
@@ -2951,8 +2971,9 @@ const mtsStartVideo = async (req) => {
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const device = findDeviceByChannelId(channelId);
-  const pathName = device?.mediamtxPath || MEDIAMTX_CAMERA_PATH;
+  const target = resolvePlaybackTarget(channelId);
+  if (target.error) return target.error;
+  const { device, path: pathName } = target;
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });

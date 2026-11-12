@@ -1309,3 +1309,40 @@ gateway); live-verify 15/15 on 10.10.20.120 (tree/deviceOrg departments
 docker compose up -d --build (container recreated). Pending operator
 validation: add the ONVIF camera from the native client and confirm no
 "Operation timed out" + VIGILAB visible in the org selector.
+
+[E-145] RTSP SETUP timeout ROOT CAUSE (REA on DPSDK.dll) + zero-fallback StartVideo
+
+Two independent causes, both proven:
+
+1) CSeq echo (the actual "RTSP SETUP timed out"). DPSDK.dll embeds the
+   live555 validator strings 0x180c64370 "Unable to read the CSeq header" and
+   0x180c5c2a8 "RTSP CSeq mismatch or invalid CSeq": a reply whose echoed
+   CSeq differs from the request is DISCARDED, which surfaces to the user as
+   a SETUP timeout. Our e115 relay forwarded MediaMTX's reply verbatim with
+   its OWN upstream counter, so every SETUP/PLAY reply was dropped.
+   Fix: per-connection map upstreamCSeq -> clientCSeq and rewrite the
+   response header back to the client's value (e115-rtsp-relay.js). The
+   SETUP response also keeps a non-empty Session (0x180c64348) and the
+   Transport with interleaved=a-b (0x180c03ef0 "RTP/AVP/TCP; interleaved=0-1",
+   note the space - the client's literal). UA is "Dahua Rtsp Client/2.0".
+
+2) Phantom devices + default-camera fallback. The client's Resources tree is
+   fed by /admin/API/tree/devices (74 KB / 16 rows at 00:47) built from the
+   device store: test residue devices (D7008*, E144-FIXED, 192.0.2.55) made
+   every tile unplayable, and StartVideo fell back to MEDIAMTX_CAMERA_PATH
+   for unknown channels (operator rule: 0 hardcode). Fix: the store was
+   cleaned to the two real cameras; StartVideo/StartVideo v1.1/admin MTS now
+   resolve through resolvePlaybackTarget() -> unknown channel = code 1001
+   "channel not found" (fast, explicit), known device = its OWN cam_<code>
+   path, HLS = 404 for unknown channels. No default-camera path remains.
+
+Verified live (Windows -> 10.10.20.120:9100, exact client literals):
+SETUP 200 / CSeq 41 echoed / Session present / Transport interleaved=0-1 ->
+PLAY 200 / CSeq 42 echoed -> 315 and 402 RTP frames. Stale channel ->
+1001 channel not found. unit 239/240 (0 fail, 1 skip), e2e 12/12 x2.
+
+REA evidence bundle: research/rea/DSS_SERVER_CONTRACT_MAP.md (RTSP contract,
+CSeq/Session rules, transport literals, dspStatus does not exist in any client
+binary, 946 REST paths / 89 NOTIFY topics / 1043 functionCode-topic pairs).
+Residual unknown: exact element shape of the `rtspUrls` array (array of
+strings vs objects) - tracked in research/rea/RTSP_URLS_DTO_SHAPE.md.

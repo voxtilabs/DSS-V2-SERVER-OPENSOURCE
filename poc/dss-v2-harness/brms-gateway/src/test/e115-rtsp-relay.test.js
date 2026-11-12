@@ -111,3 +111,96 @@ test('E-115 relay: Dahua SETUP+PLAY same url gets RTP from gortsplib-style upstr
   relay.close();
   upstream.close();
 });
+
+test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SETUP timeout)', async () => {
+  // The DSS client starts its CSeq wherever it wants (observed 1, 7, 41...).
+  // DPSDK.dll (live555 strings 0x180c64370 / 0x180c5c2a8) DISCARDS any reply
+  // whose CSeq != the request's, which the user sees as "RTSP SETUP timed out".
+  // The relay therefore must map its own upstream counter back to the client's.
+  const upstream = net.createServer((c) => {
+    let buf = Buffer.alloc(0);
+    c.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        if (buf.length < 4) return;
+        if (buf[0] === 0x24) {
+          const len = buf.readUInt16BE(2);
+          if (buf.length < 4 + len) return;
+          buf = buf.subarray(4 + len);
+          continue;
+        }
+        const i = buf.indexOf('\r\n\r\n');
+        if (i === -1) return;
+        const head = buf.slice(0, i).toString();
+        buf = buf.subarray(i + 4);
+        const [method, url] = head.split('\r\n')[0].split(' ').filter((x, idx, a) => idx !== a.length - 1);
+        const cseq = (/CSeq:\s*(\d+)/i.exec(head) || [])[1] || '1';
+        if (method === 'DESCRIBE') {
+          const sdp = 'v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H265/90000\r\na=control:trackID=0\r\n';
+          c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nContent-Type: application/sdp\r\nContent-Length: ${sdp.length}\r\n\r\n${sdp}`);
+        } else if (method === 'SETUP') {
+          c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nSession: SESS42\r\nTransport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n\r\n`);
+        } else if (method === 'PLAY') {
+          c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nSession: SESS42\r\n\r\n`);
+        } else if (method === 'TEARDOWN') {
+          c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nSession: SESS42\r\n\r\n`);
+          c.destroy();
+        } else {
+          c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\n\r\n`);
+        }
+      }
+    });
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  const upPort = upstream.address().port;
+  const relay = startRtspRelay({ port: 0, upstreamHost: '127.0.0.1', upstreamPort: upPort });
+  await new Promise((r) => relay.once('listening', r));
+  const relayPort = relay.address().port;
+
+  const seen = await new Promise((resolve) => {
+    const cl = net.connect(relayPort, '127.0.0.1', () => {
+      // non-1 CSeq values on purpose; the transport is the exact client literal
+      cl.write(`SETUP rtsp://10.10.20.120:${relayPort}/cam_Y?token=abc RTSP/1.0\r\nCSeq: 41\r\nTransport: RTP/AVP/TCP; interleaved=0-1\r\nUser-Agent: Dahua Rtsp Client/2.0\r\n\r\n`);
+    });
+    let buf = Buffer.alloc(0);
+    const out = { setupCSeq: null, playCSeq: null, transport: null, session: null };
+    const timer = setTimeout(() => { cl.destroy(); resolve(out); }, 4000);
+    cl.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        if (buf.length < 4) return;
+        if (buf[0] === 0x24) {
+          const len = buf.readUInt16BE(2);
+          if (buf.length < 4 + len) return;
+          buf = buf.subarray(4 + len);
+          continue;
+        }
+        const i = buf.indexOf('\r\n\r\n');
+        if (i === -1) return;
+        const head = buf.slice(0, i).toString();
+        buf = buf.subarray(i + 4);
+        const cs = Number((/CSeq:\s*(\d+)/i.exec(head) || [])[1]);
+        if (/200/.test(head.split('\r\n')[0]) && cs === 41 && out.setupCSeq === null) {
+          out.setupCSeq = cs;
+          out.transport = (/Transport:\s*(.+)/i.exec(head) || [])[1] || null;
+          out.session = (/Session:\s*([^\r\n;]+)/i.exec(head) || [])[1] || null;
+          cl.write(`PLAY rtsp://10.10.20.120:${relayPort}/cam_Y?token=abc RTSP/1.0\r\nCSeq: 42\r\nSession: ${out.session}\r\nUser-Agent: Dahua Rtsp Client/2.0\r\n\r\n`);
+        } else if (cs === 42) {
+          out.playCSeq = cs;
+          clearTimeout(timer);
+          cl.write(`TEARDOWN rtsp://10.10.20.120:${relayPort}/cam_Y RTSP/1.0\r\nCSeq: 43\r\nSession: ${out.session}\r\n\r\n`);
+          cl.destroy();
+          resolve(out);
+        }
+      }
+    });
+    cl.on('error', () => {});
+  });
+
+  assert.equal(seen.setupCSeq, 41, 'SETUP response echoes the client CSeq 41');
+  assert.equal(seen.playCSeq, 42, 'PLAY response echoes the client CSeq 42');
+  assert.ok(seen.session && seen.session.length > 0, 'SETUP returns a non-empty Session');
+  assert.ok(/interleaved=0-1/.test(seen.transport || ''), 'Transport echoed with the client interleaved channels');
+  relay.close();
+  upstream.close();
+});

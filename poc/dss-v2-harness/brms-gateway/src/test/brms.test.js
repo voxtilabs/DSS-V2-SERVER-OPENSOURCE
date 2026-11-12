@@ -47,6 +47,11 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
         { deviceIp: '192.168.0.238', devicePort: 8021, protocolType: '99', deviceName: 'EBA1', channelCount: 1, orgCode: 'VIGILAB', serverCode: 'video#local', userName: USER, deviceCategory: '1', deviceType: '1', deviceCode: 'D0238W9Q1004', manufacturer: 'Dahua' },
         { source: 'seed', manufacturer: 'Dahua', serialNumber: 'E2E-TREE-SEED' }
       );
+      // E-145: a playable source is mandatory now (StartVideo no longer falls
+      // back to a default camera), so the seed carries the real ONVIF RTSP URI.
+      seed.rtspUri = 'rtsp://192.168.0.238:8554/EBA1_LECTOR';
+      seed.mediamtxPath = 'cam_D0238W9Q1004';
+      seed.streamConfigured = true;
       fs.writeFileSync(STORE_PATH, JSON.stringify([seed], null, 2));
     } catch (err) { console.log('[seed] skipped:', err.message); }
     serverProc = spawn('node', ['src/index.js'], { cwd: 'C:/Users/bruno/Downloads/LOCURA DSS/poc/dss-v2-harness/brms-gateway', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -171,7 +176,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
   });
 
   it('MTS/Video/StartVideo returns RealTimeVideoVo with all fields', async () => {
-    const r = await fetch(`${BASE}/brms/api/v1.0/MTS/Video/StartVideo`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId: '1000171$1$0$0', streamType: 1, dataType: 1 }) });
+    const r = await fetch(`${BASE}/brms/api/v1.0/MTS/Video/StartVideo`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId: 'D0238W9Q1004$1$0$0', streamType: 1, dataType: 1 }) });
     assert.equal(r.status, 200);
     const text = await r.text();
     console.log('StartVideo response:', text);
@@ -757,7 +762,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     for (const host of ['/brms/api/v1.1', '/brms/api/v1.0']) {
       const sv = await (await fetch(`${BASE}${host}/MTS/Video/StartVideo`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
-        body: JSON.stringify({ channelId: '1000171$1$0$0', streamType: '1', protocol: 'RTSP' })
+        body: JSON.stringify({ channelId: 'D0238W9Q1004$1$0$0', streamType: '1', protocol: 'RTSP' })
       })).json();
       assert.equal(sv.code, 1000, host + ' code');
       assert.ok(sv.data.url && sv.data.url.includes('rtsp://'), host + ' url');
@@ -769,6 +774,51 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       assert.strictEqual(stop.data.success, true, host + ' stop');
       const ka = await (await fetch(`${BASE}${host}/MTS/Video/KeepAlive`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: '{}' })).json();
       assert.strictEqual(ka.data.success, true, host + ' keepalive');
+    }
+  });
+
+  it('E-145 StartVideo has NO default-camera fallback: unknown channel -> 1001, no-source device -> 1002', async () => {
+    // Regression for the operator report "0 hardcode de conf": an unknown or
+    // unprovisioned channel used to return a URL to MEDIAMTX_CAMERA_PATH, so
+    // the client played somebody else's camera (or hung 30 s on
+    // "RTSP SETUP timed out" for stale tree rows).
+    for (const host of ['/brms/api/v1.0', '/brms/api/v1.1', '/admin/API']) {
+      const unknown = await (await fetch(`${BASE}${host}/MTS/Video/StartVideo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+        body: JSON.stringify({ channelId: 'GHOST$1$0$0', streamType: '1' })
+      })).json();
+      assert.strictEqual(unknown.data, null, host + ' unknown channel has no payload');
+      assert.notEqual(unknown.code, 1000, host + ' unknown channel is an error');
+      assert.ok(String(unknown.desc || '').includes('channel not found'), host + ' explains the real cause');
+    }
+    // a known device always resolves to its OWN MediaMTX path - never the
+    // default camera. The join funnel materializes the record (no ONVIF source
+    // on loopback: the E-144 guard leaves it unprovisioned, which is exactly
+    // the stale-row case the operator hit).
+    const join = await (await fetch(`${BASE}/brms/api/v1.1/discover/device/join/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+      body: JSON.stringify({ devices: [{ deviceIp: '127.0.0.55', devicePort: 37777, protocolType: '99', deviceName: 'E145-NOSRC', encoderChannelCount: 1 }] })
+    })).json();
+    const created = (join.data.list || []).find((d) => d.deviceIp === '127.0.0.55');
+    assert.ok(created, 'join created the no-source device');
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const chId = `${created.deviceCode}$1$0$0`;
+      const own = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+        body: JSON.stringify({ channelId: chId, streamType: '1' })
+      })).json();
+      assert.equal(own.code, 1000, 'known channel resolves');
+      assert.ok(own.data.url.includes(`cam_${created.deviceCode}`), 'URL is the device OWN path');
+      assert.ok(!own.data.url.includes('/cam1'), 'never the default camera');
+      // unknown channel: HLS 404 (no default-camera proxy either)
+      const hls = await fetch(`${BASE}/brms/api/v1.1/video/live/channel/GHOST$1$0$0/hls`);
+      assert.equal(hls.status, 404, 'HLS has no default-camera fallback');
+    } finally {
+      await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
+        body: JSON.stringify({ deviceCodes: [created.deviceCode] })
+      });
     }
   });
 
@@ -1020,7 +1070,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     // StartVideo: native parser FUN_1802145f0 reads rtspUrl/rtspUrls base64.
     const sv = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
-      body: JSON.stringify({ channelId: 'D0238JDG3016$1$0$0', streamType: 0, dataType: 0 })
+      body: JSON.stringify({ channelId: 'D0238W9Q1004$1$0$0', streamType: 0, dataType: 0 })
     })).json();
     assert.equal(sv.code, 1000);
     assert.ok(sv.data.url && sv.data.url.startsWith('rtsp://'), 'StartVideo still returns plain url');
@@ -1106,7 +1156,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     // 40B catch-all -> Live View empty. Now it must return a full RTSP session.
     const sv = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
-      body: JSON.stringify({ channelId: 'D0238JDG3016$1$0$0', streamType: 0, dataType: 0 })
+      body: JSON.stringify({ channelId: 'D0238W9Q1004$1$0$0', streamType: 0, dataType: 0 })
     })).json();
     assert.equal(sv.code, 1000);
     assert.ok(sv.data.url && sv.data.url.startsWith('rtsp://'), 'admin StartVideo returns rtsp url');

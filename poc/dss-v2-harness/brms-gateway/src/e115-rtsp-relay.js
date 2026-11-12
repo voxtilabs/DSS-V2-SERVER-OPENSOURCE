@@ -133,6 +133,13 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
             const body = ubuf.subarray(i + 4, i + 4 + bodyLen);
             ubuf = ubuf.subarray(i + 4 + bodyLen);
             let outHead = head;
+            // E-145: echo the CLIENT's CSeq (never the relay's upstream one).
+            const csM = /CSeq:\s*(\d+)/i.exec(outHead);
+            if (csM) {
+              const upSeq = Number(csM[1]);
+              const clientSeq = cseqMap.get(upSeq);
+              if (clientSeq !== undefined) outHead = outHead.replace(/CSeq:\s*\d+/i, 'CSeq: ' + clientSeq);
+            }
             // capture the upstream Session id (PLAY/TEARDOWN need it, and the
             // Dahua client may not echo it back)
             const sessM = /Session:\s*([^\r\n;]+)/i.exec(outHead);
@@ -160,7 +167,8 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         const p = parseRtspUrl(rawUrl);
         const upUrl = `rtsp://${upstreamHost}:${upstreamPort}/${p.path}${p.query}`;
         const c = cseq++;
-        up.write(`DESCRIBE ${upUrl} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}Accept: application/sdp${CRLF}User-Agent: DSSCClient${CRLF}${CRLF}`);
+        noteCseq(c, Number(headers.cseq));
+        up.write(`DESCRIBE ${upUrl} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}Accept: application/sdp${CRLF}User-Agent: Dahua Rtsp Client/2.0${CRLF}${CRLF}`);
         return;
       }
       if (method === 'SETUP') {
@@ -176,28 +184,31 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         const control = urlControl || controls.find((c) => /^(video|H265|H264)/i.test(c.mime || ''))?.control || controls[0]?.control || 'trackID=0';
         const upUrl = `rtsp://${upstreamHost}:${upstreamPort}/${basePath}/${control}`;
         const c = cseq++;
-        const transport = headers.transport || 'RTP/AVP/TCP;unicast;interleaved=0-1';
+        noteCseq(c, Number(headers.cseq));
+        const transport = headers.transport || 'RTP/AVP/TCP; unicast; interleaved=0-1';
         const upTransport = rewriteTransport(transport, UP_CH.from, UP_CH.to);
-        up.write(`SETUP ${upUrl} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}Transport: ${upTransport}${CRLF}User-Agent: DSSCClient${CRLF}${CRLF}`);
-        log('SETUP', basePath, '->', control);
+        up.write(`SETUP ${upUrl} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}Transport: ${upTransport}${CRLF}User-Agent: Dahua Rtsp Client/2.0${CRLF}${CRLF}`);
+        log('SETUP', basePath, '->', control, 'cseq', c, '<-', headers.cseq);
         return;
       }
       if (method === 'PLAY' || method === 'RECORD' || method === 'PAUSE') {
         const p = parseRtspUrl(rawUrl);
         const c = cseq++;
+        noteCseq(c, Number(headers.cseq));
         const sess = headers.session || upSession;
         const sessionH = sess ? `${CRLF}Session: ${sess}` : '';
         const rangeH = headers.range ? `${CRLF}Range: ${headers.range}` : '';
-        up.write(`${method} rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: DSSCClient${sessionH}${rangeH}${CRLF}${CRLF}`);
-        log(method, p.path || basePath, 'session=' + (sess || 'none'));
+        up.write(`${method} rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: Dahua Rtsp Client/2.0${sessionH}${rangeH}${CRLF}${CRLF}`);
+        log(method, p.path || basePath, 'session=' + (sess || 'none'), 'cseq', c, '<-', headers.cseq);
         return;
       }
       if (method === 'TEARDOWN') {
         const p = parseRtspUrl(rawUrl);
         const c = cseq++;
+        noteCseq(c, Number(headers.cseq));
         const sess = headers.session || upSession;
         const sessionH = sess ? `${CRLF}Session: ${sess}` : '';
-        up.write(`TEARDOWN rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: DSSCClient${sessionH}${CRLF}${CRLF}`);
+        up.write(`TEARDOWN rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: Dahua Rtsp Client/2.0${sessionH}${CRLF}${CRLF}`);
         setTimeout(() => { try { up.destroy(); } catch {} try { client.destroy(); } catch {} }, 250);
         log('TEARDOWN');
         return;
@@ -207,6 +218,17 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     }
 
     let cbuf = Buffer.alloc(0);
+    // E-145 (REA DSS_SERVER_CONTRACT_MAP §1.6): the client DISCARDS any RTSP
+    // reply whose CSeq is not the one it sent ("RTSP CSeq mismatch or invalid
+    // CSeq" -> the user sees "RTSP SETUP timed out"). The relay used its own
+    // upstream counter and forwarded MediaMTX's CSeq verbatim, so every reply
+    // was dropped. Keep a per-connection map upstreamCSeq -> clientCSeq and
+    // rewrite the echoed header back to the client's value.
+    const cseqMap = new Map();
+    function noteCseq(upstreamCseq, clientCseq) {
+      if (Number.isFinite(upstreamCseq) && Number.isFinite(clientCseq)) cseqMap.set(upstreamCseq, clientCseq);
+      if (cseqMap.size > 256) cseqMap.delete(cseqMap.keys().next().value);
+    }
     client.on('data', (d) => {
       cbuf = Buffer.concat([cbuf, d]);
       for (;;) {
