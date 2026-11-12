@@ -845,6 +845,23 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     }
   });
 
+  it('E-149 playback/uri {uri,cascade:BOOL} + dpsdkPtz numbers + PUT preset goto', async () => {
+    // REA DSS_PLAYBACK_PTZ_PASS4.md: the client validates JSON node types
+    // against descriptor kinds (FUN_180754c60). cascade MUST be a boolean and
+    // ptzPan/ptzTilt/ptzZoom MUST be numbers, else the fields are dropped.
+    const pb = await (await fetch(`${BASE}/brms/api/v1.1/playback/uri?beginTime=2026-11-11%2000:00:00&duration=600&subType=0&urlType=1&scheme=RTSP`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(pb.code, 1000, 'playback/uri code');
+    assert.equal(typeof pb.data.uri, 'string', 'uri is a STRING');
+    assert.strictEqual(typeof pb.data.cascade, 'boolean', 'cascade is a JSON BOOLEAN');
+    const ptz = await (await fetch(`${BASE}/admin/API/dpsdkPtz/ptz?deviceCode=D0238W9Q1004&channelSeq=1&ptzPan=5&ptzTilt=-3&ptzZoom=2`, { headers: { 'X-Subject-Token': token } })).json();
+    assert.equal(ptz.code, 1000, 'dpsdkPtz code');
+    for (const k of ['ptzPan', 'ptzTilt', 'ptzZoom']) assert.strictEqual(typeof ptz.data[k], 'number', `${k} is a NUMBER`);
+    assert.strictEqual(ptz.data.ptzPan, 5);
+    const preset = await (await fetch(`${BASE}/admin/API/ptz/preset/goto/channels/`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ paramList: [{ speed: 4 }] }) })).json();
+    assert.equal(preset.code, 1000, 'preset goto PUT code');
+    assert.deepEqual(preset.data, {}, 'preset goto validates only the envelope');
+  });
+
   it('E-114 keepalive renews the token (session never dies ~30min)', async () => {
     // RE evidence: CRestLogicalImplPro::Heartbeat stores the token from the
     // keepalive response ("Heartbeat is success, m_strToken = %s" @0xc95670) -

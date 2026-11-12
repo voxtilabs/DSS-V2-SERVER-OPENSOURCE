@@ -2915,6 +2915,32 @@ for (const base of ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '/admin/ap
   app.post(`${base}/realmonitor/uri`, realMonitorUri);
 }
 
+// E-149 (REA DSS_PLAYBACK_PTZ_PASS4.md): the playback DTO built inline at
+// 0x180233650 has exactly TWO fields — uri (string) and cascade (BOOL). The
+// client validates the JSON node type against the descriptor kind
+// (FUN_180754c60), so a string "0"/"false" for cascade is silently dropped.
+// This gateway does not record, so uri stays empty (no fake playback) while
+// the types are exactly those of the real server.
+const playbackUri = async () => envelope({ uri: '', cascade: false });
+// dpsdkPtz/ptz: ptzPan/ptzTilt/ptzZoom are kind 3 = JSON NUMBERS (not strings).
+const ptzPosition = async (req) => {
+  // the client sends ptz via a GET query string (FUN_1806804f0 appends to URL);
+  // body form is accepted too.
+  const b = { ...(req.query || {}), ...mtsBody(req) };
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  return envelope({ ptzPan: num(b.ptzPan), ptzTilt: num(b.ptzTilt), ptzZoom: num(b.ptzZoom) });
+};
+for (const b of ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '/admin/api']) {
+  app.get(`${b}/playback/uri`, playbackUri);
+  app.post(`${b}/playback/uri`, playbackUri);
+  app.get(`${b}/dpsdkPtz/ptz`, ptzPosition);
+  app.post(`${b}/dpsdkPtz/ptz`, ptzPosition);
+  // preset goto is PUT on the client and validates ONLY the envelope
+  // (hasFieldOf_nouse descriptor) — empty data is the real contract.
+  app.put(`${b}/ptz/preset/goto/channels/`, async () => envelope({}));
+  app.post(`${b}/ptz/preset/goto/channels/`, async () => envelope({}));
+}
+
 app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req) => {
   const { channelId, streamType, dataType, enableMulticast, enableRtsps, extend, fakeSdp, forceSynPlay, keyCode, operateType, planId, trackId } = mtsBody(req);
   const token = genToken();

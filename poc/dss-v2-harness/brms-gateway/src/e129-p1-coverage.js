@@ -42,7 +42,8 @@ const P1 = {
   // E-148: 'realmonitor/uri' is served for real in index.js (per-device URL,
   // exact 11-string Media.RealMonitor.Uri DTO) — do NOT register the static
   // stub here or Fastify would duplicate the route.
-  'playback/uri': { ...DEFAULT_DATA, uri: '', url: '' },
+  // E-149 (REA pass 4): 'playback/uri' is ALSO served for real in index.js
+  // ({uri, cascade:BOOLEAN} — the client drops string/bool mismatches).
   'capture/getCaptureChnByUserId': { ...DEFAULT_DATA, list: [], results: [] },
   'resource/videoRealation': { ...DEFAULT_DATA, list: [], results: [] },
   // p2p (0x0C81358, 0x0C97C78)
