@@ -139,7 +139,16 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     // for generic /cam_<code> paths. RELAY_DHAV=1/0 forces either behaviour.
     const dhavMode = process.env.RELAY_DHAV;
     let dhav = null;
-    const dhavEnabled = () => (dhavMode === '1' ? true : (dhavMode === '0' ? false : Boolean(basePathIsDahua)));
+    // E-170: three payload modes
+    //   default      -> ANNEX-B per access unit (one RTP packet = one AU, start
+    //                   codes, parameter sets in-band). This is what a Dahua
+    //                   media server on 9100 sends and what the client can
+    //                   decode WITHOUT ever receiving an SDP (it never sends
+    //                   DESCRIBE - research/rea/E151_REAL_RTSP_CAPTURE.md).
+    //   RELAY_DHAV=1 -> the same AU wrapped in the DHAV container (E-155).
+    //   RELAY_DHAV=0 -> pass MediaMTX's RFC 7798/6184 RTP through untouched.
+    const annexMode = dhavMode !== '0' && dhavMode !== '1';
+    const dhavEnabled = () => dhavMode === '1';
     const cseqMethod = new Map(); // upstream CSeq -> method
     // E-162 (capture of MDP's own RTSP socket): one DHAV record must carry a
     // WHOLE access unit. MediaMTX delivers ~1500-byte RTP packets, so wrapping
@@ -150,6 +159,8 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     // interleaved length caps a frame at 65535 bytes).
     let auParts = [];
     let auHead = null;
+    const annexState = {};   // codec sniffing state for rtpToAnnexB
+    let annexInjected = false;
     const MAX_INTERLEAVED = 60000;
 
     function sendInterleaved(channel, buf) {
@@ -163,6 +174,44 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         client.write(Buffer.concat([hdr, buf.subarray(off, off + n)]));
         off += n;
       }
+    }
+
+    // E-171: an Annex-B access unit can exceed one interleaved frame (65535 B
+    // cap). Split it on NAL boundaries into several RTP packets that share the
+    // timestamp; only the LAST one carries the marker bit. Never emit raw
+    // continuation bytes without an RTP header (that produced PT=3 packets the
+    // player dropped).
+    function sendAnnexAu(head, frame) {
+      const nals = [];
+      let i = 0, start = -1;
+      while (i + 3 < frame.length) {
+        if (frame[i] === 0 && frame[i + 1] === 0 && frame[i + 2] === 1) {
+          if (start >= 0) nals.push(frame.subarray(start, i));
+          start = i;
+          i += 3;
+          continue;
+        }
+        i++;
+      }
+      if (start >= 0) nals.push(frame.subarray(start));
+      if (!nals.length) nals.push(frame);
+      const maxPayload = MAX_INTERLEAVED - head.length;
+      const chunks = [];
+      let cur = [];
+      let curLen = 0;
+      for (const nal of nals) {
+        if (curLen && curLen + nal.length > maxPayload) { chunks.push(Buffer.concat(cur)); cur = []; curLen = 0; }
+        cur.push(nal);
+        curLen += nal.length;
+      }
+      if (cur.length) chunks.push(Buffer.concat(cur));
+      const baseSeq = head.readUInt16BE(2);
+      chunks.forEach((chunk, idx) => {
+        const h = Buffer.from(head);
+        h.writeUInt16BE((baseSeq + idx) & 0xffff, 2);
+        h[1] = idx === chunks.length - 1 ? (h[1] | 0x80) : (h[1] & 0x7f);
+        sendInterleaved(CL_CH.from, Buffer.concat([h, chunk]));
+      });
     }
 
     function ssrcHex() {
@@ -221,11 +270,11 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
               // track; MediaMTX forwards the camera's own PT (96), which the
               // client does not know (it never received an SDP).
               payload[1] = (payload[1] & 0x80) | 0x6a;
-              if (dhav) {
+              if (dhav || annexMode) {
                 // E-162: reassemble the access unit (RTP marker = last packet)
-                // and emit ONE DHAV record per frame.
+                // and emit ONE RTP packet per frame.
                 const marker = (payload[1] & 0x80) !== 0;
-                const ab = rtpToAnnexB(payload.subarray(12), dhav);
+                const ab = rtpToAnnexB(payload.subarray(12), dhav || annexState);
                 if (ab && ab.length) auParts.push(ab);
                 auHead = payload.subarray(0, 12);
                 if (!marker) continue;
@@ -234,8 +283,18 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
                 auParts = [];
                 // E-158: first record carries VPS/SPS/PPS (the client never
                 // sends DESCRIBE, so it has no out-of-band codec config).
-                if (!dhav.injected && paramSets) { frame = Buffer.concat([paramSets, frame]); dhav.injected = true; }
-                sendInterleaved(CL_CH.from, Buffer.concat([auHead, wrapWithDhav(frame, dhav)]));
+                const first = dhav ? !dhav.injected : !annexInjected;
+                if (first && paramSets) {
+                  frame = Buffer.concat([paramSets, frame]);
+                  if (dhav) dhav.injected = true;
+                  else annexInjected = true;
+                }
+                if (dhav) {
+                  const body = wrapWithDhav(frame, dhav);
+                  sendInterleaved(CL_CH.from, Buffer.concat([auHead, body]));
+                } else {
+                  sendAnnexAu(auHead, frame);
+                }
                 continue;
               }
             }

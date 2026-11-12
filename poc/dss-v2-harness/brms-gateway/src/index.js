@@ -2099,25 +2099,34 @@ app.post('/brms/api/v1.1/device/unauthorized/delete/batch', async () => envelope
 // ran at device-add time, so nothing healed. Now every 60s each registered
 // device gets ensureDeviceStream (idempotent: ADD then PATCH), plus one
 // pass 8s after boot.
+// E-169: the periodic watchdog must be SILENT. It used to call the same
+// notifier as an add (brms.notifyBatchAddDevices / brms.notifyChannelStatuses)
+// every 60 s, and the native client appends a tree node for every such notify:
+// the Resources tree grew without bound (2 -> 6 -> ... -> 954) while the
+// server only ever held 2 devices. Provisioning now pushes NO device event;
+// only real mutations (add/delete/status change) may notify.
 function provisionAllDevices() {
   for (const d of [...DEVICE_REGISTRY.values()]) {
-    if (d && d.deviceIp) scheduleStreamProvisioning(d);
+    if (d && d.deviceIp) scheduleStreamProvisioning(d, { notify: false });
   }
 }
 setTimeout(provisionAllDevices, 8000);
 setInterval(provisionAllDevices, 60000);
 
-function scheduleStreamProvisioning(devices) {
+function scheduleStreamProvisioning(devices, opts = {}) {
+  const notify = opts.notify === true;
   const list = Array.isArray(devices) ? devices : [devices];
   for (const d of list) {
     if (!d || !d.deviceIp) continue;
     setImmediate(async () => {
       try { await ensureDeviceStream(d); }
       catch (err) { console.log('[E034-STREAM] provisioning failed:', err.message); }
-      // E-097: once provisioning settles the device is Online - push the
-      // status over the real MQ methods so the client updates the row WITHOUT
-      // a manual refresh of the Device Management view.
-      try { NOTIFY.deviceEvent('DEVICE_STATUS', d); } catch { /* best effort */ }
+      // E-097: after a real ADD the row may be refreshed by a status push. This
+      // is opt-in (notify:true) so background provisioning cannot loop the
+      // client's tree rebuild.
+      if (notify) {
+        try { NOTIFY.deviceEvent('DEVICE_STATUS', d); } catch { /* best effort */ }
+      }
     });
   }
 }
