@@ -1346,3 +1346,38 @@ CSeq/Session rules, transport literals, dspStatus does not exist in any client
 binary, 946 REST paths / 89 NOTIFY topics / 1043 functionCode-topic pairs).
 Residual unknown: exact element shape of the `rtspUrls` array (array of
 strings vs objects) - tracked in research/rea/RTSP_URLS_DTO_SHAPE.md.
+
+[E-150] Dahua RTSP session headers + on-demand stream provisioning
+
+The pcap of the production server on 9100 shows the client's live555 player
+expects Dahua-specific session metadata that MediaMTX (gortsplib) never sends:
+
+  SETUP 200:  Server: Dahua Rtsp Server/2.0
+              Session: <id>;timeout=60
+              Transport: RTP/AVP/TCP;unicast;interleaved=0-1;ssrc=<8 hex>
+              x-dynamic-rate: 1
+  PLAY  200:  Server: Dahua Rtsp Server/2.0
+              Session: <id>
+              RTP-Info: url=;seq=..;rtptime=..;ssrc=<8 hex>
+              Range: npt=0.000000-
+
+Without them the client receives RTP but its tile stays "loading" forever.
+e115-rtsp-relay.js now synthesizes those responses: it picks the SSRC at
+SETUP, rewrites the outgoing RTP header to that SSRC, and HOLDS the PLAY 200
+until the first RTP frame arrives so RTP-Info advertises the real seq/rtptime
+(1.2 s fallback if no frame shows up). CSeq echo (E-145) is preserved.
+
+On-demand provisioning: resolvePlaybackTarget now awaits ensureDeviceStream
+when a device has no rtspUri / was never configured (bounded at 6 s), so a
+cold path after a gateway or MediaMTX restart is created before the client's
+SETUP instead of answering 400 ("path not found"). MediaMTX's static
+`test`/`cam1` paths were removed: only per-device `cam_<code>` paths exist,
+created by the gateway.
+
+Tests: unit 241/242 (0 fail, 1 skip), e2e 12/12. Live probe (exact client
+literals, CSeq 41/42): SETUP 200 + Server/Session;timeout/ssrc/x-dynamic-rate,
+PLAY 200 + RTP-Info/seq/rtptime/ssrc/Range npt, 377 and 352 RTP frames.
+Residual: the client's own device-list cache (its tree showed 16/16 while the
+gateway serves 2 devices) is client-side state; no plain-text store was found
+under AppData/Local/Roaming/LocalLow or C:\DSS, so it is kept in memory/DB by
+DPSDK and a client restart is what refreshes it.

@@ -142,6 +142,9 @@ test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SE
           c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nSession: SESS42\r\nTransport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n\r\n`);
         } else if (method === 'PLAY') {
           c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nSession: SESS42\r\n\r\n`);
+          // one RTP frame so the relay can emit the PLAY 200 with RTP-Info
+          const rtp = Buffer.from([0x80, 0x60, 0x12, 0x34, 0x00, 0x00, 0x00, 0x2A, 0xDE, 0xAD, 0xBE, 0xEF]);
+          c.write(Buffer.concat([Buffer.from([0x24, 0x02]), (() => { const b = Buffer.alloc(2); b.writeUInt16BE(rtp.length, 0); return b; })(), rtp]));
         } else if (method === 'TEARDOWN') {
           c.write(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nSession: SESS42\r\n\r\n`);
           c.destroy();
@@ -163,8 +166,8 @@ test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SE
       cl.write(`SETUP rtsp://10.10.20.120:${relayPort}/cam_Y?token=abc RTSP/1.0\r\nCSeq: 41\r\nTransport: RTP/AVP/TCP; interleaved=0-1\r\nUser-Agent: Dahua Rtsp Client/2.0\r\n\r\n`);
     });
     let buf = Buffer.alloc(0);
-    const out = { setupCSeq: null, playCSeq: null, transport: null, session: null };
-    const timer = setTimeout(() => { cl.destroy(); resolve(out); }, 4000);
+    const out = { setupCSeq: null, playCSeq: null, transport: null, session: null, setupHead: '', playHead: '' };
+    const timer = setTimeout(() => { cl.destroy(); resolve(out); }, 6000);
     cl.on('data', (d) => {
       buf = Buffer.concat([buf, d]);
       for (;;) {
@@ -182,11 +185,13 @@ test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SE
         const cs = Number((/CSeq:\s*(\d+)/i.exec(head) || [])[1]);
         if (/200/.test(head.split('\r\n')[0]) && cs === 41 && out.setupCSeq === null) {
           out.setupCSeq = cs;
+          out.setupHead = head;
           out.transport = (/Transport:\s*(.+)/i.exec(head) || [])[1] || null;
           out.session = (/Session:\s*([^\r\n;]+)/i.exec(head) || [])[1] || null;
           cl.write(`PLAY rtsp://10.10.20.120:${relayPort}/cam_Y?token=abc RTSP/1.0\r\nCSeq: 42\r\nSession: ${out.session}\r\nUser-Agent: Dahua Rtsp Client/2.0\r\n\r\n`);
         } else if (cs === 42) {
           out.playCSeq = cs;
+          out.playHead = head;
           clearTimeout(timer);
           cl.write(`TEARDOWN rtsp://10.10.20.120:${relayPort}/cam_Y RTSP/1.0\r\nCSeq: 43\r\nSession: ${out.session}\r\n\r\n`);
           cl.destroy();
@@ -201,6 +206,13 @@ test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SE
   assert.equal(seen.playCSeq, 42, 'PLAY response echoes the client CSeq 42');
   assert.ok(seen.session && seen.session.length > 0, 'SETUP returns a non-empty Session');
   assert.ok(/interleaved=0-1/.test(seen.transport || ''), 'Transport echoed with the client interleaved channels');
+  // E-150: the Dahua session metadata the production client expects
+  assert.match(seen.setupHead, /Server: Dahua Rtsp Server\/2\.0/i, 'SETUP carries the Dahua server id');
+  assert.match(seen.setupHead, /Session: \S+;timeout=60/i, 'SETUP Session has ;timeout=60');
+  assert.match(seen.transport || '', /;ssrc=[0-9A-F]{8}/i, 'SETUP Transport advertises ssrc');
+  assert.match(seen.setupHead, /x-dynamic-rate: 1/i, 'SETUP advertises x-dynamic-rate');
+  assert.match(seen.playHead, /RTP-Info: url=;seq=\d+;rtptime=\d+;ssrc=[0-9A-F]{8}/i, 'PLAY RTP-Info carries seq/rtptime/ssrc');
+  assert.match(seen.playHead, /Range: npt=0\.000000-/i, 'PLAY carries Range npt');
   relay.close();
   upstream.close();
 });

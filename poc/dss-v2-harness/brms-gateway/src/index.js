@@ -2873,9 +2873,22 @@ function mtsBody(req) {
 // a known device always resolves to its OWN path: if its source is not
 // provisioned MediaMTX answers 404 immediately, which the client surfaces at
 // once instead of timing out.
-function resolvePlaybackTarget(channelId) {
+async function resolvePlaybackTarget(channelId) {
   const device = findDeviceByChannelId(channelId);
   if (!device) return { error: envelope(null, 1001, 'channel not found: ' + String(channelId || '')) };
+  // E-150: on-demand provisioning. After a gateway/MediaMTX restart the
+  // device paths are cold until the 60 s loop runs; handing the client a URL
+  // to a path MediaMTX does not know yet makes its SETUP fail with 400. Probe
+  // (ONVIF/convention) + MediaMTX path creation happen here, bounded so a
+  // dead camera cannot stall the request.
+  if (!device.rtspUri || device.streamConfigured === false) {
+    try {
+      await Promise.race([
+        ensureDeviceStream(device),
+        new Promise((r) => setTimeout(r, 6000))
+      ]);
+    } catch { /* the SETUP will surface the real error */ }
+  }
   return { device, path: device.mediamtxPath || mediaMtxPathForDevice(device) };
 }
 // E-148 (REA DSS_RESIDUAL_PASS3.md): the NATIVE Live View path is
@@ -2897,7 +2910,7 @@ const realMonitorUri = async (req) => {
       token: '', stunPort: '3478', url: '', uri: '', stunEnable: '0', session: '', minRate: '0'
     });
   }
-  const target = resolvePlaybackTarget(channelId);
+  const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const token = genToken();
   const session = genToken().slice(0, 16);
@@ -2946,7 +2959,7 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const target = resolvePlaybackTarget(channelId);
+  const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const { device, path: pathName } = target;
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
@@ -2983,7 +2996,7 @@ app.post('/brms/api/v1.0/MTS/Video/KeepAlive', { preHandler: auth }, async () =>
 const MEDIAMTX_HLS = process.env.MEDIAMTX_HLS_URL || 'http://mediamtx:8888';
 app.get('/brms/api/v1.1/video/live/channel/:channelId/hls', async (req, reply) => {
   const ch = String(req.params?.channelId || '');
-  const target = resolvePlaybackTarget(ch);
+  const target = await resolvePlaybackTarget(ch);
   // E-145: no default-camera fallback. A channel the registry does not know,
   // or a device without a configured source, is a 404 (not somebody else's
   // camera).
@@ -3011,7 +3024,7 @@ app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const target = resolvePlaybackTarget(channelId);
+  const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const { device, path: pathName } = target;
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
@@ -3053,7 +3066,7 @@ const mtsStartVideo = async (req) => {
   const token = genToken();
   const session = genToken().slice(0, 16);
   const vkId = 'vk-' + genToken().slice(0, 8);
-  const target = resolvePlaybackTarget(channelId);
+  const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const { device, path: pathName } = target;
   const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
