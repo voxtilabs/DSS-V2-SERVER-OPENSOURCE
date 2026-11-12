@@ -880,6 +880,36 @@ function upgradeableHandler(req) {
 // check under /brms/api/v1.1/upgrade/... (observed [REQ] E-017).
 app.get('/v1.1/upgrade/check/upgradeable', upgradeableHandler);
 app.get('/brms/api/v1.1/upgrade/check/upgradeable', upgradeableHandler);
+// E-181: the Qt login screen probes /upgradeable/version BEFORE the login and
+// treats a 404 as a version mismatch ("Client & server versions don't match.
+// Please reinstall if any exception occurs"). Serve the same pinned descriptor
+// as /videoService/version so the comparison is an exact equality.
+const upgradeableVersionHandler = async (req) => {
+  const v = selectPlatformVersion(req);
+  const base = 'V' + ((v.match(/\d+\.\d+\.\d+\.\d+/) || [v.replace(/^V/, '')])[0]);
+  return envelope({
+    upgradeable: false,
+    version: base,
+    baseVersion: base,
+    softwareVersion: base,
+    compatVersion: base,
+    serverVersion: v.replace(/^V/, '').replace(/\.\d{9,10}$/, ''),
+    clientVersion: base,
+    patchVersion: '20250307',
+    platform: 'DSS Pro',
+    serverName: 'DSS Pro',
+    protocolVersion: '1.1.0',
+    downloadUrl: '',
+    updateUrl: '',
+    releaseNote: '',
+    packageList: [],
+    list: [], results: []
+  });
+};
+for (const p of ['/upgradeable/version', '/v1.1/upgradeable/version', '/brms/api/v1.1/upgradeable/version', '/brms/api/v1.1/upgradeable/versions']) {
+  app.get(p, upgradeableVersionHandler);
+  app.post(p, upgradeableVersionHandler);
+}
 
 // Config-service environment probe from the Qt pre-login flow (observed with
 // body {}). Exact result shape unknown — code 1000 with pass keys; the client
@@ -2069,32 +2099,51 @@ import { buildFullGradeDeviceTreePayload, buildFullGradeDeviceTreeSearchPayload 
 // query parameter on GET /v1.1/tree/full/grade-device-tree?orgCode=<node>&roleId=1
 // (the native Resources tree lazy-loads one level per request; see
 // e124-grade-tree.js buildFullGradeDeviceTreePayload scope logic).
-// E-180: the Resources/Monitoring tree is served by grade-device-tree - a
-// restricted account must not see the devices/channels outside its scope.
+// E-180c: the grade tree is NESTED (organizations -> organizations -> devices
+// -> channels), so a top-level slice leaves every device visible. Walk the
+// whole tree and drop what is out of scope, including empty branches.
+function trimTreeDeep(node, grants) {
+  if (!node || typeof node !== 'object') return;
+  for (const key of Object.keys(node)) {
+    if (!Array.isArray(node[key])) continue;
+    const arr = node[key];
+    if (key === 'channels') {
+      node[key] = arr.filter((c) => channelAllowed(grants, c.channelId || c.channelCode || c.id));
+      continue;
+    }
+    if (key === 'devices') {
+      const keep = [];
+      for (const d of arr) {
+        const code = String(d.deviceCode || d.deviceId || d.id || '');
+        if (!deviceAllowed(grants, code)) continue;
+        trimTreeDeep(d, grants);
+        const hasChannelArray = Array.isArray(d.channels);
+        const explicitlyGranted = grants.deviceCodes.includes(code);
+        if (hasChannelArray && d.channels.length === 0 && !explicitlyGranted) continue;
+        keep.push(d);
+      }
+      node[key] = keep;
+      continue;
+    }
+    if (key === 'organizations') {
+      const keep = [];
+      for (const o of arr) {
+        trimTreeDeep(o, grants);
+        const hasChildren = (o.devices && o.devices.length) || (o.organizations && o.organizations.length);
+        const orgOk = !grants.orgCodes.length || grants.orgCodes.includes(String(o.orgCode || o.id || ''));
+        if (hasChildren && orgOk) keep.push(o);
+      }
+      node[key] = keep;
+      continue;
+    }
+    for (const item of arr) if (item && typeof item === 'object') trimTreeDeep(item, grants);
+  }
+}
+
 function trimGradeTree(payload, grants) {
   if (!grants || grants.all || !payload) return payload;
   const data = payload && payload.data && typeof payload.data === 'object' ? payload.data : payload;
-  const pickArray = (name) => (Array.isArray(data[name]) ? data[name] : []);
-  const channels = pickArray('channels').filter((c) => channelAllowed(grants, c.channelId || c.channelCode || c.id));
-  const devices = pickArray('devices').filter((d) => deviceAllowed(grants, d.deviceCode || d.deviceId || d.id));
-  const allowedDevices = new Set(devices.map((d) => String(d.deviceCode || d.deviceId || d.id)));
-  const orgs = pickArray('organizations').filter((o) => {
-    if (grants.orgCodes.length && !grants.orgCodes.includes(String(o.orgCode || o.id || ''))) return false;
-    return true;
-  });
-  data.channels = channels;
-  data.devices = devices;
-  data.organizations = orgs;
-  for (const f of ['list', 'results', 'items', 'pageData', 'deviceList', 'channelList']) {
-    if (Array.isArray(data[f])) {
-      data[f] = data[f].filter((row) => {
-        const code = String(row.channelId || row.channelCode || row.deviceCode || row.deviceId || row.id || '');
-        if (code.includes('$')) return channelAllowed(grants, code);
-        if (allowedDevices.has(code)) return true;
-        return orgs.some((o) => String(o.orgCode || o.id) === code);
-      });
-    }
-  }
+  trimTreeDeep(data, grants);
   return payload;
 }
 
