@@ -11,8 +11,9 @@ const PASS = 'admin123';
 const STORE_PATH = new URL('../../data/devices.json', import.meta.url);
 
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
-function doubleMd5(user, pass) { return md5(md5(user + md5(pass))); }
-function makeSig(user, realm, temp, randomKey) { return md5(md5(`${user}:${realm}:${temp}`) + ':' + randomKey); }
+// E-147: exact client chain (verified against live captures).
+function clientDigest(user, pass) { return md5(user + md5(pass)); }
+function makeSig(user, realm, temp, randomKey) { return md5(md5(md5(`${user}:${realm}:${temp}`) + ':' + randomKey)); }
 
 let token = '';
 let serverProc = null;
@@ -76,7 +77,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const { realm, randomKey, challengeKey } = challengeResp.data;
     assert.ok(realm && randomKey && challengeKey);
     // response
-    const temp = doubleMd5(USER, PASS);
+    const temp = clientDigest(USER, PASS);
     const sig = makeSig(USER, realm, temp, randomKey);
     const auth = await fetch(`${BASE}/brms/api/v1.0/accounts/authorize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userName: USER, randomKey, signature: sig, clientType: 'WINPC_V2', challengeKey }) });
     assert.equal(auth.status, 200);
@@ -1415,7 +1416,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     // sin ellas el cliente loguea "LoginSecTime is failed, PrivateDecrypt Failed".
     const ch = await fetch(`${BASE}/brms/api/v1.0/accounts/authorize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userName: USER }) });
     const { realm, randomKey, challengeKey } = (await ch.json()).data;
-    const sig = makeSig(USER, realm, doubleMd5(USER, PASS), randomKey);
+    const sig = makeSig(USER, realm, clientDigest(USER, PASS), randomKey);
     const auth = await (await fetch(`${BASE}/brms/api/v1.0/accounts/authorize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userName: USER, randomKey, signature: sig, clientType: 'WINPC_V2', challengeKey }) })).json();
     const ld = auth.data;
     for (const k of ['secretKey', 'secretVector', 'credential', 'reused', 'verification', 'userLevel', 'pocId', 'userGroupId', 'unlockRemainTimes', 'unlockRemainTime']) {

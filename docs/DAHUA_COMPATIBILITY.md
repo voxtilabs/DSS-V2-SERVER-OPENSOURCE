@@ -94,7 +94,11 @@ Compatibilidad DSS V2: implementar los endpoints arriba con `RequestInfo<T>`/`Re
 El Mock Gateway (`poc/dss-v2-harness/brms-gateway/`) implementa **todos los DTOs** extraídos del servidor Dahua (46 clases, ver `research/evidence/brms-dto-schemas.json`). Un servidor DSS V2 compatible debe:
 
 1. Usar envelope `ResponseInfo<T> = { code, desc, data }` con `code: 1000` para éxito.
-2. Implementar handshake MD5 doble exacto (`temp = md5(md5(user+md5(pass)))`, `sig = md5(md5(user:realm:temp):randomKey)`, `clientType: "WINPC_V2"`).
+2. Implementar handshake MD5 exacto, verificado contra tres capturas vivas del
+   cliente (E-147): `temp = md5(user + md5(pass))`,
+   `inner = md5(user + ":" + realm + ":" + temp)`,
+   `sig = md5(md5(inner + ":" + randomKey))` (el cliente hashea el digest DOS
+   veces), `clientType: "WINPC_V2"`.
 3. Devolver DTOs exactos (ver `research/evidence/brms-dto-schemas.json`):
    - Auth: `TokenInfoVo` (token, userId, username, userType, topLevel)
    - Tree: `DeviceOrgTreeVo`, `DeviceTreeVo`, `DeviceTreeXo`

@@ -487,8 +487,11 @@ function createLogoutAck(sequence) {
 }
 
 function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
-function doubleMd5(user, pass) { return md5(md5(user + md5(pass))); }
-function makeSig(user, realm, temp, randomKey) { return md5(md5(`${user}:${realm}:${temp}`) + ':' + randomKey); }
+// E-147: the DSS client digest chain, derived from three live captures (all
+// matched): temp = md5(user + md5(pass)); inner = md5(`${user}:${realm}:${temp}`);
+// sig = md5(md5(inner + ':' + randomKey)) — the client hashes the digest twice.
+function clientDigest(user, pass) { return md5(user + md5(pass)); }
+function makeSig(user, realm, temp, randomKey) { return md5(md5(md5(`${user}:${realm}:${temp}`) + ':' + randomKey)); }
 function genToken() { return crypto.randomBytes(32).toString('hex'); }
 function genRandomKey() { return crypto.randomBytes(16).toString('hex'); }
 
@@ -609,7 +612,7 @@ async function authorizeHandler(req, reply) {
   if (strict) {
     const pending = PENDING.get(b.challengeKey);
     if (pending && pending.randomKey === String(b.randomKey)) {
-      const temp = doubleMd5(String(b.userName), 'admin123');
+      const temp = clientDigest(String(b.userName), 'admin123');
       const expected = makeSig(String(b.userName), REALM, temp, String(b.randomKey));
       if (String(b.signature) === expected) {
         PENDING.delete(b.challengeKey);

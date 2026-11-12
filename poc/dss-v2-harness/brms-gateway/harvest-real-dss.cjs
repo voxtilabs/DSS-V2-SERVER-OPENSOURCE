@@ -60,10 +60,17 @@ function req(method, p, body, headers = {}) {
   const randomKey = info.randomKey || '';
   if (!realm || !randomKey) { console.log('no realm/randomKey — dumping raw and stopping'); process.exit(1); }
 
-  // 2) signature (Dahua scheme, same as the gateway tests)
+  // 2) signature — EXACT formula derived empirically from three live client
+  // captures against our gateway (E-147): the client hashes the digest twice.
+  //   temp = md5(user + md5(pass))
+  //   inner = md5(`${user}:${realm}:${temp}`)
+  //   sig = md5(md5(inner + ':' + randomKey))
   const temp = md5(USER + md5(PASS));
-  const sig = md5(md5(`${USER}:${realm}:${temp}`) + ':' + randomKey);
-  const auth = await req('POST', '/brms/api/v1.0/accounts/authorize', { userName: USER, clientType: 'WINPC_V2', ipAddress: '', randomKey, signature: sig, encryptType: 'MD5' });
+  const inner = md5(`${USER}:${realm}:${temp}`);
+  const sig = md5(md5(inner + ':' + randomKey));
+  // Body shape must match the real client byte-for-byte (captured live):
+  // {userName, ipAddress:"", clientType:"WINPC_V2", randomKey, signature}
+  const auth = await req('POST', '/brms/api/v1.0/accounts/authorize', { userName: USER, ipAddress: '', clientType: 'WINPC_V2', randomKey, signature: sig });
   console.log('authorize:', auth.status, auth.body.slice(0, 400));
   const authJson = JSON.parse(auth.body || '{}');
   save('01-authorize.json', JSON.stringify(sanitize(authJson), null, 1));
