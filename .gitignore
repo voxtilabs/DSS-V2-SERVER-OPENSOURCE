@@ -55,3 +55,4 @@ Thumbs.db
 # --- Python temporales (scripts de laboratorio) ---
 __pycache__/
 .venv/
+poc/research/real-server/web/
