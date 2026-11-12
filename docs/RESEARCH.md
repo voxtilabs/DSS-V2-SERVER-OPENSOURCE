@@ -1381,3 +1381,29 @@ Residual: the client's own device-list cache (its tree showed 16/16 while the
 gateway serves 2 devices) is client-side state; no plain-text store was found
 under AppData/Local/Roaming/LocalLow or C:\DSS, so it is kept in memory/DB by
 DPSDK and a client restart is what refreshes it.
+
+[E-153..E-156] Live View contra el cliente real: timeouts de 1 s, Session y
+contenedor DHAV
+
+Capturas Frida del cliente en produccion (MDP.exe, el proceso de media):
+1) El cliente espera ~1 s la respuesta al SETUP (RtspThreadWaitTime = 1 s) y
+   descarta cualquier respuesta con CSeq distinto. Nuestro relay esperaba un
+   DESCRIBE upstream antes de contestar -> "Operation failed".
+   Fix: SETUP y PLAY se contestan AL INSTANTE; el PLAY upstream se encola hasta
+   que llega el 200 del SETUP upstream. RTP-Info puede ir con seq=0;rtptime=0
+   (el server real tambien lo hace).
+2) Transport: el cliente manda "RTP/AVP/TCP; interleaved=0-1;playmode=playback";
+   gortsplib rechaza `playmode` con 400 -> el relay ahora construye siempre
+   "RTP/AVP/TCP;unicast;interleaved=2-3" hacia MediaMTX.
+3) Session: enviabamos al upstream el Session del cliente (el nuestro) en vez
+   del de MediaMTX -> 400 "session not found" en cada PLAY. Ahora manda upSession.
+4) Payload: el pipeline de Dahua SOLO acepta el contenedor privado "DHAV"
+   (parser en StreamParsermd.dll: CDHAVStream::ParseData @0x180034ac0) y NO tiene
+   fallback para RTP estandar. Formato: "DHAV" + class 0xFC + u32 counter +
+   u32 recordLen(24+extra+NAL+8) + u32 unix + u8 extraLen@+22 + TLV (0x80 w/h,
+   0x81 fps/codec 0x0C=HEVC, 0x94) + NALs ANNEX-B + 8 bytes finales. El cuerpo
+   DEBE ser Annex-B: las camaras ONVIF entregan RFC 7798 (AP type 48 / FU 49) y
+   RFC 6184 (STAP-A 24 / FU-A 28), asi que el relay depacketiza a Annex-B antes
+   de envolver (e156-rtp-depacket.js) y coloca el DHAV DESPUES del header RTP.
+   Verificado en el cable: 44 48 41 56 fc 00 00 00 | counter | recordLen |
+   unix | 0c 00 | TLV | 00 00 00 01 26 01 (IDR H.265).

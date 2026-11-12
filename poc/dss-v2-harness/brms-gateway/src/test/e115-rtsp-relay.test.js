@@ -112,6 +112,55 @@ test('E-115 relay: Dahua SETUP+PLAY same url gets RTP from gortsplib-style upstr
   upstream.close();
 });
 
+test('E-155 DHAV wrapper: magic, class, recordLen, extraLen and Annex-B preserved', async () => {
+  const { wrapWithDhav, isDhav, createDhavState } = await import('../e155-dhav.js');
+  // H.265 sample: start code + VPS NAL (type 32 -> 0x40 0x01)
+  const nal = Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0c, 0x01]), Buffer.alloc(100, 0xaa)]);
+  const st = createDhavState();
+  const out = wrapWithDhav(nal, st);
+  assert.equal(out.slice(0, 4).toString('latin1'), 'DHAV');
+  assert.equal(out[4], 0xFC, 'class video');
+  const extraLen = out[22];
+  assert.ok(extraLen === 12 || extraLen === 8, 'extraLen is the TLV block length');
+  const recordLen = out.readUInt32LE(12);
+  assert.equal(recordLen, 24 + extraLen + nal.length + 8, 'recordLen = 24 + extra + NAL + 8');
+  assert.equal(out.readUInt32LE(8), 0, 'first counter is 0');
+  assert.ok(out.readUInt32LE(16) > 1700000000, 'unix seconds');
+  // body is the untouched Annex-B NAL, followed by the 8 trailing bytes
+  assert.deepEqual(out.slice(24 + extraLen, 24 + extraLen + nal.length), nal);
+  assert.equal(out.length, 24 + extraLen + nal.length + 8);
+  // idempotent on an already-wrapped payload
+  const again = wrapWithDhav(out, st);
+  assert.equal(again, out);
+  assert.ok(isDhav(out));
+  // counter increments per frame
+  const second = wrapWithDhav(nal, st);
+  assert.equal(second.readUInt32LE(8), 1, 'counter increments');
+});
+
+test('E-156 RTP -> Annex-B depacketizer (H.265 AP/FU + H.264 STAP-A/FU-A)', async () => {
+  const { rtpToAnnexB, depacketizeH265, depacketizeH264 } = await import('../e156-rtp-depacket.js');
+  // Real AP captured from the EBA camera (H.265 type 48):
+  //   60 01 | 00 03 46 01 30 | 00 08 4e 01 01 03 ff ff 6e 80
+  const ap = Buffer.from('600100034601300008 4e010103ffff6e80'.replace(/ /g, ''), 'hex');
+  const st = { codec: null };
+  const out = rtpToAnnexB(ap, st);
+  assert.equal(st.codec, 'h265', 'AP identifies H.265');
+  assert.deepEqual(out, Buffer.from('0000000146 0130 00000001 4e010103ffff6e80'.replace(/ /g, ''), 'hex'), 'AP NALs become Annex-B');
+  // FU start (62 01 | 81 | data) -> start code + rebuilt NAL header + data
+  const fuStart = Buffer.from('62 01 81 d0 10 fd 90'.replace(/ /g, ''), 'hex');
+  const s2 = depacketizeH265(fuStart, {});
+  assert.deepEqual(s2, Buffer.from('00000001 0201 d010fd90'.replace(/ /g, ''), 'hex'), 'FU start rebuilt');
+  // FU middle -> raw continuation, no start code
+  const fuMid = Buffer.from('62 01 41 aabb'.replace(/ /g, ''), 'hex');
+  assert.deepEqual(depacketizeH265(fuMid, {}), Buffer.from('aabb', 'hex'), 'FU middle is a continuation');
+  // H.264 STAP-A (24) and FU-A (28)
+  const stap = Buffer.from('18 0003 460130'.replace(/ /g, ''), 'hex');
+  assert.deepEqual(depacketizeH264(stap, {}), Buffer.from('00000001 460130'.replace(/ /g, ''), 'hex'), 'STAP-A');
+  const fua = Buffer.from('7c 85 05aabb'.replace(/ /g, ''), 'hex');
+  assert.deepEqual(depacketizeH264(fua, {}), Buffer.from('00000001 6505aabb'.replace(/ /g, ''), 'hex'), 'FU-A start');
+});
+
 test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SETUP timeout)', async () => {
   // The DSS client starts its CSeq wherever it wants (observed 1, 7, 41...).
   // DPSDK.dll (live555 strings 0x180c64370 / 0x180c5c2a8) DISCARDS any reply
