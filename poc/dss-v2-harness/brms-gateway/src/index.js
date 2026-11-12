@@ -282,6 +282,15 @@ const AMQ_PORT = parseInt(process.env.AMQ_PORT || '61616', 10);
 const AMQ_STOMP_PORT = parseInt(process.env.AMQ_STOMP_PORT || '61613', 10);
 const AMQ_ENABLE = (process.env.AMQ_ENABLE || '1') !== '0';
 const PUBLIC_HOST = process.env.PUBLIC_HOST || '127.0.0.1';
+// E-161: the RTSP url handed to the client can point to a different
+// host:port than the relay's own listen port (NAT / capture proxy /
+// reverse proxy). Both default to the listen values.
+const RTSP_PUBLIC_HOST = process.env.RTSP_PUBLIC_HOST || PUBLIC_HOST;
+const RTSP_PUBLIC_PORT = parseInt(process.env.RTSP_PUBLIC_PORT || String(RTSP_PORT), 10);
+// E-165: the client's media layer selects its Dahua (DHAV) stream parser from
+// the production URL shape (mediaServer/monitor/param/cameraid=...&substream=N).
+const rtspPublicUrl = (deviceCode, channelSeq, streamType, token) =>
+  `rtsp://${RTSP_PUBLIC_HOST}:${RTSP_PUBLIC_PORT}/${buildDahuaMonitorPath(deviceCode, channelSeq, streamType)}?token=${token}`;
 const MEDIAMTX_URL = process.env.MEDIAMTX_URL || 'rtsp://mediamtx:8554';
 const SSL_KEY = process.env.SSL_KEY || '/certs/key.pem';
 const SSL_CERT = process.env.SSL_CERT || '/certs/cert.pem';
@@ -2626,7 +2635,7 @@ app.get('/web/client-module', async (req, reply) => { reply.redirect(302, '/web/
 // and zero DESCRIBE (pcap evidence); MediaMTX requires SETUP <path>/trackID=0
 // + PLAY <path>. The relay makes both worlds meet - without it Live View
 // receives 400 on SETUP and never opens.
-import { startRtspRelay } from './e115-rtsp-relay.js';
+import { startRtspRelay, buildDahuaMonitorPath } from './e115-rtsp-relay.js';
 // E-118: the alarm notifier publishes the NATIVE event schema
 setNativeAlarmMapper(toNativeAlarmEvent);
 const RTSP_UPSTREAM_HOST = process.env.MEDIAMTX_HOST || 'mediamtx';
@@ -2906,7 +2915,7 @@ const realMonitorUri = async (req) => {
   // real error (1001), never a URL to somebody else's stream.
   if (!channelId) {
     return envelope({
-      connectType: '0', protocol: 'RTSP', trackId: '0', ip: PUBLIC_HOST, port: String(RTSP_PORT),
+      connectType: '0', protocol: 'RTSP', trackId: '0', ip: RTSP_PUBLIC_HOST, port: String(RTSP_PUBLIC_PORT),
       token: '', stunPort: '3478', url: '', uri: '', stunEnable: '0', session: '', minRate: '0'
     });
   }
@@ -2914,13 +2923,21 @@ const realMonitorUri = async (req) => {
   if (target.error) return target.error;
   const token = genToken();
   const session = genToken().slice(0, 16);
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${target.path}?token=${token}`;
+  const url = rtspPublicUrl(
+    target.device.deviceCode,
+    String(channelId || '').split('$')[3] || '0',
+    body.subType ?? body.streamType ?? '0',
+    token
+  );
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: target.path, deviceCode: target.device?.deviceCode || '' });
-  // Exactly the 11 string keys of the DTO (no extras) + legacy `uri` alias.
+  // Exactly the 11 string keys of the DTO + legacy `uri` alias + the stream
+  // discriminator the client validates (E-157).
   return envelope({
     connectType: '1', protocol: 'RTSP', trackId: String(body.trackId || '0'),
-    ip: PUBLIC_HOST, port: String(RTSP_PORT), token, stunPort: '3478',
-    url, uri: url, stunEnable: '1', session, minRate: '0'
+    ip: RTSP_PUBLIC_HOST, port: String(RTSP_PUBLIC_PORT), token, stunPort: '3478',
+    url, uri: url, stunEnable: '1', session, minRate: '0',
+    streamType: String(body.subType ?? body.streamType ?? '0'),
+    subType: String(Math.max(0, Number(body.subType ?? body.streamType ?? 0)))
   });
 };
 for (const base of ['/brms/api/v1.1', '/brms/api/v1.0', '/admin/API', '/admin/api', '/v1.1', '/v1.0', '/videoService']) {
@@ -2962,13 +2979,21 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const { device, path: pathName } = target;
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
+  // E-165: Dahua monitor URL (parser selection on the client's media layer).
+  const channelSeq = String(channelId || '').split('$')[3] || '0';
+  const url = rtspPublicUrl(device.deviceCode, channelSeq, streamType, token);
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
   return envelope({
-    connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
-    port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1',
+    connectType: 1, ip: RTSP_PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
+    port: RTSP_PUBLIC_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
+    token, trackId: String(trackId || '0'),
+    // E-157: echo the requested stream so DPSDK's permission/stream check
+    // accepts it (an empty trackId made StartRealPlay fail with "No
+    // permissions of sub stream N" in the client UI).
+    streamType: String(streamType ?? '0'),
+    subType: String(Math.max(0, (Number(streamType) || 1) - 1)),
+    url, url2: url + '&sub=1',
     // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
     // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
     // E-146 (REA RTSP_URLS_DTO_SHAPE.md): the native DTO is an ARRAY OF
@@ -3027,13 +3052,21 @@ app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req
   const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const { device, path: pathName } = target;
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
+  // E-165: Dahua monitor URL (parser selection on the client's media layer).
+  const channelSeq = String(channelId || '').split('$')[3] || '0';
+  const url = rtspPublicUrl(device.deviceCode, channelSeq, streamType, token);
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
   return envelope({
-    connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
-    port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1',
+    connectType: 1, ip: RTSP_PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
+    port: RTSP_PUBLIC_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
+    token, trackId: String(trackId || '0'),
+    // E-157: echo the requested stream so DPSDK's permission/stream check
+    // accepts it (an empty trackId made StartRealPlay fail with "No
+    // permissions of sub stream N" in the client UI).
+    streamType: String(streamType ?? '0'),
+    subType: String(Math.max(0, (Number(streamType) || 1) - 1)),
+    url, url2: url + '&sub=1',
     // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
     // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
     // E-146 (REA RTSP_URLS_DTO_SHAPE.md): the native DTO is an ARRAY OF
@@ -3069,13 +3102,21 @@ const mtsStartVideo = async (req) => {
   const target = await resolvePlaybackTarget(channelId);
   if (target.error) return target.error;
   const { device, path: pathName } = target;
-  const url = `rtsp://${PUBLIC_HOST}:${RTSP_PORT}/${pathName}?token=${token}`;
+  // E-165: Dahua monitor URL (parser selection on the client's media layer).
+  const channelSeq = String(channelId || '').split('$')[3] || '0';
+  const url = rtspPublicUrl(device.deviceCode, channelSeq, streamType, token);
   const hlsUrl = `https://${PUBLIC_HOST}:${HTTPS_PORT}/brms/api/v1.1/video/live/channel/${channelId}/hls`;
   RTSP_SESSIONS.set(token, { channelId, session, created: Date.now(), path: pathName, deviceCode: device?.deviceCode || '' });
   return envelope({
-    connectType: 1, ip: PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
-    port: RTSP_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
-    token, trackId: trackId || '', url, url2: url + '&sub=1',
+    connectType: 1, ip: RTSP_PUBLIC_HOST, minRate: 0, multicastIp: '239.0.0.1', multicastPort: 5000,
+    port: RTSP_PUBLIC_PORT, protocol: 'RTSP', session, stopTime: '', stunEnable: 1, stunPort: 3478,
+    token, trackId: String(trackId || '0'),
+    // E-157: echo the requested stream so DPSDK's permission/stream check
+    // accepts it (an empty trackId made StartRealPlay fail with "No
+    // permissions of sub stream N" in the client UI).
+    streamType: String(streamType ?? '0'),
+    subType: String(Math.max(0, (Number(streamType) || 1) - 1)),
+    url, url2: url + '&sub=1',
     // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
     // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
     // E-146 (REA RTSP_URLS_DTO_SHAPE.md): the native DTO is an ARRAY OF

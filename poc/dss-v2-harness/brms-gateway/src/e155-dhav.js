@@ -29,10 +29,25 @@ export function isDhav(payload) {
     payload[0] === 0x44 && payload[1] === 0x48 && payload[2] === 0x41 && payload[3] === 0x56);
 }
 
-// Observed TLV block of an H.265 stream (extraLen 12): 0x80 w/8,h/8 (1280x720),
-// 0x81 fps 30, codec 0x0C (HEVC), 0x94 ...
+// Observed TLV block of an H.265 stream (extraLen 12): 0x80 w/8,h/8,
+// 0x81 fps, codec, ?; 0x94 ...
+// E-164: the dimensions are NOT constants — they come from the camera's own
+// SPS (the first sample here was a 1280x720 camera while the lab camera is
+// 1920x1080; declaring the wrong size leaves the player with a green picture).
 const TLV_HEVC = Buffer.from([0x80, 0x00, 0xA0, 0x5A, 0x81, 0x1E, 0x0C, 0x1E, 0x94, 0x02, 0x01, 0x00]);
 const TLV_H264 = Buffer.from([0x80, 0x00, 0xA0, 0x5A, 0x81, 0x1E, 0x01, 0x1E]);
+
+// Build the TLV with the real frame size (w/8 and h/8, as the sample shows:
+// 160/90 for 1280x720). fps and the codec id stay at the captured defaults
+// (30 fps, 0x0C = HEVC / 0x01 = H.264) because the SDP does not carry them.
+export function dhavExtraFor(codec, width, height, fps = 30) {
+  const w = Math.max(1, Math.round(Number(width) / 8));
+  const h = Math.max(1, Math.round(Number(height) / 8));
+  const f = Math.max(1, Math.min(255, Number(fps) || 30));
+  const size = [0x80, (w >> 8) & 0xFF, w & 0xFF, h & 0xFF];
+  if (codec === 'h264') return Buffer.from([...size, 0x81, f, 0x01, f]);
+  return Buffer.from([...size, 0x81, f, 0x0C, f, 0x94, 0x02, 0x01, 0x00]);
+}
 
 // Rough codec sniff on an Annex-B payload: find the first start code, then read
 // the NAL header (H.265: type = (b0>>1)&0x3f with b1&7 == tid; H.264: b0&0x1f).
@@ -53,7 +68,7 @@ export function sniffCodec(payload) {
 }
 
 export function createDhavState() {
-  return { counter: 0, extra: null, codec: null };
+  return { counter: 0, extra: null, codec: null, injected: false };
 }
 
 // Wrap one RTP payload (standard H.264/H.265 as delivered by MediaMTX) into the

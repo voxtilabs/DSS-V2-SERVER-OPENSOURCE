@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { parseSdpControls, parseRtspUrl, rewriteTransport, startRtspRelay } from '../e115-rtsp-relay.js';
+import { parseSdpControls, parseRtspUrl, rewriteTransport, startRtspRelay, dahuaUrlToMediaMtxPath, buildDahuaMonitorPath } from '../e115-rtsp-relay.js';
 
 test('E-115 pure helpers', () => {
   assert.deepEqual(parseRtspUrl('rtsp://10.10.20.120:9100/cam_X?token=abc'), { path: 'cam_X', query: '?token=abc' });
@@ -15,6 +15,21 @@ test('E-115 pure helpers', () => {
   assert.equal(c.length, 1);
   assert.equal(c[0].control, 'trackID=0');
   assert.match(c[0].mime, /video/);
+});
+
+test('E-165 Dahua monitor URL <-> MediaMTX path', () => {
+  // the production URL from research/rea/E151_REAL_RTSP_CAPTURE.md
+  const real = 'mediaServer/monitor/param/cameraid=1000013%240%26substream=1';
+  assert.equal(dahuaUrlToMediaMtxPath(real), 'cam_1000013');
+  // our encoder shape (channelId D0238JDG3016$1$0$0 -> seq 0)
+  const built = buildDahuaMonitorPath('D0238JDG3016', '0', '2');
+  assert.equal(built, 'mediaServer/monitor/param/cameraid=D0238JDG3016%240%26substream=2');
+  assert.equal(dahuaUrlToMediaMtxPath(built), 'cam_D0238JDG3016');
+  // generic paths are untouched (the relay falls back to them)
+  assert.equal(dahuaUrlToMediaMtxPath('cam_D0238JDG3016'), null);
+  // absolute form, exactly what the client sends on SETUP
+  const u = parseRtspUrl('rtsp://127.0.0.1:9199/mediaServer/monitor/param/cameraid=D0238JDG3016%240%26substream=2?token=abc');
+  assert.equal(dahuaUrlToMediaMtxPath(u.path), 'cam_D0238JDG3016');
 });
 
 test('E-115 relay: Dahua SETUP+PLAY same url gets RTP from gortsplib-style upstream', async () => {
@@ -159,6 +174,22 @@ test('E-156 RTP -> Annex-B depacketizer (H.265 AP/FU + H.264 STAP-A/FU-A)', asyn
   assert.deepEqual(depacketizeH264(stap, {}), Buffer.from('00000001 460130'.replace(/ /g, ''), 'hex'), 'STAP-A');
   const fua = Buffer.from('7c 85 05aabb'.replace(/ /g, ''), 'hex');
   assert.deepEqual(depacketizeH264(fua, {}), Buffer.from('00000001 6505aabb'.replace(/ /g, ''), 'hex'), 'FU-A start');
+});
+
+test('E-158 parameter sets from the MediaMTX SDP (sprop-vps/sps/pps -> Annex-B)', async () => {
+  const { parameterSetsFromSdp } = await import('../e156-rtp-depacket.js');
+  const sdp = 'v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H265/90000\r\n' +
+    'a=fmtp:96 sprop-pps=RAHA98DMkA==; sprop-sps=QgEBAWAAAAMAkAAAAwAAAwB4oAPAgBEHy5ZdKQhGRdUMBAQAAAMABAAAAwBRgBd5RAAO4IAAHcEx; sprop-vps=QAEMAf//AWAAAAMAkAAAAwAAAwB4lwJA\r\n';
+  const out = parameterSetsFromSdp(sdp);
+  assert.ok(out && out.length > 20, 'parameter sets built');
+  // three start codes, VPS first
+  const starts = [];
+  for (let i = 0; i + 3 < out.length; i++) if (out[i] === 0 && out[i + 1] === 0 && out[i + 2] === 0 && out[i + 3] === 1) starts.push(i);
+  assert.equal(starts.length, 3, 'VPS + SPS + PPS start codes');
+  assert.equal(out[starts[0] + 4], 0x40, 'VPS NAL type 32');
+  assert.equal(out[starts[1] + 4], 0x42, 'SPS NAL type 33');
+  assert.equal(out[starts[2] + 4], 0x44, 'PPS NAL type 34');
+  assert.equal(parameterSetsFromSdp('v=0\r\n'), null, 'no fmtp -> null');
 });
 
 test('E-145 relay echoes the CLIENT CSeq (REA: mismatch -> reply discarded -> SETUP timeout)', async () => {

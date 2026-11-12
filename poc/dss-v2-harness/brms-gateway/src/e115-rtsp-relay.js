@@ -19,10 +19,30 @@
 // 9100 from the gateway and REMOVE the mediamtx 9100 host mapping.
 
 import net from 'node:net';
-import { createDhavState, wrapWithDhav } from './e155-dhav.js';
-import { rtpToAnnexB } from './e156-rtp-depacket.js';
+import { createDhavState, wrapWithDhav, dhavExtraFor } from './e155-dhav.js';
+import { rtpToAnnexB, parameterSetsFromSdp, sdpCodecSize } from './e156-rtp-depacket.js';
 
 const CRLF = '\r\n';
+
+// E-165: the production server hands the client a Dahua-private URL
+//   rtsp://host:9100/mediaServer/monitor/param/cameraid=<dev>$<seq>&substream=N?token=...
+// (real capture, research/rea/E151_REAL_RTSP_CAPTURE.md). The client's media
+// layer picks its DAHUA (DHAV) stream parser from that shape; with a plain
+// "/cam_<code>" path MDP never calls StreamParsermd's DHAV parser at all
+// (Frida: 0 calls) and falls back to standard H.265 RTP, which decodes to a
+// green picture. Map the Dahua URL to the MediaMTX path here.
+export function dahuaUrlToMediaMtxPath(pathname) {
+  const p = decodeURIComponent(String(pathname || '')).replace(/^\/+/, '');
+  const m = /^mediaServer\/monitor\/param\/cameraid=([^&]+)/i.exec(p);
+  if (!m) return null;
+  const deviceCode = m[1].split('$')[0];
+  return deviceCode ? `cam_${deviceCode}` : null;
+}
+
+export function buildDahuaMonitorPath(deviceCode, channelSeq, streamType) {
+  const camId = encodeURIComponent(`${deviceCode}$${channelSeq}`);
+  return `mediaServer/monitor/param/cameraid=${camId}%26substream=${Number(streamType) || 0}`;
+}
 
 export function parseRtspUrl(raw) {
   // rtsp://host:port/path?query  (absolute form the DSS client uses)
@@ -84,8 +104,8 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
       c.on('error', (e) => { clearTimeout(timer); reject(e); });
     });
     const controls = parseSdpControls(sdp);
-    sdpCache.set(path, { controls, at: Date.now() });
-    return { controls };
+    sdpCache.set(path, { controls, sdp, at: Date.now() });
+    return { controls, sdp };
   }
 
   const server = net.createServer((client) => {
@@ -94,6 +114,7 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     let upReady = false;
     const pending = []; // client messages buffered until upstream is connected
     let basePath = '';
+    let basePathIsDahua = false;
     let upSession = null; // Session id from the upstream SETUP response
     let cseq = 1;
     // E-150 (pcap of the REAL Dahua server, 9100): the client's live555 player
@@ -109,11 +130,40 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
     let pendingPlay = null; // legacy (unused after E-153)
     let clientSession = null; // session id we advertise to the client
     let queuedPlay = null; // client PLAY waiting for the upstream SETUP answer
-    // E-155: the DSS media pipeline only accepts the Dahua private RTP payload
-    // container ("DHAV"); MediaMTX delivers plain H.264/H.265. Set RELAY_DHAV=0
-    // to disable the wrapping (diagnostics).
-    const dhav = process.env.RELAY_DHAV === '0' ? null : createDhavState();
+    let paramSets = null;   // Annex-B VPS/SPS/PPS taken from MediaMTX's SDP
+    // E-155: the DSS media pipeline accepts the Dahua private RTP payload
+    // container ("DHAV"); MediaMTX delivers plain H.264/H.265.
+    // E-166: MDP never calls StreamParsermd's DHAV parser for the live path
+    // (Frida: 0 calls even with the production URL shape), so the container is
+    // emitted ONLY for the Dahua monitor URL (production parity) and stays off
+    // for generic /cam_<code> paths. RELAY_DHAV=1/0 forces either behaviour.
+    const dhavMode = process.env.RELAY_DHAV;
+    let dhav = null;
+    const dhavEnabled = () => (dhavMode === '1' ? true : (dhavMode === '0' ? false : Boolean(basePathIsDahua)));
     const cseqMethod = new Map(); // upstream CSeq -> method
+    // E-162 (capture of MDP's own RTSP socket): one DHAV record must carry a
+    // WHOLE access unit. MediaMTX delivers ~1500-byte RTP packets, so wrapping
+    // each packet produced a DHAV record per fragment; the client's parser
+    // accepted them but the decoder never got a complete frame (infinite
+    // spinner). Accumulate until the RTP marker bit (last packet of the AU),
+    // then emit ONE DHAV record, chunked across interleaved frames (the 2-byte
+    // interleaved length caps a frame at 65535 bytes).
+    let auParts = [];
+    let auHead = null;
+    const MAX_INTERLEAVED = 60000;
+
+    function sendInterleaved(channel, buf) {
+      let off = 0;
+      while (off < buf.length) {
+        const n = Math.min(MAX_INTERLEAVED, buf.length - off);
+        const hdr = Buffer.alloc(4);
+        hdr[0] = 0x24;
+        hdr[1] = channel;
+        hdr.writeUInt16BE(n, 2);
+        client.write(Buffer.concat([hdr, buf.subarray(off, off + n)]));
+        off += n;
+      }
+    }
 
     function ssrcHex() {
       if (clientSsrc === null) clientSsrc = Math.floor(Math.random() * 0xffffffff) >>> 0;
@@ -167,13 +217,26 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
             if (ch === UP_CH.from && payload.length >= 12) {
               // advertise and emit the same SSRC so the player can correlate
               if (clientSsrc !== null) payload.writeUInt32BE(clientSsrc >>> 0, 8);
-              // E-155/E-156: the Dahua pipeline needs the DHAV container, whose
-              // body must be an Annex-B bitstream. MediaMTX forwards the
-              // camera's RFC 7798/6184 framing (AP/FU/STAP-A), so convert it.
+              // E-158: the production server always uses PT 0x6A for the live
+              // track; MediaMTX forwards the camera's own PT (96), which the
+              // client does not know (it never received an SDP).
+              payload[1] = (payload[1] & 0x80) | 0x6a;
               if (dhav) {
+                // E-162: reassemble the access unit (RTP marker = last packet)
+                // and emit ONE DHAV record per frame.
+                const marker = (payload[1] & 0x80) !== 0;
                 const ab = rtpToAnnexB(payload.subarray(12), dhav);
-                if (!ab || !ab.length) continue;
-                payload = Buffer.concat([payload.subarray(0, 12), wrapWithDhav(ab, dhav)]);
+                if (ab && ab.length) auParts.push(ab);
+                auHead = payload.subarray(0, 12);
+                if (!marker) continue;
+                if (!auParts.length) continue;
+                let frame = Buffer.concat(auParts);
+                auParts = [];
+                // E-158: first record carries VPS/SPS/PPS (the client never
+                // sends DESCRIBE, so it has no out-of-band codec config).
+                if (!dhav.injected && paramSets) { frame = Buffer.concat([paramSets, frame]); dhav.injected = true; }
+                sendInterleaved(CL_CH.from, Buffer.concat([auHead, wrapWithDhav(frame, dhav)]));
+                continue;
               }
             }
             // remap upstream channel back to the client channel
@@ -243,7 +306,8 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
       }
       if (method === 'DESCRIBE') {
         const p = parseRtspUrl(rawUrl);
-        const upUrl = `rtsp://${upstreamHost}:${upstreamPort}/${p.path}${p.query}`;
+        const mapped = dahuaUrlToMediaMtxPath(p.path) || p.path;
+        const upUrl = `rtsp://${upstreamHost}:${upstreamPort}/${mapped}${p.query}`;
         const c = cseq++;
         noteCseq(c, Number(headers.cseq)); cseqMethod.set(c, method);
         up.write(`DESCRIBE ${upUrl} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}Accept: application/sdp${CRLF}User-Agent: Dahua Rtsp Client/2.0${CRLF}${CRLF}`);
@@ -251,7 +315,10 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
       }
       if (method === 'SETUP') {
         const p = parseRtspUrl(rawUrl);
-        basePath = p.path || basePath;
+        const mappedByDahua = dahuaUrlToMediaMtxPath(p.path);
+        basePathIsDahua = Boolean(mappedByDahua);
+        if (dhavEnabled() && !dhav) dhav = createDhavState();
+        basePath = mappedByDahua || p.path || basePath;
         const token = decodeURIComponent((p.query.match(/token=([^&]*)/) || [])[1] || '');
         if (validateToken) validateToken(token, basePath, clientKey);
         // E-153: the Dahua client waits ~1 s (RtspThreadWaitTime default 1) for
@@ -260,8 +327,11 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         // client IMMEDIATELY with our own session id and run the upstream
         // SETUP asynchronously; the PLAY is queued until upstream answers.
         if (!clientSession) clientSession = String(2000000000000 + Math.floor(Math.random() * 899999999999));
-        const urlControl = p.path.includes('/') ? p.path.split('/').slice(1).join('/') : null;
-        const control = urlControl || 'trackID=0';
+        // E-165: with the Dahua monitor URL the trailing segments are the
+        // camera descriptor, NOT a track control; MediaMTX only accepts
+        // /trackID=0.
+        const urlControl = (!mappedByDahua && p.path.includes('/')) ? p.path.split('/').slice(1).join('/') : null;
+        const control = mappedByDahua ? 'trackID=0' : (urlControl || 'trackID=0');
         const upUrl = `rtsp://${upstreamHost}:${upstreamPort}/${basePath}/${control}`;
         const c = cseq++;
         noteCseq(c, Number(headers.cseq)); cseqMethod.set(c, method);
@@ -270,15 +340,33 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         // upstream transport is always rebuilt in its exact accepted form.
         const upTransport = `RTP/AVP/TCP;unicast;interleaved=${UP_CH.from}-${UP_CH.to}`;
         up.write(`SETUP ${upUrl} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}Transport: ${upTransport}${CRLF}User-Agent: Dahua Rtsp Client/2.0${CRLF}${CRLF}`);
+        // E-158: fetch the SDP in the background (the client gets its 200 now)
+        // so we can inject the codec parameter sets in-band afterwards.
+        upstreamDescribe(basePath)
+          .then((r) => {
+            paramSets = parameterSetsFromSdp(r.sdp);
+            // E-164: declare the camera's REAL frame size in the DHAV TLV.
+            const info = sdpCodecSize(r.sdp);
+            if (dhav && info.width > 0) {
+              dhav.extra = dhavExtraFor(info.codec || 'h265', info.width, info.height);
+              log('sdp params', paramSets ? paramSets.length + 'B' : 'none', `size ${info.width}x${info.height}`, 'tlv', dhav.extra.toString('hex'));
+            } else {
+              log('sdp params', paramSets ? paramSets.length + 'B' : 'none', 'size unknown');
+            }
+          })
+          .catch(() => {});
         client.write(`RTSP/1.0 200 OK${CRLF}CSeq: ${headers.cseq}${CRLF}Server: Dahua Rtsp Server/2.0${CRLF}Session: ${clientSession};timeout=60${CRLF}Transport: RTP/AVP/TCP;unicast;interleaved=${CL_CH.from}-${CL_CH.to};ssrc=${ssrcHex()}${CRLF}x-dynamic-rate: 1${CRLF}${CRLF}`);
         log('SETUP', basePath, '->', control, 'cseq', c, '<-', headers.cseq, '(immediate)');
         return;
       }
       if (method === 'PLAY' || method === 'RECORD' || method === 'PAUSE') {
         const p = parseRtspUrl(rawUrl);
+        // E-165: MediaMTX only knows the mapped path (cam_<code>), never the
+        // Dahua monitor descriptor the client echoes back on PLAY.
+        const playPath = dahuaUrlToMediaMtxPath(p.path) || p.path || basePath;
         if (method !== 'PAUSE' && !upSession) {
           // upstream SETUP not answered yet (usually <100 ms): queue the PLAY
-          queuedPlay = { path: p.path || basePath, clientCseq: headers.cseq };
+          queuedPlay = { path: playPath, clientCseq: headers.cseq };
           log('PLAY queued until upstream SETUP');
           return;
         }
@@ -290,9 +378,9 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         const sess = upSession || headers.session;
         const sessionH = sess ? `${CRLF}Session: ${sess}` : '';
         const rangeH = headers.range ? `${CRLF}Range: ${headers.range}` : '';
-        up.write(`${method} rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: Dahua Rtsp Client/2.0${sessionH}${rangeH}${CRLF}${CRLF}`);
+        up.write(`${method} rtsp://${upstreamHost}:${upstreamPort}/${playPath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: Dahua Rtsp Client/2.0${sessionH}${rangeH}${CRLF}${CRLF}`);
         if (method === 'PLAY') replyPlay(headers.cseq);
-        log(method, p.path || basePath, 'session=' + (sess || 'none'), 'cseq', c, '<-', headers.cseq, '(immediate)');
+        log(method, playPath, 'session=' + (sess || 'none'), 'cseq', c, '<-', headers.cseq, '(immediate)');
         return;
       }
       if (method === 'TEARDOWN') {
@@ -303,7 +391,7 @@ export function startRtspRelay({ port, upstreamHost = 'mediamtx', upstreamPort =
         // E-154: upstream must receive ITS session id, not the client's.
         const sess = upSession || headers.session;
         const sessionH = sess ? `${CRLF}Session: ${sess}` : '';
-        up.write(`TEARDOWN rtsp://${upstreamHost}:${upstreamPort}/${p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: Dahua Rtsp Client/2.0${sessionH}${CRLF}${CRLF}`);
+        up.write(`TEARDOWN rtsp://${upstreamHost}:${upstreamPort}/${dahuaUrlToMediaMtxPath(p.path) || p.path || basePath} RTSP/1.0${CRLF}CSeq: ${c}${CRLF}User-Agent: Dahua Rtsp Client/2.0${sessionH}${CRLF}${CRLF}`);
         setTimeout(() => { try { up.destroy(); } catch {} try { client.destroy(); } catch {} }, 250);
         log('TEARDOWN');
         return;

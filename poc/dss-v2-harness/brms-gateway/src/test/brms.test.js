@@ -810,8 +810,10 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
         body: JSON.stringify({ channelId: chId, streamType: '1' })
       })).json();
       assert.equal(own.code, 1000, 'known channel resolves');
-      assert.ok(own.data.url.includes(`cam_${created.deviceCode}`), 'URL is the device OWN path');
-      assert.ok(!own.data.url.includes('/cam1'), 'never the default camera');
+      // E-165: the production URL shape is the Dahua monitor descriptor, which
+      // carries the device's OWN code (the relay maps it to cam_<code>).
+      assert.ok(own.data.url.includes(`cameraid=${created.deviceCode}`), 'URL is the device OWN path');
+      assert.ok(!own.data.url.includes('cam1'), 'never the default camera');
       // unknown channel: HLS 404 (no default-camera proxy either)
       const hls = await fetch(`${BASE}/brms/api/v1.1/video/live/channel/GHOST$1$0$0/hls`);
       assert.equal(hls.status, 404, 'HLS has no default-camera fallback');
@@ -837,7 +839,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       const j = await r.json();
       assert.equal(j.code, 1000, method + ' code');
       assert.equal(j.data.url.startsWith('rtsp://'), true, method + ' url is dialable');
-      assert.ok(j.data.url.includes('cam_D0238W9Q1004'), method + ' url resolves the device OWN path');
+      assert.ok(j.data.url.includes('cameraid=D0238W9Q1004'), method + ' url resolves the device OWN path');
       for (const k of keys) assert.equal(typeof j.data[k], 'string', `${method} ${k} is a STRING`);
       const ghost = await (await fetch(`${BASE}/brms/api/v1.0/realmonitor/uri?channelId=GHOST$1$0$0`)).json();
       assert.notEqual(ghost.code, 1000, 'unknown channel is an error');
@@ -1068,9 +1070,11 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.equal(r1.data.organizations[0].pId, '001', 'org parent key pId');
     assert.equal(r1.data.organizations[0].hasChild, '1', 'expander visible (devices exist under VIGILAB)');
     assert.equal(r1.data.organizations[0].organizations.length, 0, 'scoped mode: no nested recursion');
-    // scoping invariant (registry-agnostic): only devices of org 001 come back
-    assert.ok(r1.data.devices.every((d) => d.orgCode === '001'), 'orgCode=001 -> only devices of 001');
-    assert.ok(r1.data.channels.every((c) => c.orgCode === '001'), 'orgCode=001 -> only channels of 001');
+    // E-163: the children of the requested org are the ONLY thing served - the
+    // flat devices[]/channels[] arrays no longer re-list nodes that already
+    // hang under an org (the client appended them again on every rebuild).
+    assert.equal(r1.data.devices.length, 0, 'orgCode=001 -> no flat device copies');
+    assert.equal(r1.data.channels.length, 0, 'orgCode=001 -> no flat channel copies');
     // Expand VIGILAB: its devices, each with nested channels[] (dev+0x110).
     const r2 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree?orgCode=VIGILAB&roleId=1`, { headers: { 'X-Subject-Token': token } })).json();
     assert.equal(r2.data.organizations.length, 0, 'VIGILAB has no child orgs');
@@ -1083,12 +1087,22 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       assert.equal(d.channels[0].pId, d.deviceCode, 'channel pId = deviceCode');
       assert.equal(typeof d.channels[0].status, 'string', 'channel status is STRING');
     }
-    assert.ok(r2.data.channels.length >= r2.data.devices.length, 'root-level channels mirror the scoped devices');
+    assert.equal(r2.data.channels.length, 0, 'E-163: channels live under their device only (no flat copy)');
     // No orgCode -> FULL tree (role dialog / SPA consumers keep everything).
     const r3 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree`, { headers: { 'X-Subject-Token': token } })).json();
     assert.ok(r3.data.organizations.some((o) => o.orgCode === '001'), 'full mode: root org present');
-    assert.ok(r3.data.organizations.some((o) => o.orgCode === 'VIGILAB'), 'full mode: flat org list');
-    assert.ok(r3.data.devices.length >= 1, 'full mode: devices present');
+    assert.ok(r3.data.organizations.every((o) => o.orgCode === '001'), 'full mode: top level is the root org only');
+    // E-163: the full tree is canonical - each org once (nested), each device
+    // once (nested under its org), each channel once (nested under its
+    // device). devices[]/channels[] stay empty to avoid a second copy.
+    const r3root = r3.data.organizations.find((o) => o.orgCode === '001');
+    assert.ok(r3root.organizations.some((o) => o.orgCode === 'VIGILAB'), 'full mode: VIGILAB nested under 001');
+    const r3dev = [];
+    const walk3 = (nodes) => { for (const o of nodes || []) { r3dev.push(...(o.devices || [])); walk3(o.organizations); } };
+    walk3(r3.data.organizations);
+    assert.ok(r3dev.length >= 1, 'full mode: devices present (nested)');
+    assert.equal(r3.data.devices.length, 0, 'full mode: devices[] carries no duplicate copy');
+    assert.equal(r3.data.channels.length, 0, 'full mode: channels[] carries no duplicate copy');
     // POST plain variant scoped by body orgCode (SPA BatchLoadingTree, one level per request).
     const r4 = await (await fetch(`${BASE}/brms/api/v1.1/tree/grade-device-tree`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ orgCode: 'VIGILAB', treeType: '2' }) })).json();
     assert.ok(r4.data.devices.length >= 1 && r4.data.devices.every((d) => d.orgCode === 'VIGILAB'), 'POST body orgCode scopes the plain variant');
@@ -1096,7 +1110,11 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     // Admin RPC mirror stays FULL even when an orgCode sneaks into the body.
     const rpc = await (await fetch(`${BASE}/admin/API/BRM/Tree/GetFullGradeDeviceTree`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ orgCode: 'VIGILAB' }) })).json();
     assert.ok(rpc.data.organizations.some((o) => o.orgCode === '001'), 'mirror forces the full tree');
-    assert.ok(rpc.data.devices.length >= 1, 'mirror keeps all devices');
+    // E-163: the mirror is canonical too - devices nested under their org.
+    const rpcDev = [];
+    const walkRpc = (nodes) => { for (const o of nodes || []) { rpcDev.push(...(o.devices || [])); walkRpc(o.organizations); } };
+    walkRpc(rpc.data.organizations);
+    assert.ok(rpcDev.length >= 1, 'mirror keeps all devices (nested)');
     // Query wins over body on conflict (DPSDK sends orgCode as query on GET).
     const r5 = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree?orgCode=001`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ orgCode: 'VIGILAB' }) })).json();
     assert.equal(r5.data.organizations.length, 1, 'query orgCode=001 wins over body orgCode=VIGILAB');
@@ -1233,9 +1251,10 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(root.pId, '0', 'org pId = parentCode');
     const vig = root.organizations.find((o) => o.orgCode === 'VIGILAB');
     assert.strictEqual(vig.pId, '001', 'child org pId = 001');
-    // E-137: top-level organizations[] is FLAT (every org present, linked by
-    // pId) so the native parentCode parser can mount VIGILAB under 001.
-    assert.ok(g.data.organizations.some((o) => o.orgCode === 'VIGILAB'), 'VIGILAB also present as a flat top-level org node');
+    // E-163: top-level organizations[] is the canonical root only - the child
+    // orgs are nested (the old flat list served VIGILAB twice, and the native
+    // client appended it as a device-tree copy on every rebuild).
+    assert.ok(!g.data.organizations.some((o) => o.orgCode === 'VIGILAB'), 'VIGILAB is NOT a top-level copy');
     const dev = (vig.devices[0] || g.data.devices[0]);
     assert.ok(dev && dev.pId, 'device pId present');
     assert.ok(dev.channels[0].pId === dev.deviceCode, 'channel pId = deviceCode');
@@ -1495,7 +1514,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       body: JSON.stringify({ clientType: 'WINPC_V2', clientMac: 'AABBCCDDEEFF', project: 'PSDK', method: 'MTS.Video.StartVideo', data: { enableRtsps: 0, dataType: '2', streamType: '1', channelId: `${code}$1$0$0`, trackId: '' } })
     })).json();
     const sd = sv.data || sv;
-    assert.ok(sd.url && sd.url.includes(`cam_${code}`), `admin envelope StartVideo resolves cam_${code}, got ${sd.url}`);
+    assert.ok(sd.url && sd.url.includes(`cameraid=${code}`), `admin envelope StartVideo resolves the device code, got ${sd.url}`);
     assert.ok(!sd.url.includes('undefined') && !sd.url.includes('/cam1?'), `no cam1/undefined fallback, got ${sd.url}`);
     // v1.0/v1.1 con envelope tambien
     for (const host of ['/brms/api/v1.0', '/brms/api/v1.1']) {
@@ -1504,7 +1523,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
         body: JSON.stringify({ method: 'MTS.Video.StartVideo', data: { channelId: `${code}$1$0$0`, streamType: '1' } })
       })).json();
       const d2 = sv2.data || sv2;
-      assert.ok(d2.url && d2.url.includes(`cam_${code}`), `${host} envelope StartVideo cam_${code}, got ${d2.url}`);
+      assert.ok(d2.url && d2.url.includes(`cameraid=${code}`), `${host} envelope StartVideo device code, got ${d2.url}`);
     }
     await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
@@ -2036,8 +2055,8 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       body: JSON.stringify({ channelId: `${code}$1$0$0`, streamType: 1, dataType: 1 })
     })).json();
     assert.equal(sv.code, 1000);
-    assert.ok(sv.data.url.includes(`/${`cam_${code}`}?token=`),
-      `StartVideo URL must target the device path, got ${sv.data.url}`);
+    assert.ok(sv.data.url.includes(`cameraid=${code}`) && sv.data.url.includes('?token='),
+      `StartVideo URL must target the device code, got ${sv.data.url}`);
 
     await fetch(`${BASE}/brms/api/v1.1/device/delete/batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
