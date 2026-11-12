@@ -57,7 +57,9 @@ function channelNode(device, seq) {
     status: str(device.online ?? device.status ?? 1),
     domainId: '',
     inputAlarmType: '',
-    streamType: '1'
+    // E-160: highest available stream (1 = main, 2 = +sub1, 3 = +sub2) — the
+    // client checks it before opening a sub stream.
+    streamType: '3'
   };
 }
 

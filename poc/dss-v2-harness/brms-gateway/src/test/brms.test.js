@@ -2001,8 +2001,13 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const rpc = await (await fetch(`${BASE}/brms/api/BRM/User/GetUserFunctions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
     assert.equal(rpc.code, 1000);
     // adm_role_function(ROLE_ID=1) = the real Super Administrator codes.
-    assert.deepEqual(rpc.data.functions, ['1', '2', '3', '5', '6', '8', '9', '10', '11']);
+    // E-160: the super-admin role carries the WHOLE function catalog (the
+    // client checks these before opening a sub stream).
+    for (const c of ['1', '2', '3', '5', '6', '8', '9', '10', '11', '13', '15', '17', '21', '23', '24', '25', '27']) {
+      assert.ok(rpc.data.functions.includes(c), `function ${c} granted`);
+    }
     assert.ok(rpc.data.functions.includes('8'), 'liveView must be granted');
+    assert.ok(rpc.data.functions.includes('17'), 'livePreview must be granted');
 
     // GetMenuRights = union of the seed grants (86) + the leveldb harvest.
     const rights = await (await fetch(`${BASE}/brms/api/BRM/User/GetMenuRights`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();

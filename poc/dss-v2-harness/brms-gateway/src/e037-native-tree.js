@@ -179,11 +179,15 @@ export const DSS_FUNCTION_CATALOG = [
 ];
 
 // adm_role_function(ROLE_ID = 1) - the Super Administrator role
-export const DSS_ADMIN_FUNCTION_CODES = ['1', '2', '3', '5', '6', '8', '9', '10', '11'];
+// E-160: the real super-admin role carries the WHOLE function catalog. A
+// partial list made the client refuse the Live View ("No permissions of sub
+// stream 1", the check reads the granted function codes, e.g. livePreview 17).
+export const DSS_ADMIN_FUNCTION_CODES = DSS_FUNCTION_CATALOG.map((f) => f.functionCode);
 
 // adm_dev_privilege(ROLE_ID = 1): liveView(8), playback(9), download(10),
-// privacyMasking(11) over the whole tree node '001'
-export const DSS_ADMIN_DEVICE_PRIVILEGES = ['8', '9', '10', '11'];
+// privacyMasking(11) over the whole tree node '001'. E-160: grant every
+// device privilege the catalog defines (the client checks per stream).
+export const DSS_ADMIN_DEVICE_PRIVILEGES = DSS_FUNCTION_CATALOG.map((f) => f.functionCode);
 
 export function menuCatalogForRole(roleId) {
   const type = String(roleId ?? '1');
@@ -323,7 +327,12 @@ export function buildNativeChannelVo(device, channelSeq) {
     floorNum: '',
     floorInfos: [],
     parentTargetSeq: null,
-    streamType: '1',           // real EBA1_LECTOR channel streamType "1"
+    // E-160 (REA E-160_SUBSTREAM_PERMISSION.md §0): this is the highest
+    // available stream, 1-based: 1 = main only, 2 = +sub stream 1,
+    // 3 = +sub stream 2. The client refuses sub stream N ("No permissions of
+    // sub stream N") when the value is < N+1, so our cameras (which do expose
+    // sub streams) must advertise 3.
+    streamType: '3',
     parkingSpaceMode: null
   };
 }
