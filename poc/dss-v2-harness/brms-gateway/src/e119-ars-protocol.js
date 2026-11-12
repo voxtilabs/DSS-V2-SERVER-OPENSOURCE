@@ -48,12 +48,21 @@ export function parseDahuaFrame(buf) {
     // DVRIP layout (template @0x01388648): cmd@0x18 seq@0x1c len@0x24 flag@0x2c,
     // 48B header, JSON @+0x30. DHIP layout (template @0x013988dc): version@0x0c,
     // 52B header, JSON @+0x34, len@0x28 flag@0x30.
-    const headerLen = label === 'DVRIP' ? 0x30 : 0x34;
+    // E-174: header template @0x01388648 has TWO extra dwords at 0x30/0x34 and
+    // the JSON starts at +0x38 (research/E-162 §2.3). The previous code used
+    // 0x30 and located the payload with an unbounded indexOf('{'), which can
+    // match a 0x7B byte inside the header. DHIP is unchanged (JSON @0x34).
+    const headerLen = label === 'DVRIP' ? 0x38 : 0x34;
     if (buf.length < headerLen) return { ok: false, magic: label, needMore: true };
     const command = label === 'DVRIP' ? buf.readUInt32LE(0x18) : buf.readUInt32LE(0x10);
     const sequence = label === 'DVRIP' ? buf.readUInt32LE(0x1c) : buf.readUInt32LE(0x14);
     const declaredLen = label === 'DVRIP' ? buf.readUInt32LE(0x24) : buf.readUInt32LE(0x28);
-    const jsonAt = buf.indexOf(0x7b); // '{'
+    let jsonAt = -1;
+    if (buf[headerLen] === 0x7b) jsonAt = headerLen;
+    else {
+      // tolerance: some builds pad the header; only look inside the header
+      for (let i = 0x10; i < headerLen; i++) { if (buf[i] === 0x7b) { jsonAt = i; break; } }
+    }
     if (jsonAt === -1) {
       return { ok: true, magic: label, version, headerLen, command: 0, sequence: 0, payloadLen: declaredLen, payload: Buffer.alloc(0), jsonAt: -1, needMore: true };
     }
@@ -112,7 +121,7 @@ export function parseRegisterJson(jsonBuf) {
 export function buildDahuaAck(magic, command, sequence, jsonBody) {
   const body = Buffer.from(typeof jsonBody === 'string' ? jsonBody : JSON.stringify(jsonBody), 'utf8');
   const isDhip = magic === 'DHIP';
-  const header = Buffer.alloc(isDhip ? 0x34 : 0x30);
+  const header = Buffer.alloc(isDhip ? 0x34 : 0x38);
   const magicBuf = isDhip ? MAGIC_DHIP : MAGIC_DVRIP;
   magicBuf.copy(header, 0);
   if (isDhip) {

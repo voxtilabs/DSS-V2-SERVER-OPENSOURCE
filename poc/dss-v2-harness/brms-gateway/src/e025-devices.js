@@ -1113,9 +1113,68 @@ export function buildDeviceCheckExistPayload(body = {}) {
   };
 }
 
+// E-174: real payload for the client's "Add Type: Auto Register" list. Every
+// device that reached us over TCP 9500 and has not been authorized yet is
+// exposed here (research/E-162 §2.5, §4-P0.3). All fields are STRINGS: the
+// C++/Qt matchers compare with === against string constants.
 export function buildDeviceUnauthorizedPagePayload() {
-  return { list: [], results: [], items: [], total: 0, totalCount: 0, pageNo: 1, pageSize: 20 };
+  const rows = [...DEVICE_REGISTRY.values()]
+    .filter((d) => d.source === 'auto-register' && String(d.authorized) !== '1')
+    .map((d) => ({
+      id: String(d.deviceCode),
+      deviceCode: String(d.deviceCode),
+      deviceId: String(d.deviceCode),
+      deviceName: String(d.deviceName || ''),
+      deviceIp: String(d.deviceIp || ''),
+      devicePort: String(d.devicePort || ''),
+      protocolType: String(d.protocolType || '1'),
+      protocolName: String(d.protocolName || 'Dahua'),
+      deviceType: String(d.deviceType || '2'),
+      deviceCategory: String(d.deviceCategory || '1'),
+      manufacturer: String(d.manufacturer || 'Dahua'),
+      model: String(d.model || ''),
+      serialNumber: String(d.serialNumber || d.deviceCode || ''),
+      channelNum: String(d.channelNum || '1'),
+      online: String(d.online ?? '1'),
+      status: String(d.status ?? '1'),
+      onlineStatus: String(d.onlineStatus ?? '1'),
+      initStatus: '1',
+      addType: 'auto-register',
+      source: 'auto-register',
+      authorized: '0',
+      registerFromIp: String(d.registerFromIp || d.deviceIp || ''),
+      lastSeenAt: String(d.lastSeenAt || d.updatedAt || Date.now()),
+      orgCode: String(d.orgCode || '001')
+    }));
+  return {
+    pageNo: '1',
+    pageSize: '20',
+    totalCount: String(rows.length),
+    total: String(rows.length),
+    totalCountStr: String(rows.length),
+    pageData: rows,
+    results: rows,
+    list: rows,
+    items: rows,
+    success: true
+  };
 }
+
+export function authorizeArsDevices(codes = []) {
+  const authorized = [];
+  for (const code of codes) {
+    const key = String(code);
+    const rec = DEVICE_REGISTRY.get(key) || DEVICE_REGISTRY.get(key.replace(/^ARS-/, 'ARS-'));
+    if (!rec) continue;
+    rec.authorized = '1';
+    rec.authorizedAt = Date.now();
+    authorized.push(rec);
+  }
+  if (authorized.length) saveDevicesToDisk();
+  return authorized;
+}
+
+export function listArsSessions(rows = []) { return rows; }
 
 export function buildDeviceDeleteBatchPayload(body = {}) {
   const codes = [].concat(body.deviceCodes || body.codes || body.list || []).filter(Boolean);
@@ -1941,6 +2000,10 @@ export function registerArsDevice(deviceInfo) {
     deviceCode: 'ARS-' + String(deviceInfo.deviceId || '')
   });
   const record = createDeviceRecord(input, { source: 'auto-register' });
+  // E-174: pending authorization until the operator adds it in "Auto Register".
+  record.authorized = '0';
+  record.registerFromIp = deviceInfo.registerFromIp || deviceInfo.ip || '';
+  record.lastSeenAt = Date.now();
   return record;
 }
 

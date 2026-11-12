@@ -964,12 +964,14 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const { parseDahuaFrame, parseRegisterJson, buildDahuaAck } = await import('../e119-ars-protocol.js');
     const json = JSON.stringify({ DeviceID: 'NVR-TEST-01', SerialNo: 'SN123', MachineName: 'NVR Sala', MachineAddress: '192.168.1.50', IPAddress: '192.168.1.50', DeviceType: '51', DeviceClass: 'NVR', ChannelNum: '16', UserName: 'admin', Password: 'admin123' });
     const payload = Buffer.from(json, 'utf8');
-    const header = Buffer.alloc(0x30);
+    const header = Buffer.alloc(0x38);
     header.write('DVRIP\0\0\0', 0, 8, 'latin1');
     header.writeUInt32LE(0x19930522, 8);
     header.writeUInt32LE(0x0001, 12);
-    header.writeUInt32LE(0x2a, 16);
-    header.writeUInt32LE(payload.length, 20);
+    header.writeUInt32LE(0x0005, 0x18);
+    header.writeUInt32LE(0x2a, 0x1c);
+    header.writeUInt32LE(payload.length, 0x24);
+    header.writeUInt32LE(1, 0x2c);
     const frame = Buffer.concat([header, payload]);
     const parsed = parseDahuaFrame(frame);
     assert.equal(parsed.ok, true);
@@ -1308,9 +1310,10 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
 
   it('E-128 ARS hardening: ACK header offsets per RE template + declared payloadLen + DoS cap', async () => {
     const { parseDahuaFrame, buildDahuaAck, ARS_MAX_PAYLOAD } = await import('../e119-ars-protocol.js');
-    // DVRIP ACK: cmd|0x8000@0x18, seq@0x1C, len@0x24, flag@0x2C, 48B header
+    // DVRIP ACK: cmd|0x8000@0x18, seq@0x1C, len@0x24, flag@0x2C, 56B header
+    // (E-174: JSON starts at +0x38 per the netsdk template)
     const ack = buildDahuaAck('DVRIP', 0x0001, 7, { Ret: 100 });
-    assert.equal(ack.length, 0x30 + JSON.stringify({ Ret: 100 }).length);
+    assert.equal(ack.length, 0x38 + JSON.stringify({ Ret: 100 }).length);
     assert.equal(ack.readUInt32LE(0x18) & 0xffff, 0x8001 & 0xffff);
     assert.equal(ack.readUInt32LE(0x1c), 7);
     assert.equal(ack.readUInt32LE(0x24), JSON.stringify({ Ret: 100 }).length);
@@ -1324,8 +1327,8 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     // fragmented frame: header declares payloadLen, parse must report it even
     // when only half the JSON arrived (caller waits instead of Ret:400)
     const body = JSON.stringify({ method: 'client.register', DeviceID: 'X1' });
-    const full = Buffer.concat([(() => { const h = Buffer.alloc(0x30); Buffer.from('DVRIP\0\0\0', 'latin1').copy(h, 0); h.writeUInt32LE(0x19930522, 8); h.writeUInt32LE(1, 0x18); h.writeUInt32LE(3, 0x1c); h.writeUInt32LE(body.length, 0x24); return h; })(), Buffer.from(body)]);
-    const half = full.subarray(0, 0x30 + 5);
+    const full = Buffer.concat([(() => { const h = Buffer.alloc(0x38); Buffer.from('DVRIP\0\0\0', 'latin1').copy(h, 0); h.writeUInt32LE(0x19930522, 8); h.writeUInt32LE(1, 0x18); h.writeUInt32LE(3, 0x1c); h.writeUInt32LE(body.length, 0x24); return h; })(), Buffer.from(body)]);
+    const half = full.subarray(0, 0x38 + 5);
     const f = parseDahuaFrame(half);
     assert.ok(f.ok && f.payloadLen === body.length, 'declared payloadLen from header');
     const fFull = parseDahuaFrame(full);

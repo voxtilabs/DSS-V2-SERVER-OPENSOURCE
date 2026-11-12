@@ -53,6 +53,7 @@ import {
   buildDevicePasswordChangeBatchPayload,
   buildDeviceTimezoneUpdateBatchPayload,
   buildDeviceUnauthorizedPagePayload,
+  authorizeArsDevices,
   buildDeviceRtspUrlPayload,
   buildDiscoverDeviceInitPayload,
   buildDiscoverDevicePagePayload,
@@ -2085,8 +2086,38 @@ app.get('/brms/api/v1.1/device/rtsp-url', async (req, reply) => {
   return envelope(payload);
 });
 app.get('/brms/api/v1.1/device/unauthorized/page', async () => envelope(buildDeviceUnauthorizedPagePayload()));
-app.post('/brms/api/v1.1/device/unauthorized/add/batch', async () => envelope({ success: true, results: [], list: [] }));
+// E-174: "Add Type: Auto Register" -> authorize. The device is already in the
+// tree; authorizing clears the pending flag and pushes the notify so the
+// client refreshes without a relogin.
+app.post('/brms/api/v1.1/device/unauthorized/add/batch', async (req) => {
+  const body = req.body || {};
+  const codes = [].concat(body.ids || body.deviceCodes || body.codes || body.list || [])
+    .map((v) => String(v && typeof v === 'object' ? (v.deviceCode || v.id || '') : v))
+    .filter(Boolean);
+  const authorized = authorizeArsDevices(codes);
+  for (const rec of authorized) {
+    try { NOTIFY.deviceEvent('DEVICE_ADDED', rec); } catch { /* best effort */ }
+  }
+  return envelope({
+    results: [], failList: [], success: true,
+    list: authorized.map((r) => String(r.deviceCode)),
+    total: String(authorized.length)
+  });
+});
 app.post('/brms/api/v1.1/device/unauthorized/delete/batch', async () => envelope({ success: true, results: [], list: [] }));
+
+// E-174: ops visibility over the live ARS TCP peers (diagnostics only).
+app.get('/brms/api/v1.1/device/ars/session/list', { preHandler: auth }, async () => {
+  const sessions = [...ARS_TCP_SESSIONS.entries()].map(([key, s]) => ({
+    peer: String(key),
+    clientIp: String((s.socket && s.socket.remoteAddress) || ''),
+    deviceId: String(s.deviceId || ''),
+    framing: String(s.framing || ''),
+    lastSeen: String(s.lastActivity || ''),
+    online: '1'
+  }));
+  return envelope({ total: String(sessions.length), sessions, list: sessions });
+});
 
 // --- discovery join (LAN scan result -> device tree) ---
 // E-036: EVERY registration funnel (Discover join, Discover init, manual
@@ -3573,37 +3604,52 @@ function createARSTCPServer() {
             socket.write(buildDahuaAck(frame.magic, frame.command || 0x0004, frame.sequence, { Ret: 100, RetMsg: 'OK', KeepAliveSecond: '60' }));
             return;
           }
-          if (/logout/i.test(jmethod) || frame.command === 0x0005) {
-            if (session.deviceId) ARS_DEVICES.delete(session.deviceId);
-            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0005, frame.sequence, { Ret: 100, RetMsg: 'OK' }));
-            return;
-          }
-          if (info && (info.deviceId || info.machineAddress)) {
+          // E-175: command 5 is the REGISTER command in both real templates
+          // (research/E-162 §2.3), NOT logout. Dispatching on the command alone
+          // made a registering DVR answer {Ret:100} and never appear in the
+          // tree. Order matters: register payload first, logout only when the
+          // JSON actually says so.
+          const looksRegister = !!(info && (info.deviceId || info.serialNo || info.machineAddress))
+            || /register/i.test(jmethod);
+          if (looksRegister) {
             const deviceId = info.deviceId || info.serialNo || ('NVR-' + Date.now());
             session.sequence = frame.sequence;
             session.deviceId = deviceId;
             session.authenticated = true;
+            session.framing = frame.magic;
             ARS_DEVICES.set(deviceId, {
               deviceId: 'ARS-' + deviceId, originalId: deviceId, serialNo: info.serialNo,
               deviceName: info.deviceName || ('NVR ' + deviceId), ip: info.ip,
               port: info.port, username: info.username, password: info.password,
               deviceType: info.deviceType, channelNum: info.channelCount,
               deviceClass: info.deviceClass, protocol: 'Dahua', source: 'auto-register',
-              status: 1, registeredAt: Date.now(), lastSeen: Date.now()
+              status: 1, registeredAt: Date.now(), lastSeen: Date.now(),
+              registerFromIp: socket.remoteAddress
             });
             try {
               const registered = registerArsDevice({
                 deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
                 ip: info.ip, port: info.port, username: info.username, password: info.password,
-                deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua'
+                deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua',
+                registerFromIp: socket.remoteAddress
               });
-              scheduleStreamProvisioning(registered);
+              scheduleStreamProvisioning(registered, { notify: true });
             } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
             try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
-            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
-          } else {
-            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, { Ret: 400, RetMsg: 'Bad register payload' }));
+            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0005, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
+            return;
           }
+          if (/logout/i.test(jmethod)) {
+            // E-174: a device logout/unregister must NOT delete the device from
+            // the tree (a DVR reboot would make it vanish). Mark it offline.
+            if (session.deviceId) {
+              const d = ARS_DEVICES.get(session.deviceId);
+              if (d) { d.status = 0; d.lastSeen = Date.now(); d.offlineReason = 'logout'; }
+            }
+            socket.write(buildDahuaAck(frame.magic, frame.command || 0x0005, frame.sequence, { Ret: 100, RetMsg: 'OK' }));
+            return;
+          }
+          socket.write(buildDahuaAck(frame.magic, frame.command || 0x0001, frame.sequence, { Ret: 400, RetMsg: 'Bad register payload' }));
           return;
         }
         if (frame.needMore) return; // valid magic, incomplete header/JSON: wait
@@ -3697,7 +3743,9 @@ function createARSTCPServer() {
             const ack = createLogoutAck(header.sequence);
             socket.write(ack);
             if (session.deviceId) {
-              ARS_DEVICES.delete(session.deviceId);
+              // E-174: keep the device, only mark it offline.
+              const device = ARS_DEVICES.get(session.deviceId);
+              if (device) { device.status = 0; device.lastSeen = Date.now(); device.offlineReason = 'logout'; }
             }
             socket.end();
             break;
