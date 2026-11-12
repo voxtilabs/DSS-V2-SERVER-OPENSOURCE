@@ -1067,15 +1067,23 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
   });
 
   it('E-141 media candidates (server/video/list + serviceStatus), base64 rtspUrl and warning contracts', async () => {
-    // StartVideo: native parser FUN_1802145f0 reads rtspUrl/rtspUrls base64.
+    // StartVideo: native DTO rtspUrls is an ARRAY of {streamType, rtspUrl}
+    // with PLAIN urls (E-146 / REA RTSP_URLS_DTO_SHAPE.md).
     const sv = await (await fetch(`${BASE}/admin/API/MTS/Video/StartVideo`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token },
       body: JSON.stringify({ channelId: 'D0238W9Q1004$1$0$0', streamType: 0, dataType: 0 })
     })).json();
     assert.equal(sv.code, 1000);
     assert.ok(sv.data.url && sv.data.url.startsWith('rtsp://'), 'StartVideo still returns plain url');
-    assert.ok(sv.data.rtspUrl && sv.data.rtspUrls, 'rtspUrl/rtspUrls present');
-    assert.equal(Buffer.from(sv.data.rtspUrl, 'base64').toString('utf8'), sv.data.url, 'rtspUrl base64 decodes to url');
+    assert.ok(Array.isArray(sv.data.rtspUrls), 'rtspUrls is an ARRAY (native DTO)');
+    assert.ok(sv.data.rtspUrls.length >= 1, 'rtspUrls has elements');
+    for (const e of sv.data.rtspUrls) {
+      assert.equal(typeof e.streamType, 'string', 'element streamType is a STRING');
+      assert.equal(typeof e.rtspUrl, 'string', 'element rtspUrl is a STRING');
+      assert.ok(e.rtspUrl.startsWith('rtsp://'), 'element rtspUrl is PLAIN (not base64)');
+    }
+    assert.ok(sv.data.rtspUrl, 'singular rtspUrl kept for older consumers');
+    assert.equal(Buffer.from(sv.data.rtspUrl, 'base64').toString('utf8'), sv.data.url, 'singular rtspUrl base64 decodes to url');
     assert.ok(!sv.data.url.includes('192.168.0.238'), 'StartVideo never exposes the camera IP');
     const u = new URL(sv.data.url);
     // server/video/list on both bases must publish the media server candidate.

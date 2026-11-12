@@ -2892,7 +2892,15 @@ app.post('/brms/api/v1.0/MTS/Video/StartVideo', { preHandler: auth }, async (req
     token, trackId: trackId || '', url, url2: url + '&sub=1',
     // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
     // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
-    rtspUrl: Buffer.from(url).toString('base64'), rtspUrls: Buffer.from(url).toString('base64'),
+    // E-146 (REA RTSP_URLS_DTO_SHAPE.md): the native DTO is an ARRAY OF
+    // OBJECTS {streamType, rtspUrl} carrying PLAIN urls (not base64);
+    // streamType "0" = main, "1" = sub. The singular base64 rtspUrl is kept
+    // for older harness consumers (inert for the native DTO).
+    rtspUrl: Buffer.from(url).toString('base64'),
+    rtspUrls: [
+      { streamType: '0', rtspUrl: url },
+      { streamType: '1', rtspUrl: url + '&sub=1' }
+    ],
     vkId, vkValue: genToken().slice(0, 16),
     hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
@@ -2949,7 +2957,15 @@ app.post('/brms/api/v1.1/MTS/Video/StartVideo', { preHandler: auth }, async (req
     token, trackId: trackId || '', url, url2: url + '&sub=1',
     // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
     // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
-    rtspUrl: Buffer.from(url).toString('base64'), rtspUrls: Buffer.from(url).toString('base64'),
+    // E-146 (REA RTSP_URLS_DTO_SHAPE.md): the native DTO is an ARRAY OF
+    // OBJECTS {streamType, rtspUrl} carrying PLAIN urls (not base64);
+    // streamType "0" = main, "1" = sub. The singular base64 rtspUrl is kept
+    // for older harness consumers (inert for the native DTO).
+    rtspUrl: Buffer.from(url).toString('base64'),
+    rtspUrls: [
+      { streamType: '0', rtspUrl: url },
+      { streamType: '1', rtspUrl: url + '&sub=1' }
+    ],
     vkId, vkValue: genToken().slice(0, 16),
     hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
@@ -2983,7 +2999,15 @@ const mtsStartVideo = async (req) => {
     token, trackId: trackId || '', url, url2: url + '&sub=1',
     // E-141 (REA rea-media-path-noroute.md §2.2): the native parser FUN_1802145f0
     // reads rtspUrl/rtspUrls and base64-decodes them; keep url/url2 for older paths.
-    rtspUrl: Buffer.from(url).toString('base64'), rtspUrls: Buffer.from(url).toString('base64'),
+    // E-146 (REA RTSP_URLS_DTO_SHAPE.md): the native DTO is an ARRAY OF
+    // OBJECTS {streamType, rtspUrl} carrying PLAIN urls (not base64);
+    // streamType "0" = main, "1" = sub. The singular base64 rtspUrl is kept
+    // for older harness consumers (inert for the native DTO).
+    rtspUrl: Buffer.from(url).toString('base64'),
+    rtspUrls: [
+      { streamType: '0', rtspUrl: url },
+      { streamType: '1', rtspUrl: url + '&sub=1' }
+    ],
     vkId, vkValue: genToken().slice(0, 16),
     hlsUrl, fakeSdp: fakeSdp || 0, forceSynPlay: forceSynPlay || 0, extend: extend || '', keyCode: keyCode || ''
   });
