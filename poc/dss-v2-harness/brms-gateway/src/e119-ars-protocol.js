@@ -106,7 +106,15 @@ export function parseRegisterJson(jsonBuf) {
     port: pick(flat, ['Port', 'port', 'MediaPort'], '37777'),
     username: pick(flat, ['UserName', 'username'], 'admin'),
     password: pick(flat, ['Password', 'password'], 'admin123'),
-    channelCount: pick(flat, ['ChannelNum', 'channelNum', 'ChannelCount', 'VideoInputChannel'], '1'),
+    // E-186: el REGISTER trae el conteo real de canales (ChannelNum). Se leen
+    // todas las variantes conocidas y se devuelve '' cuando no viene: antes el
+    // default '1' era indistinguible del placeholder que escribe el operador,
+    // asi que un NVR de 8 canales quedaba con 1 y solo se veia un canal.
+    channelCount: pick(flat, [
+      'ChannelNum', 'channelNum', 'ChannelCount', 'channelCount',
+      'MaxChannelNum', 'VideoInputNum', 'VideoInputNumEx', 'VideoInputChannelNum',
+      'VideoInputChannel', 'VideoInChannel', 'EncoderChannelNum', 'EncoderChannelCount'
+    ], ''),
     firmware: pick(flat, ['SoftWareVersion', 'Firmware', 'firmware'], '')
   };
 }

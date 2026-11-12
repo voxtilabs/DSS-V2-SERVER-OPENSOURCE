@@ -81,6 +81,10 @@ export const DISCOVER_COST_TIME_FLOOR_MS = Number(process.env.E025_COST_TIME_FLO
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export const DEVICE_STORE_PATH = path.join(__dirname, '..', 'data', 'devices.json');
+// E-185: las credenciales del equipo NO pueden vivir en devices.json (se
+// borran ahi por diseno), pero tampoco pueden perderse: sin ellas el server no
+// puede loguearse al DVR despues de un reinicio. Archivo separado, 0600.
+export const DEVICE_CRED_STORE_PATH = path.join(__dirname, '..', 'data', 'device-credentials.json');
 
 export const DEVICE_REGISTRY = new Map();
 export const DISCOVERED_DEVICES = new Map();
@@ -102,6 +106,7 @@ export function loadDevicesFromDisk() {
       }
       if (arr.length) deviceSeq = arr.length;
       console.log(`[E026-STORE] Loaded ${arr.length} devices from ${DEVICE_STORE_PATH}`);
+      loadDeviceCredentials();
     }
   } catch (err) {
     console.log(`[E026-STORE] No existing device store (${DEVICE_STORE_PATH}), starting fresh`);
@@ -118,9 +123,43 @@ export function saveDevicesToDisk() {
       return rest;
     });
     fs.writeFileSync(DEVICE_STORE_PATH, JSON.stringify(safe, null, 2));
+    saveDeviceCredentials();
   } catch (err) {
     console.error('[E026-STORE] Failed to persist devices:', err.message);
   }
+}
+
+export function saveDeviceCredentials() {
+  try {
+    ensureDataDir();
+    const creds = {};
+    for (const d of DEVICE_REGISTRY.values()) {
+      if (!d || !d.deviceCode) continue;
+      if (d.username || d.password) {
+        creds[d.deviceCode] = { username: String(d.username || ''), password: String(d.password || '') };
+      }
+    }
+    fs.writeFileSync(DEVICE_CRED_STORE_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(DEVICE_CRED_STORE_PATH, 0o600); } catch { /* plataforma sin chmod */ }
+  } catch (err) {
+    console.error('[E-185][CREDS] persist failed:', err.message);
+  }
+}
+
+export function loadDeviceCredentials() {
+  try {
+    const raw = fs.readFileSync(DEVICE_CRED_STORE_PATH, 'utf8');
+    const creds = JSON.parse(raw);
+    let n = 0;
+    for (const [code, c] of Object.entries(creds || {})) {
+      const rec = DEVICE_REGISTRY.get(code);
+      if (!rec) continue;
+      if (c && c.username) rec.username = c.username;
+      if (c && c.password) rec.password = c.password;
+      n++;
+    }
+    if (n) console.log(`[E-185][CREDS] restored ${n} device credential(s)`);
+  } catch { /* sin credenciales guardadas todavia */ }
 }
 
 export function persistDevice(record) {
@@ -2022,6 +2061,10 @@ export function registerArsDevice(deviceInfo) {
       existing.encoderChannelCount = chans;
       existing.alarmInNum = chans;
       existing.alarmOutNum = chans;
+      // E-186: el conteo confirmado por el equipo reemplaza al placeholder '1'
+      // que el operador deja en el dialogo de alta.
+      existing.channelCountSource = 'device';
+      if (existing.model === '' && deviceInfo.model) existing.model = String(deviceInfo.model);
     }
     if (deviceInfo.username) existing.username = deviceInfo.username;
     if (deviceInfo.password) existing.password = deviceInfo.password;
@@ -2049,11 +2092,21 @@ export function registerArsDevice(deviceInfo) {
     deviceType: String(deviceInfo.deviceType || '2'),
     deviceName: deviceInfo.deviceName || `Auto-Reg ${deviceInfo.deviceId}`,
     serverCode: 'video#local',
-    channelCount: deviceInfo.channelCount || 1,
+    channelCount: Number(deviceInfo.channelCount) > 0 ? Number(deviceInfo.channelCount) : 1,
     manufacturer: 'Dahua',
     deviceCode: code
   });
   const record = createDeviceRecord(input, { source: 'auto-register' });
+  // E-185: the credentials entered in the client's "Auto Register" dialog are
+  // the ones the platform will use to log into the device once it dials in.
+  // normalizeDeviceInput() drops them, so they must be attached here - without
+  // them the row had no user/password and every later login to the device
+  // would start from an empty account.
+  if (deviceInfo.username) record.username = String(deviceInfo.username);
+  if (deviceInfo.password) record.password = String(deviceInfo.password);
+  // E-186: '1' por defecto es un placeholder hasta que el equipo reporte su
+  // ChannelNum real en el REGISTER.
+  record.channelCountSource = Number(deviceInfo.channelCount) > 0 ? 'device' : 'placeholder';
   // E-174: pending authorization until the operator adds it in "Auto Register".
   // E-177: only for a NEW record - a DVR that re-registers after a reboot must
   // not lose the authorization the operator already granted.

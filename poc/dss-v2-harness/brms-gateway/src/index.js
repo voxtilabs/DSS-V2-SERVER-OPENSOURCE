@@ -1970,8 +1970,10 @@ const addDeviceHandler = async (req) => {
       deviceName: String(body.deviceName || arsRec?.deviceName || registerId),
       ip: resolvedIp,
       port: resolvedPort,
-      username: String(body.loginName || arsRec?.username || 'admin'),
-      password: arsRec?.password || String(body.loginPass || ''),
+      // E-185: el cliente no siempre manda el mismo nombre de campo para las
+      // credenciales del equipo; se aceptan las variantes conocidas.
+      username: String(body.loginName || body.userName || body.username || arsRec?.username || 'admin'),
+      password: arsRec?.password || String(body.loginPass || body.password || body.loginPwd || body.devicePassword || body.pwd || ''),
       deviceType: String(body.deviceType || '2'),
       channelCount,
       protocol: 'Dahua',
@@ -1980,6 +1982,9 @@ const addDeviceHandler = async (req) => {
     rec.authorized = '1';
     rec.authorizedAt = Date.now();
     if (body.orgCode) rec.orgCode = String(body.orgCode);
+    // E-186: si el equipo nunca se registro, el conteo que escribio el
+    // operador es un placeholder; el REGISTER del equipo lo reemplaza.
+    if (!arsRec) rec.channelCountSource = 'placeholder';
     if (!resolvedIp) {
       // Registered by the operator but never dialled 9500 (or offline): the row
       // must exist and read as OFFLINE in every field the client matches on.
@@ -4105,12 +4110,25 @@ function createARSTCPServer() {
               registerFromIp: socket.remoteAddress
             });
             try {
+              const prevChans = Number(DEVICE_REGISTRY.get('ARS-' + deviceId)?.channelNum || 0);
               const registered = registerArsDevice({
                 deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
                 ip: info.ip, port: info.port, username: info.username, password: info.password,
                 deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua',
-                registerFromIp: socket.remoteAddress
+                model: info.model, registerFromIp: socket.remoteAddress
               });
+              // E-186: el equipo confirma sus canales en el REGISTER; si el
+              // conteo cambio respecto del placeholder, el cliente tiene que
+              // refrescar el nodo (antes seguia mostrando 1 canal).
+              if (Number(registered?.channelNum || 0) !== prevChans) {
+                try {
+                  NOTIFY.deviceEvent('DEVICE_MODIFIED', {
+                    deviceCode: registered.deviceCode,
+                    channelNum: String(registered.channelNum || ''),
+                    channelCountSource: String(registered.channelCountSource || '')
+                  });
+                } catch { /* hub not ready */ }
+              }
               scheduleStreamProvisioning(registered, { notify: true });
             } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
             try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
