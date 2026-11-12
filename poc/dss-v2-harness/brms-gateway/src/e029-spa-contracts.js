@@ -62,6 +62,7 @@ import { listChannelPlans, STORAGE_POSITION_NAMES } from './e027-storage.js';
 // E-041: org list/names come from the persistent org store (root '001' +
 // 'VIGILAB'), and a device with an empty orgCode belongs to the default org.
 import { listOrgs, getOrg, deviceOrgCode } from './e041-orgs.js';
+import { maskDeviceIp } from './e143-ip-mask.js';
 
 // DSS site constants (production bundle): root org code and online status.
 const ROOT_ORG_CODE = '001';
@@ -98,7 +99,7 @@ function deviceTreeNode(device, channels) {
     domainId: '0',
     deviceModel: device.model || '',
     softwareVersion: device.firmwareVersion || '',
-    deviceIp: device.deviceIp,
+    deviceIp: maskDeviceIp(device),
     addType: '1',
     capability: device.capability || '0',
     sourceType: '',

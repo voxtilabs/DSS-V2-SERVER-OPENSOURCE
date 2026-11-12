@@ -678,9 +678,11 @@ describe('E2E Integration Tests (E-011)', { timeout: 120000 }, () => {
       method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}'
     });
     const treeJson = await tree.json();
-    const treeHit = (treeJson.data?.deviceList || treeJson.data?.list || [])
-      .some((d) => String(d.deviceIp) === '192.168.0.238');
+    // E-143b: real DeviceTreeVo = {devices}; E-143a: tree payloads carry the
+    // gateway IP, never the camera's internal address.
+    const treeHit = (treeJson.data?.devices || []).some((d) => d.code === addJson.data.deviceCode);
     assert.ok(treeHit, 'device must appear in tree/devices');
+    assert.ok(!JSON.stringify(treeJson.data).includes('192.168.0.238'), 'tree/devices must not leak the camera internal IP (E-143a)');
 
     const chans = await request(`${BASE}/brms/api/v1.0/tree/channels`, {
       method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}'

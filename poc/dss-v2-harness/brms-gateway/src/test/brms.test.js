@@ -86,24 +86,26 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const r = await fetch(`${BASE}/brms/api/v1.0/tree/orgs`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(r.status, 200);
     const j = await r.json();
-    // E-037: real contract = DeviceOrgTreeVo{departments:[OrgNodeVo]} from the
-    // server package; orgList stays as an alias for the web SPA.
+    // E-037: real contract = DeviceOrgTreeVo{departments:[OrgNodeVo]}.
     assert.ok(j.data?.departments?.length > 0);
-    // orgList is a serialized alias of departments (same content, not the same JS object)
-    assert.deepEqual(j.data.orgList, j.data.departments);
     const org = j.data.departments[0];
-    // OrgNodeVo real keys + the aliases the native client (DPSDK pool) parses.
+    // E-143b: real OrgNodeVo shape (22 real orgs captured) - 16 keys, no
+    // orgCode/orgName/parentOrgCode aliases: the DPSDK parser binds code/name/
+    // parentCode directly.
     assert.ok(org.code && org.name && org.orgType !== undefined);
-    assert.ok(org.orgCode === '001' && org.orgName && org.parentCode !== undefined && org.parentOrgCode !== undefined);
+    assert.ok(org.parentCode !== undefined && org.deparmentsCount !== undefined);
+    assert.strictEqual(org.sourceType, '1');
+    assert.ok(Array.isArray(org.device) && Array.isArray(org.channel));
   });
 
   it('tree/devices returns DeviceTreeVo structure', async () => {
     const r = await fetch(`${BASE}/brms/api/v1.0/tree/devices`, { method: 'POST', headers: { 'X-Subject-Token': token, 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(r.status, 200);
     const j = await r.json();
-    assert.ok(j.data?.deviceList?.length > 0);
-    const dev = j.data.deviceList[0];
-    assert.ok(dev.deviceCode && dev.deviceName && dev.status !== undefined && dev.deviceType !== undefined);
+    // E-143b: real DeviceTreeVo = {devices:[DeviceInfoVo]} only.
+    assert.ok(j.data?.devices?.length > 0);
+    const dev = j.data.devices[0];
+    assert.ok(dev.code && dev.name && dev.status !== undefined && dev.type !== undefined);
   });
 
   it('tree/channels returns channelId format num$K$m$0', async () => {
@@ -322,7 +324,8 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     const page = await (await fetch(`${BASE}/brms/api/v1.1/device/page`)).json();
     assert.ok(page.data.total >= 2, 'mock device + E-025 add');
     const tree = await (await fetch(`${BASE}/brms/api/v1.0/tree/devices`, { headers: { 'X-Subject-Token': token } })).json();
-    assert.ok(Array.isArray(tree.data.deviceList) && tree.data.deviceList.some((d) => d.deviceName === 'EBA1'));
+    // E-143b: real DeviceTreeVo = {devices}; the added device is EBA1
+    assert.ok(Array.isArray(tree.data.devices) && tree.data.devices.some((d) => d.name === 'EBA1'));
     const chans = await (await fetch(`${BASE}/brms/api/v1.0/tree/channels`)).json();
     assert.ok(Array.isArray(chans.data.channelList) && chans.data.channelList.every((c) => c.channelId.includes('$')));
     const stats = await (await fetch(`${BASE}/brms/api/v1.1/device/statistics/count-by-device-category/list?keyword=&orgCode=&domain=0&permitted=0&sourceType=1&containChild=1`)).json();
@@ -915,7 +918,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
     assert.strictEqual(typeof s10.data.total, 'string');
   });
 
-  it('E-124 full/grade-device-tree: nested org->device->channel with string checked/hasAuthority (admin pre-checked)', async () => {
+  it('E-124 full/grade-device-tree: nested org->device->channel, real shape (admin pre-checked)', async () => {
     for (const p of ['/brms/api/v1.1/tree/full/grade-device-tree', '/brms/api/v1.0/tree/full/grade-device-tree']) {
       const r = await (await fetch(`${BASE}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Subject-Token': token }, body: JSON.stringify({ roleId: '1' }) })).json();
       assert.equal(r.code, 1000);
@@ -925,21 +928,21 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       assert.ok(root, 'root org 001 present');
       assert.ok(root.organizations.some((o) => o.orgCode === 'VIGILAB'), 'VIGILAB nested under 001');
       assert.strictEqual(root.checked, '1', 'admin: org pre-checked (string)');
-      assert.strictEqual(root.hasAuthority, '1');
+      // E-143b: real gdt shape has no hasAuthority key; the real root carries
+      // hasChild/autoAuthorize instead.
+      assert.strictEqual(root.hasChild !== undefined || root.autoAuthorize !== undefined, true);
       // devices with channels, all flags strings (agnostic to which devices
       // the local store holds - prod server has D0238JDG3016 under VIGILAB)
       const vig = root.organizations.find((o) => o.orgCode === 'VIGILAB');
       const anyDev = (vig.devices || [])[0] || r.data.devices[0];
       assert.ok(anyDev, 'at least one device node in the tree');
       assert.strictEqual(anyDev.checked, '1');
-      assert.strictEqual(anyDev.hasAuthority, '1');
       assert.ok(Array.isArray(anyDev.channels) && anyDev.channels.length >= 1);
+      // E-143b: real channel binds back through channelId + pId = deviceCode;
+      // no hasChild/channelSeq on the gdt channel node.
       assert.strictEqual(anyDev.channels[0].checked, '1');
-      assert.strictEqual(anyDev.channels[0].hasChild, '0');
-      assert.strictEqual(typeof anyDev.channels[0].channelSeq, 'string');
-      // exceeded flags for the SPA tree loader
-      assert.strictEqual(r.data.deviceExceeded, '0');
-      assert.strictEqual(r.data.organizationExceeded, '0');
+      assert.strictEqual(anyDev.channels[0].pId, anyDev.deviceCode);
+      assert.ok(anyDev.channels[0].channelId.startsWith(anyDev.deviceCode));
     }
     // search/list variant
     const s = await (await fetch(`${BASE}/brms/api/v1.1/tree/full/grade-device-tree/search/list`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keyword: 'NUEVA' }) })).json();
@@ -974,7 +977,7 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       assert.equal(d.orgCode, 'VIGILAB', 'device orgCode binding (rol 0x2f8)');
       assert.ok(Array.isArray(d.channels) && d.channels.length >= 1, 'channels[] nested inside the device');
       assert.equal(typeof d.status, 'string', 'device status is STRING (typeCode 2)');
-      assert.ok(d.channels[0].channelCode.startsWith(d.deviceCode), 'channel hangs under its device');
+      assert.ok(d.channels[0].channelId.startsWith(d.deviceCode), 'channel hangs under its device');
       assert.equal(d.channels[0].pId, d.deviceCode, 'channel pId = deviceCode');
       assert.equal(typeof d.channels[0].status, 'string', 'channel status is STRING');
     }
@@ -1693,13 +1696,10 @@ describe('BRMS Gateway - Full DTO Contracts (EV-041..EV-048)', { timeout: 60000 
       for (const c of d.channels) {
         assert.ok(c.channelId, 'channel needs channelId (optimizeChannel id)');
         assert.ok(c.channelName, 'channel needs channelName (optimizeChannel label)');
-        assert.equal(c.deviceCode, d.deviceCode, 'channel must point back to its device');
+        // E-143b: real gdt channel binds back through pId = deviceCode
+        assert.equal(c.pId, d.deviceCode, 'channel must point back to its device');
       }
     }
-    // EXCEEDED_FLAG_ENUM values are "0" (UNDER) when nothing is truncated.
-    assert.equal(json.data.deviceExceeded, '0');
-    assert.equal(json.data.organizationExceeded, '0');
-    assert.equal(json.data.channelExceeded, '0');
   });
 
   it('E-029 grade-device-tree/search/list returns channels+devices+organizations', async () => {

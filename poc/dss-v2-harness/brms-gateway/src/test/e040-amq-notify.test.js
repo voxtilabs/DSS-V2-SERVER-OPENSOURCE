@@ -175,18 +175,14 @@ describe('E-041 persistent org store (VIGILAB)', () => {
       const root = payload.departments.find((d) => d.code === '001');
       assert.ok(root, 'root node still present');
       // E-087: the DPSDK org-tree parser (FUN_180718860) builds the hierarchy
-      // by parentCode; isParent/deparmentsCount must mark '001' expandable so
-      // VIGILAB is reachable in the native tree.
+      // by parentCode; deparmentsCount marks '001' expandable so VIGILAB is
+      // reachable in the native tree.
       assert.equal(root.deparmentsCount, '1', "root '001' reports its VIGILAB child");
-      // E-087: isParent/hasChild are STRINGS "1"/"0" in the real VO - a JSON
-      // boolean never binds in the DPSDK string parser.
-      assert.equal(root.isParent, '1', "root '001' is expandable (string)");
-      assert.equal(root.hasChild, '1', "root '001' carries hasChild='1' (string)");
+      // E-143b: the real OrgNodeVo carries NO isParent/hasChild keys - the
+      // hierarchy comes from parentCode + deparmentsCount only.
+      assert.strictEqual(root.isParent, undefined, 'real org node has no isParent');
+      assert.strictEqual(root.hasChild, undefined, 'real org node has no hasChild');
       assert.equal(vig.deparmentsCount, '0', 'VIGILAB has no sub-orgs');
-      assert.equal(vig.isParent, '0', 'VIGILAB not expandable via sub-orgs (string)');
-      // VIGILAB owns the test device (orgCode "" -> default org), so
-      // hasChild="1": the node must be expandable to reveal the camera.
-      assert.equal(vig.hasChild, '1', "VIGILAB hasChild='1' while it owns devices (string)");
     } finally {
       DEVICE_REGISTRY.delete(code); // in-memory only, no disk write
     }

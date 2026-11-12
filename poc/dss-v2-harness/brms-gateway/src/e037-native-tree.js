@@ -227,6 +227,7 @@ import { DEVICE_REGISTRY, dssChannelCode, DSS_UNIT_TYPE_ENC } from './e025-devic
 // every persisted org (root '001' + 'VIGILAB') instead of a single hardcoded
 // root node, and devices with an empty orgCode fall under the default org.
 import { listOrgs, deviceOrgCode } from './e041-orgs.js';
+import { maskDeviceIp } from './e143-ip-mask.js';
 
 // UNIT_TYPE map of the production DSS web bundle (web-module/js/device-JBrSmGvP.js)
 export const DSS_UNIT_TYPE = {
@@ -272,86 +273,64 @@ export function dssAddType(d) {
   return d?.deviceIp ? 'ip' : '';
 }
 
-// DeviceChannelInfoVo (server package) - the channel node of the native tree
+// DeviceChannelInfoVo (server package) - the channel node of the native tree.
+// E-143b: shape replicated 1:1 from the REAL DSS server payload (200.54.10.50
+// tree/devices, device 1000199 "EBA1_LECTOR" channel "1000199$1$0$0"). The
+// server real carries exactly these keys - channelSeq is a NUMBER, many
+// fields are explicit nulls, and NO aliases (channelId/deviceCode/ptz/...)
+// exist. The harness aliases were hypotheses that never matched and the
+// filterAcceptsRow gates rejected the rows (FAR rc=0 vs rc=1 on real data).
 export function buildNativeChannelVo(device, channelSeq) {
   const seq = Math.max(0, Number(channelSeq) || 0);
   const code = dssChannelCode(device.deviceCode, seq);
   return {
     channelCode: code,
     channelName: seq === 0 ? device.deviceName : `${device.deviceName} CH${seq + 1}`,
-    channelSeq: String(seq),
+    channelSeq: seq,                  // E-143b: real payload uses a bare number
     status: str(device.online ?? device.status ?? 1),
-    sn: str(device.serialNumber || ''),
-    cameraType: '',
+    sn: '',
+    gpsX: null,
+    gpsY: null,
+    mapId: null,
+    cameraType: '1',
     channelType: '1',          // ChannelCategory.VideoChannel = "1"
-    channelSubtype: '0',
     remoteType: '0',
-    streamType: '0',
-    capability: '',
-    orgCode: str(device.orgCode || DSS_ROOT_ORG.code),
-    domainId: str(device.domainId || DSS_ROOT_ORG.domainId),
-    ipcIp: str(device.deviceIp || ''),
-    multicastIp: '',
-    multicastPort: '',
-    recordType: '0',
-    interfaceType: '',
-    alarmType: '',
-    alarmLevel: '',
-    signalType: '',
-    accessType: '',
-    posType: '',
-    posModel: '',
-    dynCode: '',
-    faceFunctions: '',
+    channelSubtype: '0',
+    cameraFunctions: '0',
+    multicastIp: null,
+    multicastPort: null,
+    ipcIp: maskDeviceIp(device),
+    recordType: null,
+    forPeopleCount: null,
+    maxSplitNum: null,
+    interfaceType: null,
+    alarmType: null,
+    alarmLevel: null,
+    signalType: null,
+    accessType: null,
+    posType: null,
+    posModel: null,
+    dynCode: null,
+    faceFunctions: '0',
     keyCode: '',
     db33Code: '',
     intelliState: '',
-    faceAnalyseType: '',
-    videoSource: '',
-    targetDetection: '',
-    maxSplitNum: '1',
-    decodeMode: '0',
-    conbineStatus: '0',
-    parentTargetSeq: '',
-    thirdPartyControl: '0',
-    fingerPrintAuth: '0',
-    cardAuth: '0',
-    faceAuth: '0',
-    palmVeinAuth: '0',
-    userIsolate: '0',
-    unlockModes: '',
+    faceAnalyseType: null,
+    videoSource: null,
+    targetDetection: '0',
+    capability: '0',
+    domainId: '',
     floorNum: '',
     floorInfos: [],
-    parkingSpaceMode: '0',
-    solarBattery: '',
-    // aliases used by the web SPA / older parsers
-    channelId: code,
-    channelNo: String(seq + 1),
-    deviceCode: device.deviceCode,
-    deviceName: device.deviceName,
-    deviceIp: device.deviceIp,
-    devicePort: device.devicePort,
-    protocolType: device.protocolType,
-    videoEncode: 'H.265',
-    audioEncode: '',
-    ptz: '0',   // E-123: string flags (E-095 strict-=== lesson)
-    audio: '1',
-    record: '0',
-    online: str(device.online ?? device.status ?? 1),
-    authority: '1',   // E-123: channel authority (empty = grey/no-permission)
-    hasAuthority: '1',
-    enable: '1',
-    checked: '0',
-    disabled: '0',
-    isParent: '0',
-    hasChild: '0',
-    id: code,
-    name: seq === 0 ? device.deviceName : `${device.deviceName} CH${seq + 1}`,
-    parentCode: device.deviceCode
+    parentTargetSeq: null,
+    streamType: '1',           // real EBA1_LECTOR channel streamType "1"
+    parkingSpaceMode: null
   };
 }
 
-// DeviceUnitInfoVo - one encoder unit holding the video channels
+// DeviceUnitInfoVo - one encoder unit holding the video channels.
+// E-143b: real shape (EBA1_LECTOR unit): streamType "801", every non-essential
+// field is an explicit null.
 export function buildNativeUnitVo(device) {
   const count = Math.max(1, Number(device.channelNum) || 1);
   const channels = [];
@@ -359,62 +338,67 @@ export function buildNativeUnitVo(device) {
   return {
     unitType: DSS_UNIT_TYPE_ENC,
     unitSeq: '0',
-    assistStream: '0',
+    assistStream: null,
     zeroChnEncode: '0',
-    ssServiceId: '',
-    ptsServiceId: '',
-    streamType: '0',
-    decodeMode: '0',
-    streamMode: '0',
-    conbineStatus: '0',
-    thirdPartyControl: '0',
-    voiceServerIp: '',
-    voiceServerPort: '',
-    voiceStatusPort: '',
-    voiceClientIp: '',
-    dynCode: '',
-    dynName: '',
-    dynType: '',
-    fingerPrintAuth: '0',
-    cardAuth: '0',
-    faceAuth: '0',
-    palmVeinAuth: '0',
-    userIsolate: '0',
-    unlockModes: '',
-    parkingStatisticsMode: '0',
+    ssServiceId: null,
+    ptsServiceId: null,
+    streamType: '801',
+    decodeMode: null,
+    streamMode: null,
+    conbineStatus: null,
+    thirdPartyControl: null,
+    voiceServerIp: null,
+    voiceServerPort: null,
+    voiceStatusPort: null,
+    voiceClientIp: null,
+    dynCode: null,
+    dynName: null,
+    dynType: null,
+    fingerPrintAuth: null,
+    cardAuth: null,
+    faceAuth: null,
+    userIsolate: null,
+    unlockModes: null,
+    parkingStatisticsMode: null,
     channels
   };
 }
 
-// DeviceInfoVo - the device node of the native tree
+// DeviceInfoVo - the device node of the native tree.
+// E-143b: shape replicated 1:1 from the REAL server payload. The real device
+// "EBA1_LECTOR" (deviceIp 192.168.0.238:8021 = our D0238JDG3016 twin) carries
+// exactly these 46 keys: type "2"/protocol "99"/manufacturer "246"/loginType
+// "9" for the EBA family, status "1"=ONLINE, offlineReason "3", modifyTime
+// null, timezone block empty, NO aliases (deviceId/online/authority/...).
 export function buildNativeDeviceInfoVo(d) {
   const units = [buildNativeUnitVo(d)];
   const orgCode = str(deviceOrgCode(d));
   const status = str(d.online ?? d.status ?? 1);
+  const isEba = str(d.deviceType || '') === '62';
   return {
-    // --- real DeviceInfoVo fields (server package) ---
+    // --- real DeviceInfoVo fields (server package, E-143b) ---
     code: str(d.deviceCode),
     name: str(d.deviceName),
     category: str(d.deviceCategory || '1'),
-    type: str(d.deviceType || '1'),
-    model: str(d.model || ''),
+    type: isEba ? '2' : '1',
+    model: '0',
     deviceModelStr: str(d.model || ''),
     status,
-    offlineReason: '',
-    protocol: str(d.protocolName || ''),
-    manufacturer: str(d.manufacturer || ''),
-    deviceIp: str(d.deviceIp || ''),
+    offlineReason: isEba ? '3' : '0',
+    protocol: isEba ? '99' : '1',
+    manufacturer: isEba ? '246' : '1',
+    deviceIp: maskDeviceIp(d),
     devicePort: str(d.devicePort || ''),
     registId: str(d.registId || ''),
     proxyIp: '',
     proxyPort: '',
     userName: '',
     password: '',
-    callNumber: '',
-    loginType: dssLoginType(d),
+    callNumber: '0',
+    loginType: isEba ? '9' : '6',
     sn: str(d.serialNumber || ''),
-    alarmRecordPosition: '',
-    capability: '',
+    alarmRecordPosition: '3',
+    capability: '0',
     orgCode,
     units,
     sipId: '',
@@ -423,53 +407,34 @@ export function buildNativeDeviceInfoVo(d) {
     unitEnable: '1',
     buildingEnable: '0',
     liftEnable: '0',
-    softwareVersion: str(d.firmwareVersion || ''),
-    hardwareVersion: str(d.hardwareId || ''),
+    softwareVersion: '',
+    hardwareVersion: '',
     domainId: str(d.domainId || DSS_ROOT_ORG.domainId),
-    modifyTime: str(d.updateTime || d.createTime || ''),
+    modifyTime: null,
     isVideoNexus: '0',
-    timezoneId: str(d.timezoneId || '1'),
-    timezoneName: str(d.timezoneName || 'UTC'),
-    timezoneOffset: str(d.timezoneOffset ?? 0),
-    timezoneDesc: str(d.timezoneDesc || ''),
+    timezoneId: '',
+    timezoneName: '',
+    timezoneOffset: '',
+    timezoneDesc: '',
     enableDst: '0',
     dstType: '0',
     dstBeginTime: { time: '', week: '0', day: '0', month: '0' },
     dstEndTime: { time: '', week: '0', day: '0', month: '0' },
-    serverCode: str(d.serverCode || ''),
-    sourceType: str(d.sourceType || ''),
-    sourceId: str(d.sourceId || ''),
-    associateId: str(d.associateId || ''),
-    authority: '1', // E-123: empty authority made the client render the node as no-permission (grey)
-    solarBattery: '',
-    // --- aliases parsed by the native client (DPSDK.dll string pool) ---
-    enableUnit: '1',
-    enableBuilding: '0',
-    enableLift: '0',
-    isParent: '1', // E-123: string flag (E-087 lesson: a JSON boolean never binds)
-    parentName: DSS_ROOT_ORG.name,
-    streamProtocol: '',
-    encrypType: '0',
-    secretKey: '',
-    accessKey: '',
-    linkMode: '0',
-    deviceId: str(d.deviceCode),
-    deviceCode: str(d.deviceCode),
-    deviceName: str(d.deviceName),
-    deviceType: str(d.deviceType || '1'),
-    deviceCategory: str(d.deviceCategory || '1'),
-    protocolType: str(d.protocolType || ''),
-    onlineStatus: status,
-    online: status, // E-139: paged tree FUN_18071dac0 reads `online` (string), not onlineStatus
-    source: str(d.source || ''),
-    addType: dssAddType(d),
-    channelNum: Math.max(1, Number(d.channelNum) || 1)
+    serverCode: '',
+    sourceType: '1',
+    sourceId: '',
+    associateId: ''
   };
 }
 
 // OrgNodeVo - the organization node of the native tree. `org` comes from the
 // persistent org store (E-041); `devices` must already be filtered to that
 // org (empty orgCode falls under the default org VIGILAB).
+// E-143b: shape replicated 1:1 from the REAL deviceOrg payload (22 orgs):
+// exactly 16 keys, modifyTime null, sourceType "1" everywhere, root 001 with
+// parentCode "" and domainId "0", child orgs domainId "". NO aliases
+// (id/orgCode/isParent/hasChild/authority/...) - the real server does not
+// send them and the DPSDK org parser builds the hierarchy by parentCode.
 export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
   const device = [];
   const channel = [];
@@ -481,42 +446,23 @@ export function buildNativeOrgNodeVo(devices, org = DSS_ROOT_ORG) {
       channel.push({ id: dssChannelCode(d.deviceCode, seq), sort: String(channel.length) });
     }
   }
-  // E-087: isParent/deparmentsCount must reflect the REAL org hierarchy
-  // (built by parentCode in the DPSDK parser FUN_180718860) or the native
-  // client renders '001' as a leaf and VIGILAB never appears in the tree.
   const childCount = listOrgs().filter((o) => o.parentCode === org.code && o.code !== org.code).length;
-  const parentOrg = listOrgs().find((o) => o.code === org.parentCode);
+  const isRoot = str(org.code) === '001';
   return {
-    // --- real OrgNodeVo fields (server package) ---
     code: org.code,
-    parentCode: org.parentCode,
+    parentCode: isRoot ? '' : org.parentCode,
     name: org.name,
     orgType: org.orgType,
-    modifyTime: new Date().toISOString(),
+    modifyTime: null,
     deparmentsCount: String(childCount),
-    domainId: org.domainId,
+    domainId: isRoot ? '0' : '',
     device,
     channel,
     sn: '',
-    sourceType: '',
+    sourceType: '1',
     sourceId: '',
     associateId: '',
-    remark: '',
-    authority: '1', // E-123: org node authority (empty = grey/no-permission in the client tree)
-    // --- aliases parsed by the native client ---
-    // E-087: the DPSDK org-node parser binds these as STRINGS ("1"/"0") -
-    // a JSON boolean never binds, so isParent/hasChild must be strings.
-    id: org.code,
-    orgCode: org.code,
-    orgName: org.name,
-    parentOrgCode: org.parentCode,
-    isParent: childCount > 0 ? '1' : '0',
-    hasChild: (childCount > 0 || devices.length > 0) ? '1' : '0',
-    parentName: parentOrg ? parentOrg.name : '',
-    sort: '0', // E-123: string (E-095 lesson)
-    roleIds: [],
-    // E-123: tree-selection flags on the org node itself
-    checked: '0', hasAuthority: '1', disabled: '0', selectable: '1'
+    remark: ''
   };
 }
 
@@ -540,48 +486,23 @@ export function filterNativeDevices(body = {}) {
 }
 
 // POST /admin/API/tree/devices  ->  DeviceTreeVo{devices:[DeviceInfoVo]}
+// E-143b: the real server answers with data:{devices:[...]} ONLY - no
+// deviceList/list/items/total aliases.
 export function buildNativeDeviceTreePayload(body = {}) {
   const devices = filterNativeDevices(body).map(buildNativeDeviceInfoVo);
-  return {
-    // real contract
-    devices,
-    // aliases for the web SPA (reads deviceList) and old parsers
-    deviceList: devices,
-    list: devices,
-    items: devices,
-    orgCode: String(body.orgCode || ''),
-    containVirtualDevice: String(body.containVirtualDevice || '1'),
-    total: devices.length,
-    totalCount: devices.length
-  };
+  return { devices };
 }
 
 // GET /admin/API/tree/deviceOrg  ->  DeviceOrgTreeVo{departments:[OrgNodeVo]}
 // E-041: one OrgNodeVo per PERSISTED org (root '001' + 'VIGILAB' + any org the
 // operator adds); each node carries only the devices whose orgCode is that
 // org (empty orgCode -> default org VIGILAB).
+// E-143b: real answer is data:{departments:[...]} ONLY.
 export function buildNativeOrgTreePayload() {
   const devices = registryDevices();
   const departments = listOrgs().map((o) =>
     buildNativeOrgNodeVo(devices.filter((d) => deviceOrgCode(d) === o.code), o));
-  const deviceList = devices.map(buildNativeDeviceInfoVo);
-  const channelList = [];
-  for (const d of devices) {
-    const unit = buildNativeUnitVo(d);
-    for (const ch of unit.channels) channelList.push(ch);
-  }
-  return {
-    // real contract
-    departments,
-    // aliases for the web SPA / old parsers
-    orgList: departments,
-    deviceList,
-    channelList,
-    orgCode: DSS_ROOT_ORG.code,
-    containVirtualDevice: '1',
-    total: deviceList.length,
-    totalCount: deviceList.length
-  };
+  return { departments };
 }
 
 // Resource.Device.GetDeviceAllOrg -> {departments, orgType, subOrgCount, hasData}

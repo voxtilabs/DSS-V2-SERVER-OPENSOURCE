@@ -146,6 +146,8 @@ import {
   buildPagedDevicesPayload,
   buildPagedChannelsPayload
 } from './e139-paged-tree.js';
+// E-143a: tree payloads never leak the camera's internal IP
+import { maskDeviceIp } from './e143-ip-mask.js';
 loadViewsFromDisk();
 // E-120: Monitoring Center opens populated (VIGILAB dir + operator camera view)
 try {
@@ -2402,14 +2404,15 @@ app.post('/omms/api/v1.1/alert/rule/alert-type/list', async () => envelope(build
 // with online string / parentId / nodeType / hasChild) that FUN_18071dac0 parses.
 app.get('/brms/api/v1.0/tree/orgs', async () => {
   const paged = buildPagedOrgsPayload();
-  return envelope({ ...buildNativeOrgTreePayload(), totalCount: paged.totalCount, results: paged.results });
+  const base = buildNativeOrgTreePayload();
+  return envelope({ ...base, orgList: base.departments, totalCount: paged.totalCount, results: paged.results });
 });
 app.get('/brms/api/v1.0/tree/devices', async () => {
   const paged = buildPagedDevicesPayload({});
-  return envelope({ ...buildNativeDeviceTreePayload({}), totalCount: paged.totalCount, results: paged.results });
+  return envelope({ ...buildNativeDeviceTreePayload({}), deviceList: paged.results, list: paged.results, items: paged.results, total: paged.totalCount, totalCount: paged.totalCount, results: paged.results });
 });
 app.get('/brms/api/v1.0/tree/channels', async () => {
-  const channelList = allChannels();
+  const channelList = allChannels().map((c) => ({ ...c, deviceIp: maskDeviceIp(c) }));
   const paged = buildPagedChannelsPayload();
   return envelope({ channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results });
 });
@@ -2805,15 +2808,17 @@ app.get('/brms/api/v1.0/license', { preHandler: auth }, async () => envelope({
 // E-037: they now answer with the REAL native contract (departments/devices).
 app.post('/brms/api/v1.0/tree/orgs', { preHandler: auth }, async () => {
   const paged = buildPagedOrgsPayload();
-  return envelope({ ...buildNativeOrgTreePayload(), totalCount: paged.totalCount, results: paged.results });
+  const base = buildNativeOrgTreePayload();
+  return envelope({ ...base, orgList: base.departments, totalCount: paged.totalCount, results: paged.results });
 });
 app.post('/brms/api/v1.0/tree/devices', { preHandler: auth }, async (req) => {
   const body = req.body || {};
   const paged = buildPagedDevicesPayload(body);
-  return envelope({ ...buildNativeDeviceTreePayload(body), totalCount: paged.totalCount, results: paged.results });
+  return envelope({ ...buildNativeDeviceTreePayload(body), deviceList: paged.results, list: paged.results, items: paged.results, total: paged.totalCount, totalCount: paged.totalCount, results: paged.results });
 });
 app.post('/brms/api/v1.0/tree/channels', { preHandler: auth }, async () => {
-  const channelList = allChannels();
+  // E-143a: the channelList alias of this tree endpoint is masked too
+  const channelList = allChannels().map((c) => ({ ...c, deviceIp: maskDeviceIp(c) }));
   const paged = buildPagedChannelsPayload();
   return envelope({ channelList, list: channelList, total: channelList.length, totalCount: paged.totalCount, results: paged.results });
 });

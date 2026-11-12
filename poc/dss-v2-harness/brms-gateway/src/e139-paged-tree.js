@@ -23,6 +23,7 @@
 import { DEVICE_REGISTRY, dssChannelCode } from './e025-devices.js';
 import { listOrgs, deviceOrgCode } from './e041-orgs.js';
 import { filterNativeDevices, DSS_ROOT_ORG } from './e037-native-tree.js';
+import { maskDeviceIp } from './e143-ip-mask.js';
 
 const str = (v) => (v === null || v === undefined ? '' : String(v));
 
@@ -84,7 +85,7 @@ export function pagedDeviceResult(d) {
     deviceCode: str(d.deviceCode), deviceName: str(d.deviceName), deviceId: str(d.deviceCode),
     orgCode, parentCode: orgCode, status, onlineStatus: status,
     deviceType: str(d.deviceType || '1'), deviceCategory: str(d.deviceCategory || '1'),
-    deviceIp: str(d.deviceIp || ''), devicePort: str(d.devicePort || ''),
+    deviceIp: maskDeviceIp(d), devicePort: str(d.devicePort || ''),
     protocolType: str(d.protocolType || ''), sn: str(d.serialNumber || ''),
     serverCode: str(d.serverCode || ''), addType: str(d.source || ''),
     checked: '0', hasAuthority: '1', authority: '1', hasChild: '1',

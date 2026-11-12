@@ -30,29 +30,34 @@
 //                  checked, hasAuthority, hasChild: '0', isParent: '0', status }
 import { DEVICE_REGISTRY, allChannels, dssChannelCode } from './e025-devices.js';
 import { listOrgs, deviceOrgCode } from './e041-orgs.js';
+import { maskDeviceIp } from './e143-ip-mask.js';
 
 const str = (v) => String(v ?? '');
 
 function channelNode(device, seq) {
   const code = dssChannelCode(device.deviceCode, seq);
   const name = seq === 0 ? device.deviceName : `${device.deviceName} CH${seq + 1}`;
+  // E-143b: real shape (gdt child real, channel "1000013$1$0$0") - 19 keys,
+  // channelId (NOT channelCode), pId = deviceCode, checked string.
   return {
-    channelCode: code, channelId: code, id: code, code,
-    channelName: name, name,
-    // E-126: pId is the parent binding the native tree renderer uses
-    // (channel.pId -> deviceCode); without it devices render orphaned.
+    channelId: code,
     pId: device.deviceCode,
-    deviceCode: device.deviceCode, orgCode: deviceOrgCode(device),
-    checked: '1', hasAuthority: '1', hasPermission: '1', authority: '1',
-    hasChild: '0', isParent: '0', disabled: '0', selectable: '1',
-    status: str(device.online ?? device.status ?? 1), channelSeq: String(seq),
-    parentCode: device.deviceCode, sort: String(seq),
-    // E-126: remaining native descriptor keys (FUN_1806d33a0 pool)
-    channelType: '1', channelSubtype: '0', streamType: '0', unitType: '1',
-    cameraType: '1', capability: '', deviceCapability: '1',
-    sourceType: str(device.sourceType || ''), associateId: '', sourceId: '',
-    autoAuthorize: '1', deviceIp: str(device.deviceIp || ''), deviceModel: str(device.model || ''),
-    protocolType: str(device.protocolType || '')
+    channelName: name,
+    unitType: '1',
+    channelType: '1',
+    channelSubtype: '0',
+    channelRemoteType: '0',
+    cameraType: '1',
+    checked: '1',
+    orgCode: deviceOrgCode(device),
+    deviceType: '1',
+    deviceCategory: '1',
+    deviceCapability: '1024',
+    capability: '0',
+    status: str(device.online ?? device.status ?? 1),
+    domainId: '',
+    inputAlarmType: '',
+    streamType: '1'
   };
 }
 
@@ -60,26 +65,28 @@ function deviceNode(device, adminChecked) {
   const count = Math.max(1, Number(device.channelNum) || 1);
   const channels = [];
   for (let s = 0; s < count; s++) channels.push(channelNode(device, s));
-  const checked = adminChecked ? '1' : '0';
+  // E-143b: real shape (gdt device "1000013" ABU) - 19 keys.
   return {
-    deviceCode: device.deviceCode, deviceId: device.deviceCode,
-    code: device.deviceCode, id: device.deviceCode,
-    deviceName: device.deviceName, name: device.deviceName,
-    // E-126: pId = owning org (device.pId -> orgCode binding)
+    deviceCode: device.deviceCode,
     pId: deviceOrgCode(device),
-    orgCode: deviceOrgCode(device), parentCode: deviceOrgCode(device),
-    checked, hasAuthority: '1', hasPermission: '1', authority: '1',
-    hasChild: channels.length ? '1' : '0', isParent: channels.length ? '1' : '0',
-    disabled: '0', selectable: '1',
+    deviceName: device.deviceName,
+    checked: adminChecked ? '1' : '0',
+    deviceCategory: '1',
+    deviceType: '1',
+    channels,
+    orgCode: deviceOrgCode(device),
     status: str(device.online ?? device.status ?? 1),
-    deviceType: str(device.deviceType || '1'), deviceCategory: str(device.deviceCategory || '1'),
-    deviceCapability: '1', sort: '0',
-    // E-126: remaining native descriptor keys
-    deviceIp: str(device.deviceIp || ''), devicePort: str(device.devicePort || ''),
-    deviceModel: str(device.model || ''), capability: '', unitType: '1',
-    sourceType: str(device.sourceType || ''), associateId: '', sourceId: '',
-    autoAuthorize: '1', protocolType: str(device.protocolType || ''),
-    channels, channel: channels, channelList: channels
+    domainId: '',
+    deviceModel: str(device.model || ''),
+    softwareVersion: '',
+    deviceIp: maskDeviceIp(device),
+    addType: '4',
+    capability: '1024',
+    sourceType: '1',
+    sourceId: null,
+    associateId: '',
+    protocolType: '1',
+    unlockModes: null
   };
 }
 
@@ -95,32 +102,25 @@ function orgNode(org, scopedDevices, allDevices, adminChecked, scopeCode) {
   const ownAll = allDevices.filter((d) => deviceOrgCode(d) === org.code);
   const own = scopedDevices.filter((d) => deviceOrgCode(d) === org.code);
   const devNodes = own.map((d) => deviceNode(d, adminChecked));
-  const checked = adminChecked ? '1' : '0';
-  const node = {
-    orgCode: org.code, code: org.code, id: org.code,
-    orgName: org.name, name: org.name,
-    // E-126: pId = parent org (the native tree binds node.pId -> parent)
+  // E-143b: real shape (gdt org "001001" Patronato) - 9 keys ONLY:
+  // {orgCode, pId, orgName, checked, domainId, sourceType, sourceId,
+  //  associateId, hasChild, autoAuthorize}. The real hasChild reflects the
+  // full (unscoped) children so the expander arrow still renders in lazy mode.
+  const isRoot = str(org.code) === '001';
+  return {
+    orgCode: org.code,
     pId: org.parentCode,
-    parentCode: org.parentCode, parentName: (listOrgs().find((o) => o.code === org.parentCode) || {}).name || '',
-    orgType: str(org.orgType || '1'), domainId: str(org.domainId || '0'),
-    isParent: realChildren.length ? '1' : '0',
-    // hasChild is computed against ALL devices/org children (not only the
-    // scoped ones) so the expander arrow still shows in lazy mode; the
-    // parser discards it anyway (client-side rol 0x2ff is written after load)
+    orgName: org.name,
+    checked: adminChecked ? '1' : '0',
+    domainId: isRoot ? '0' : '',
+    sourceType: '1',
+    sourceId: null,
+    associateId: '',
     hasChild: (realChildren.length || ownAll.length) ? '1' : '0',
-    checked, hasAuthority: '1', hasPermission: '1', authority: '1',
-    disabled: '0', selectable: '1',
-    deparmentsCount: String(children.length), deviceCount: String(devNodes.length),
-    sort: '0',
-    // E-126: remaining native descriptor keys
-    sourceType: '', associateId: '', sourceId: '', autoAuthorize: '1',
-    capability: '', deviceCapability: '1',
+    autoAuthorize: '1',
     organizations: children.map((c) => orgNode(c, scopedDevices, allDevices, adminChecked, scopeCode)),
-    devices: devNodes, device: devNodes.map((d) => ({ id: d.deviceCode, sort: '0' })),
-    deviceList: devNodes, deivceNodes: devNodes, // SDK typo key kept (0xcd9348)
-    channel: devNodes.flatMap((d) => d.channels.map((c) => ({ id: c.channelCode, sort: c.channelSeq })))
+    devices: devNodes
   };
-  return node;
 }
 
 export function buildFullGradeDeviceTreePayload(query = {}) {
@@ -163,29 +163,24 @@ export function buildFullGradeDeviceTreePayload(query = {}) {
     const count = Math.max(1, Number(d.channelNum) || 1);
     for (let s = 0; s < count; s++) flatChannels.push(channelNode(d, s));
   }
+  // E-143b: real shape (gdt root real "001") - data carries EXACTLY these 11
+  // keys: {orgCode, orgName, checked, domainId, autoAuthorize, sourceType,
+  // sourceId, associateId, organizations, devices, channels}. Every harness
+  // alias (orgList/departments/deivceNodes/roleType/hasData/*Exceeded/total)
+  // was a hypothesis the real server never sends.
+  const rootOrg = orgs.find((o) => o.code === '001') || orgs[0] || { code: '001', name: 'Current Site' };
   return {
+    orgCode: scopeCode || str(rootOrg.code),
+    orgName: scopeCode ? (orgs.find((o) => o.code === scopeCode) || {}).name || '' : str(rootOrg.name),
+    checked: '1',
+    domainId: scopeCode ? '' : '0',
+    autoAuthorize: '1',
+    sourceType: '1',
+    sourceId: null,
+    associateId: null,
     organizations,
-    orgList: organizations,
-    departments: organizations,
     devices: flatDevices,
-    deviceList: flatDevices,
-    deivceNodes: flatDevices,
-    channels: flatChannels,
-    channelList: flatChannels,
-    list: organizations,
-    items: organizations,
-    results: organizations,
-    roleType: adminChecked ? '1' : '2',
-    hasData: '1',
-    orgCode: scopeCode,
-    scopeOrgCode: scopeCode,
-    // EXCEEDED_FLAG_ENUM values ("0" = UNDER, nothing truncated) - the SPA
-    // BatchLoadingTree.load asserts them on the grade-device-tree payload
-    deviceExceeded: '0',
-    organizationExceeded: '0',
-    channelExceeded: '0',
-    total: String(organizations.length),
-    totalCount: String(organizations.length)
+    channels: flatChannels
   };
 }
 
@@ -198,12 +193,10 @@ export function buildFullGradeDeviceTreeSearchPayload(query = {}) {
   const hitDev = full.devices.filter((d) =>
     d.deviceCode.toLowerCase().includes(kw) || d.deviceName.toLowerCase().includes(kw));
   const hitCh = full.channels.filter((c) =>
-    c.channelCode.toLowerCase().includes(kw) || c.channelName.toLowerCase().includes(kw));
+    c.channelId.toLowerCase().includes(kw) || c.channelName.toLowerCase().includes(kw));
   return {
     ...full,
-    devices: hitDev, deviceList: hitDev, deivceNodes: hitDev,
-    channels: hitCh, channelList: hitCh,
-    list: hitDev, items: hitDev, results: hitDev,
-    total: String(hitDev.length), totalCount: String(hitDev.length)
+    devices: hitDev,
+    channels: hitCh
   };
 }
