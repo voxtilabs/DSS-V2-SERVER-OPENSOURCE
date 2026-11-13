@@ -2069,6 +2069,9 @@ export function registerArsDevice(deviceInfo) {
     if (deviceInfo.username) existing.username = deviceInfo.username;
     if (deviceInfo.password) existing.password = deviceInfo.password;
     existing.manufacturer = existing.manufacturer || 'Dahua';
+    // E-189: el serial real del equipo queda registrado aunque la fila se
+    // identifique por el Device ID que definio el operador.
+    if (deviceInfo.serialNo) existing.serialNumber = String(deviceInfo.serialNo);
     existing.registerFromIp = source || existing.registerFromIp || '';
     existing.lastSeenAt = Date.now();
     existing.online = '1';
@@ -2107,6 +2110,7 @@ export function registerArsDevice(deviceInfo) {
   // E-186: '1' por defecto es un placeholder hasta que el equipo reporte su
   // ChannelNum real en el REGISTER.
   record.channelCountSource = Number(deviceInfo.channelCount) > 0 ? 'device' : 'placeholder';
+  if (deviceInfo.serialNo) record.serialNumber = String(deviceInfo.serialNo);
   // E-174: pending authorization until the operator adds it in "Auto Register".
   // E-177: only for a NEW record - a DVR that re-registers after a reboot must
   // not lose the authorization the operator already granted.

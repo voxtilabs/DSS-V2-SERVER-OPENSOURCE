@@ -47,6 +47,10 @@ const register = {
   DeviceClass: 'IPC',
   UserName: 'admin',
   Password: 'admin123',
+  // E-189: el web UI del equipo ("Device ID / Sub-Device ID") puede viajar
+  // aparte del serial; con esto se prueba que la fila se identifique por el ID
+  // que definio el operador en el alta.
+  ...(process.argv[6] ? { SubDeviceID: process.argv[6] } : {}),
   ExtraFormat: [null, null, null],
   MainFormat: [null, null, null],
   SnapFormat: [null, null, null]

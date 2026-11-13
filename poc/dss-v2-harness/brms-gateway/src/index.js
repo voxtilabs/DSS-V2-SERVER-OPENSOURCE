@@ -4115,7 +4115,13 @@ function createARSTCPServer(portArg) {
           const looksRegister = !!(info && (info.deviceId || info.serialNo || info.machineAddress))
             || /register/i.test(jmethod);
           if (looksRegister) {
-            const deviceId = info.deviceId || info.serialNo || ('NVR-' + Date.now());
+            // E-189: el equipo puede mandar el ID que definio el operador en
+            // "Device ID / Sub-Device ID" aparte del serial. Ese es el ID del
+            // alta en el cliente DSS, asi que manda para la fila del catalogo.
+            const subIdRaw = String(info.subDeviceId || '').trim();
+            const subId = (!subIdRaw || /^(none|0|-1)$/i.test(subIdRaw)) ? '' : subIdRaw;
+            const serialId = info.deviceId || info.serialNo || '';
+            const deviceId = subId || serialId || ('NVR-' + Date.now());
             session.sequence = frame.sequence;
             session.deviceId = deviceId;
             session.authenticated = true;
@@ -4135,7 +4141,7 @@ function createARSTCPServer(portArg) {
                 deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
                 ip: info.ip, port: info.port, username: info.username, password: info.password,
                 deviceType: info.deviceType, channelCount: info.channelCount, protocol: 'Dahua',
-                model: info.model, registerFromIp: socket.remoteAddress
+                model: info.model, serialNo: info.serialNo || serialId, registerFromIp: socket.remoteAddress
               });
               // E-186: el equipo confirma sus canales en el REGISTER; si el
               // conteo cambio respecto del placeholder, el cliente tiene que

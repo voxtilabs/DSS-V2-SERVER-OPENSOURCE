@@ -98,6 +98,14 @@ export function parseRegisterJson(jsonBuf) {
   return {
     deviceId: pick(flat, ['DeviceID', 'deviceId', 'SerialNo', 'sn', 'MachineName'], ''),
     serialNo: pick(flat, ['SerialNo', 'sn', 'DeviceID'], ''),
+    // E-189: el web UI del equipo llama "Device ID" / "Sub-Device ID" al
+    // identificador que define el operador en Network > Access Platform >
+    // Auto Registration. Si viaja aparte del serial, es el ID con el que debe
+    // quedar la fila (el que se escribe en el alta del cliente DSS).
+    subDeviceId: pick(flat, [
+      'SubDeviceID', 'SubDeviceId', 'SubDevID', 'SubDevId', 'SubDevice',
+      'RegisterID', 'RegisterId', 'registerId', 'DeviceId'
+    ], ''),
     deviceName: pick(flat, ['MachineName', 'DeviceName', 'deviceName', 'DeviceID'], ''),
     deviceType: pick(flat, ['DeviceType', 'deviceType'], '2'),
     deviceClass: pick(flat, ['DeviceClass', 'deviceClass'], ''),
