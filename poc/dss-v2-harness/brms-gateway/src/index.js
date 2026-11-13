@@ -106,7 +106,7 @@ import {
   FALLBACK_ROUTES
 } from './e026-video.js';
 // E-034: every registered device owns its own MediaMTX RTSP path.
-import { ensureDeviceStream, findDeviceByChannelId, buildDeviceModifyBatchPayload, setDeviceNotifier } from './e025-devices.js';
+import { ensureDeviceStream, findDeviceByChannelId, buildDeviceModifyBatchPayload, setDeviceNotifier, findDeviceByRegisterId } from './e025-devices.js';
 // E-033: real monitor/view contract (saved layouts) extracted from the
 // original DSS Server V8.008 package (ViewController / ViewTreeVo / ...).
 import {
@@ -1961,7 +1961,7 @@ const addDeviceHandler = async (req) => {
     // fila existe, para no renombrar un ID que empiece legit. con "ARS-".
     const strippedId = registerId.replace(/^ARS-/i, '');
     if (strippedId && strippedId !== registerId
-      && (DEVICE_REGISTRY.has('ARS-' + strippedId) || ARS_DEVICES.has(strippedId))) {
+      && (DEVICE_REGISTRY.has('ARS-' + strippedId) || DEVICE_REGISTRY.has(strippedId) || ARS_DEVICES.has(strippedId))) {
       registerId = strippedId;
     }
     if (!registerId) {
@@ -1983,7 +1983,7 @@ const addDeviceHandler = async (req) => {
     // E-190: la clave vigente vive en el registro persistido, no en la sesion
     // ARS (que se vacia en cada reinicio) - leerla de ahi hacia que el eco del
     // digest pisara la clave en claro despues de cualquier restart.
-    const storedPass = String(DEVICE_REGISTRY.get('ARS-' + registerId)?.password || arsRec?.password || '');
+    const storedPass = String(findDeviceByRegisterId(registerId)?.password || arsRec?.password || '');
     let chosenPass = storedPass;
     if (bodyPass) {
       chosenPass = (isDigest(bodyPass) && storedPass && !isDigest(storedPass)) ? storedPass : bodyPass;
@@ -3927,7 +3927,7 @@ function markArsLiveness(rawId, online, remote) {
   if (!id) return;
   if (online) ARS_LIVE.set(id, { lastSeen: Date.now(), remote: remote || '' });
   else ARS_LIVE.delete(id);
-  const rec = DEVICE_REGISTRY.get('ARS-' + id);
+  const rec = findDeviceByRegisterId(id);
   if (!rec) return;
   const isOn = String(rec.online) === '1';
   if (online) {
@@ -3970,9 +3970,10 @@ app.post('/brms/api/v1.0/ars/register', async (req, reply) => {
     return envelope({ success: true, deviceId: existing.deviceId, message: 'Device already registered, updated', registered: true });
   }
   
-  const internalDeviceCode = deviceId.startsWith('ARS-') ? deviceId : 'ARS-' + deviceId;
+  // E-191: el codigo publico del equipo es el Register ID pelado.
+  const internalDeviceCode = deviceId.replace(/^ARS-/, '');
   const deviceInfo = {
-    deviceId: internalDeviceCode, originalId: deviceId, deviceName: deviceName || `AutoReg Device ${deviceId}`,
+    deviceId: internalDeviceCode, originalId: internalDeviceCode, deviceName: deviceName || `AutoReg Device ${deviceId}`,
     ip, port: port || 37777, username: username || 'admin', password: password || 'admin123',
     deviceType: deviceType || 2, channelNum: channelNum || 1, protocol: protocol || 'Dahua',
     status: 1, registeredAt: Date.now(), lastSeen: Date.now(), ...rest
@@ -4151,7 +4152,7 @@ function createARSTCPServer(portArg) {
             session.authenticated = true;
             session.framing = frame.magic;
             ARS_DEVICES.set(deviceId, {
-              deviceId: 'ARS-' + deviceId, originalId: deviceId, serialNo: info.serialNo,
+              deviceId: deviceId, originalId: deviceId, serialNo: info.serialNo,
               deviceName: info.deviceName || ('NVR ' + deviceId), ip: info.ip,
               port: info.port, username: info.username, password: info.password,
               deviceType: info.deviceType, channelNum: info.channelCount,
@@ -4160,7 +4161,7 @@ function createARSTCPServer(portArg) {
               registerFromIp: socket.remoteAddress
             });
             try {
-              const prevChans = Number(DEVICE_REGISTRY.get('ARS-' + deviceId)?.channelNum || 0);
+              const prevChans = Number(findDeviceByRegisterId(deviceId)?.channelNum || 0);
               const registered = registerArsDevice({
                 deviceId: deviceId, deviceName: info.deviceName || ('NVR ' + deviceId),
                 ip: info.ip, port: info.port, username: info.username, password: info.password,
@@ -4181,7 +4182,7 @@ function createARSTCPServer(portArg) {
               }
               scheduleStreamProvisioning(registered, { notify: true });
             } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
-            try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: 'ARS-' + deviceId }); } catch { /* best effort */ }
+            try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: deviceId }); } catch { /* best effort */ }
             markArsLiveness(deviceId, true, socket.remoteAddress);
             socket.write(buildDahuaAck(frame.magic, frame.command || 0x0005, frame.sequence, buildRegisterAckJson(deviceId, PUBLIC_HOST, ARS_PORT)));
             return;
@@ -4237,10 +4238,10 @@ function createARSTCPServer(portArg) {
             session.deviceId = deviceInfo.deviceId;
             session.authenticated = true;
 
-            // Register device in ARS_DEVICES
-            const internalDeviceCode = 'ARS-' + deviceInfo.deviceId;
+            // Register device in ARS_DEVICES (E-191: codigo = Register ID pelado)
+            const internalDeviceCode = String(deviceInfo.deviceId || '').replace(/^ARS-/, '');
             ARS_DEVICES.set(deviceInfo.deviceId, {
-              deviceId: 'ARS-' + deviceInfo.deviceId,
+              deviceId: internalDeviceCode,
               originalId: deviceInfo.deviceId,
               deviceName: deviceInfo.deviceName,
               ip: deviceInfo.ip,

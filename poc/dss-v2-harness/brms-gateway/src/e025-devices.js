@@ -102,6 +102,16 @@ export function loadDevicesFromDisk() {
     const arr = JSON.parse(raw);
     if (Array.isArray(arr)) {
       for (const rec of arr) {
+        // E-191: 'ARS-' era un prefijo interno y el cliente lo mostraba como
+        // Device ID (ARS-202611122200). El DSS real muestra el Register ID
+        // pelado, que es el valor escrito en el equipo: se migra al cargar.
+        if (rec && String(rec.source || '') === 'auto-register') {
+          // El prefijo pudo quedar en el codigo, en el id o en ambos segun la
+          // version que escribio la fila: se limpia en los tres.
+          for (const k of ['deviceCode', 'deviceId', 'id']) {
+            if (typeof rec[k] === 'string' && rec[k].startsWith('ARS-')) rec[k] = rec[k].slice(4);
+          }
+        }
         DEVICE_REGISTRY.set(rec.deviceCode, rec);
       }
       if (arr.length) deviceSeq = arr.length;
@@ -152,7 +162,10 @@ export function loadDeviceCredentials() {
     const creds = JSON.parse(raw);
     let n = 0;
     for (const [code, c] of Object.entries(creds || {})) {
-      const rec = DEVICE_REGISTRY.get(code);
+      // E-191: acepta la clave con y sin el viejo prefijo ARS-.
+      const rec = DEVICE_REGISTRY.get(code)
+        || DEVICE_REGISTRY.get(code.replace(/^ARS-/, ''))
+        || DEVICE_REGISTRY.get('ARS-' + code);
       if (!rec) continue;
       if (c && c.username) rec.username = c.username;
       if (c && c.password) rec.password = c.password;
@@ -160,6 +173,18 @@ export function loadDeviceCredentials() {
     }
     if (n) console.log(`[E-185][CREDS] restored ${n} device credential(s)`);
   } catch { /* sin credenciales guardadas todavia */ }
+}
+
+// E-191: resolucion tolerante del codigo de un equipo auto-registrado, para que
+// las filas viejas (codigo con prefijo ARS-) y las nuevas (Register ID pelado)
+// se encuentren sin importar cual de las dos formas llegue.
+export function findDeviceByRegisterId(id) {
+  const key = String(id || '').trim();
+  if (!key) return null;
+  return DEVICE_REGISTRY.get(key)
+    || DEVICE_REGISTRY.get('ARS-' + key)
+    || DEVICE_REGISTRY.get(key.replace(/^ARS-/, ''))
+    || null;
 }
 
 export function persistDevice(record) {
@@ -2033,7 +2058,9 @@ function isPrivateIp(ip) {
 }
 
 export function registerArsDevice(deviceInfo) {
-  const code = 'ARS-' + String(deviceInfo.deviceId || '');
+  // E-191: el codigo del equipo es el Register ID pelado, igual que en el DSS
+  // real (antes se prefijaba con ARS-, que el cliente mostraba como Device ID).
+  const code = String(deviceInfo.deviceId || '').replace(/^ARS-/, '');
   // E-184: a NAT'd device reports its LAN address, which this server cannot
   // reach. When the register came from a public source address, that address is
   // the one the operator will port-forward, so it wins over a private literal.
