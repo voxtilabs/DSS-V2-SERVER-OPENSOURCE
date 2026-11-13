@@ -1985,6 +1985,9 @@ const addDeviceHandler = async (req) => {
     // E-186: si el equipo nunca se registro, el conteo que escribio el
     // operador es un placeholder; el REGISTER del equipo lo reemplaza.
     if (!arsRec) rec.channelCountSource = 'placeholder';
+    // E-187: el cliente NO manda la clave en claro - manda un digest de 32 hex.
+    // Se marca para que nadie intente usarla como password de login directo.
+    if (/^[0-9a-f]{32}$/i.test(String(rec.password || ''))) rec.passwordEncrypted = '1';
     if (!resolvedIp) {
       // Registered by the operator but never dialled 9500 (or offline): the row
       // must exist and read as OFFLINE in every field the client matches on.

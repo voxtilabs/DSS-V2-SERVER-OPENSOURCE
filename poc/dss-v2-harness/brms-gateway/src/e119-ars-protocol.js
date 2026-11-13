@@ -104,8 +104,11 @@ export function parseRegisterJson(jsonBuf) {
     machineAddress: pick(flat, ['MachineAddress', 'machineAddress', 'IPAddress', 'ip'], ''),
     ip: pick(flat, ['IPAddress', 'ip', 'MachineAddress'], ''),
     port: pick(flat, ['Port', 'port', 'MediaPort'], '37777'),
-    username: pick(flat, ['UserName', 'username'], 'admin'),
-    password: pick(flat, ['Password', 'password'], 'admin123'),
+    // E-187: sin defaults. El parser devolvia 'admin'/'admin123' cuando el
+    // payload no traia credenciales, y registerArsDevice sobrescribia con eso
+    // las credenciales que el operador cargo en el dialogo de Auto Register.
+    username: pick(flat, ['UserName', 'username'], ''),
+    password: pick(flat, ['Password', 'password'], ''),
     // E-186: el REGISTER trae el conteo real de canales (ChannelNum). Se leen
     // todas las variantes conocidas y se devuelve '' cuando no viene: antes el
     // default '1' era indistinguible del placeholder que escribe el operador,
