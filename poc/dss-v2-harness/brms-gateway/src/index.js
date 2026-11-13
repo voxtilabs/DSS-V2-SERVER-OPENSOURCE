@@ -1955,7 +1955,15 @@ const addDeviceHandler = async (req) => {
   // the device has not dialled 9500 yet: it must show up in the catalog
   // (offline), never be silently dropped.
   if (String(body.addType) === '4' || (body.registerId && !body.deviceIp)) {
-    const registerId = String(body.registerId || body.deviceSn || '').trim();
+    let registerId = String(body.registerId || body.deviceSn || '').trim();
+    // E-190: el alta viaja con el Register ID pelado; si llega con el prefijo
+    // interno (ARS-XXX) se normaliza al valor del equipo, pero solo cuando esa
+    // fila existe, para no renombrar un ID que empiece legit. con "ARS-".
+    const strippedId = registerId.replace(/^ARS-/i, '');
+    if (strippedId && strippedId !== registerId
+      && (DEVICE_REGISTRY.has('ARS-' + strippedId) || ARS_DEVICES.has(strippedId))) {
+      registerId = strippedId;
+    }
     if (!registerId) {
       return envelope({ success: false, errorCode: 1002, errorMsg: 'registerId is required', results: [] }, 1000, 'registerId is required');
     }
@@ -1965,6 +1973,21 @@ const addDeviceHandler = async (req) => {
     const resolvedIp = arsRec?.ip || String(body.deviceIp || '');
     const resolvedPort = arsRec?.port || String(body.devicePort || '37777');
     const channelCount = String(body.encoderChannelCount || arsRec?.channelNum || '1');
+    // E-190: en una EDICION del device (mismo Register ID) el valor que manda
+    // el cliente tiene que ganar; antes arsRec.password se imponia siempre y la
+    // clave nueva se descartaba en silencio. Excepcion: el cliente reenvia el
+    // mismo digest de 32 hex que ya estaba guardado, y ese eco no debe pisar
+    // una clave en claro reportada por el equipo en su REGISTER.
+    const isDigest = (v) => /^[0-9a-f]{32}$/i.test(String(v || ''));
+    const bodyPass = String(body.loginPass || body.password || body.loginPwd || body.devicePassword || body.pwd || '');
+    // E-190: la clave vigente vive en el registro persistido, no en la sesion
+    // ARS (que se vacia en cada reinicio) - leerla de ahi hacia que el eco del
+    // digest pisara la clave en claro despues de cualquier restart.
+    const storedPass = String(DEVICE_REGISTRY.get('ARS-' + registerId)?.password || arsRec?.password || '');
+    let chosenPass = storedPass;
+    if (bodyPass) {
+      chosenPass = (isDigest(bodyPass) && storedPass && !isDigest(storedPass)) ? storedPass : bodyPass;
+    }
     const rec = registerArsDevice({
       deviceId: registerId,
       deviceName: String(body.deviceName || arsRec?.deviceName || registerId),
@@ -1973,7 +1996,7 @@ const addDeviceHandler = async (req) => {
       // E-185: el cliente no siempre manda el mismo nombre de campo para las
       // credenciales del equipo; se aceptan las variantes conocidas.
       username: String(body.loginName || body.userName || body.username || arsRec?.username || 'admin'),
-      password: arsRec?.password || String(body.loginPass || body.password || body.loginPwd || body.devicePassword || body.pwd || ''),
+      password: chosenPass,
       deviceType: String(body.deviceType || '2'),
       channelCount,
       protocol: 'Dahua',
@@ -1987,7 +2010,8 @@ const addDeviceHandler = async (req) => {
     if (!arsRec) rec.channelCountSource = 'placeholder';
     // E-187: el cliente NO manda la clave en claro - manda un digest de 32 hex.
     // Se marca para que nadie intente usarla como password de login directo.
-    if (/^[0-9a-f]{32}$/i.test(String(rec.password || ''))) rec.passwordEncrypted = '1';
+    if (isDigest(rec.password)) rec.passwordEncrypted = '1';
+    else delete rec.passwordEncrypted;
     if (!resolvedIp) {
       // Registered by the operator but never dialled 9500 (or offline): the row
       // must exist and read as OFFLINE in every field the client matches on.
