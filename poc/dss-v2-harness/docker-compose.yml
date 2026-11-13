@@ -13,6 +13,8 @@ services:
       - "5080:5080"    # E-130: SIP TCP (DPSDK 'tcp start server' 0xc56d30)
       - "5061:5061"    # E-130: SIP over TLS (DPSDK 'tls start server' 0xc56528)
       - "9500:9500"  # ARS TCP (DVRIP/DHIP) for NVR auto-registration
+      - "7000:7000"  # E-188: puerto que el firmware Dahua trae por defecto en
+                     # "Auto Registration"; el listener es el mismo que 9500
       - "1883:1883"  # E-039: MQTT notify broker (dual push, brms.notify* topics)
       - "9100:9100"  # E-134 D3: RTSP relay e115 - StartVideo URLs point at host:9100;
                      # the relay translates ?token= -> /trackID=N for MediaMTX

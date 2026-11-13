@@ -4039,8 +4039,9 @@ import { register as registerE135Roots } from './e135-roots.js';
 // NotifyNormalMsg/NotifyFrequentMsg).
 import { register as registerE136EventCenter } from './e136-eventcenter.js';
 import { register as registerE136WsHub } from './e136-ws-hub.js';
-function createARSTCPServer() {
-  console.log('[DEBUG] createARSTCPServer called, port:', ARS_PORT);
+function createARSTCPServer(portArg) {
+  const ARS_LISTEN_PORT = Number(portArg) || ARS_PORT;
+  console.log('[DEBUG] createARSTCPServer called, port:', ARS_LISTEN_PORT);
   const server = net.createServer((socket) => {
     const clientKey = `${socket.remoteAddress}:${socket.remotePort}`;
     console.log('[ARS TCP] Client connected:', clientKey);
@@ -4062,6 +4063,22 @@ function createARSTCPServer() {
       session.lastActivity = Date.now();
       buffer = Buffer.concat([buffer, data]);
 
+      // E-188: diagnostico de protocolo. Si el equipo no habla DVRIP/DHIP ni
+      // JSON se loguea la cabecera (una vez por socket) para identificar el
+      // protocolo real, en vez de contestar Ret:400 a ciegas.
+      if (!session.hexLogged && buffer.length >= 4) {
+        const head = buffer.subarray(0, Math.min(buffer.length, 32));
+        const ascii = head.toString('latin1');
+        const isDvrip = ascii.startsWith('DVRIP') || ascii.startsWith('DHIP');
+        const isJson = /^[\s\u0000]*[\[{]/.test(ascii);
+        if (!isDvrip && !isJson) {
+          session.hexLogged = true;
+          console.log('[ARS TCP][E188] trama desconocida de ' + clientKey
+            + ' len=' + buffer.length
+            + ' hex=' + head.toString('hex')
+            + ' ascii=' + JSON.stringify(ascii.replace(/[^\x20-\x7e]/g, '.')));
+        }
+      }
       // E-119: RE-verified DVRIP/DHIP framing (8B magic + 0x19930522 + JSON)
       // takes precedence when the peer speaks it.
       // E-128 (DevOps audit): frame reassembly + DoS caps. A fragmented frame
@@ -4299,8 +4316,8 @@ function createARSTCPServer() {
     console.error('[ARS TCP] Server error:', err);
   });
   
-  server.listen(ARS_PORT, '0.0.0.0', () => {
-    console.log(`ARS TCP Server (DVRIP) listening on 0.0.0.0:${ARS_PORT}`);
+  server.listen(ARS_LISTEN_PORT, '0.0.0.0', () => {
+    console.log(`ARS TCP Server (DVRIP) listening on 0.0.0.0:${ARS_LISTEN_PORT}`);
   });
   return server;
 }
@@ -4413,6 +4430,10 @@ async function start() {
     // Start ARS TCP Server (DVRIP/DHIP on port 9500)
     console.log('[DEBUG] Starting ARS TCP Server on port', ARS_PORT);
     createARSTCPServer();
+    // E-188: el firmware Dahua muestra 7000 por defecto en "Auto Registration".
+    // Se escucha tambien ahi para no depender de que el instalador lo cambie;
+    // el ACK de registro sigue anunciando el puerto real (ARS_PORT).
+    createARSTCPServer(parseInt(process.env.ARS_PORT_ALT || '7000', 10));
     console.log('[DEBUG] ARS TCP Server creation returned');
 
     // E-039: MQTT notify broker for the real brms.notify* topics advertised
