@@ -4096,17 +4096,80 @@ function createARSTCPServer(portArg) {
         const ascii = head.toString('latin1');
         const isDvrip = ascii.startsWith('DVRIP') || ascii.startsWith('DHIP');
         const isJson = /^[\s\u0000]*[\[{]/.test(ascii);
-        // E-192: las camaras Dahua mandan DHIP en BIG-ENDIAN (magic BE
-        // 0x20000000, comando BE 0x40 = 64 = REGISTER). Se loguea una vez.
-        const beMagic = buffer.length >= 4 && buffer.readUInt32BE(0) === 0x20000000;
-        const beCmd64 = buffer.length >= 8 && buffer.readUInt32BE(4) === 64 && buffer.readUInt32LE(4) === 40;
-        if (!isDvrip && !isJson && (beMagic || beCmd64 || buffer.readUInt32LE(4) === 40)) {
+        // E-192: logueo de diagnostico para CUALQUIER trama que no sea
+        // DVRIP/DHIP ni JSON, con hex completo hasta 96 bytes (las camaras
+        // mandan tramas fijas de 96B). Antes solo se logueaba si el comando
+        // LE era 0x40, y la camara real no cumplia ese patron exacto.
+        if (!isDvrip && !isJson) {
           session.hexLogged = true;
+          const dump = buffer.subarray(0, Math.min(buffer.length, 96));
           console.log('[ARS TCP][E188] trama desconocida de ' + clientKey
             + ' len=' + buffer.length
-            + ' hex=' + head.toString('hex')
-            + ' ascii=' + JSON.stringify(ascii.replace(/[^\x20-\x7e]/g, '.')));
+            + ' hex=' + dump.toString('hex')
+            + ' ascii=' + JSON.stringify(dump.toString('latin1').replace(/[^\x20-\x7e]/g, '.')));
         }
+      }
+      // E-193: DHIP "plano" de camaras Dahua: magic LE 0x780000b4, cmd LE 0x40
+      // (64) = REGISTER, header de 32B con payloadLen=0 y el Device ID en ASCII
+      // plano desde el byte 32 (trama fija de 96B, ej. "202611122200\0...").
+      // El parser LE comun lo tomaba como cmd 0x40 desconocido y despues los 64
+      // bytes de payload los leia como headers ("Command: 32313131" = "2026").
+      if (buffer.length >= 32 && buffer.readUInt32LE(0) === 0x780000b4) {
+        const cSeq = buffer.readUInt32LE(8);
+        const cCmd = buffer.readUInt32LE(4);
+        const text = buffer.subarray(32).toString('latin1').replace(/\0+$/, '').trim();
+        console.log('[ARS TCP][E193] DHIP-plano cmd=' + cCmd + ' seq=' + cSeq + ' texto=' + JSON.stringify(text.slice(0, 80)) + ' from ' + clientKey);
+        if (cCmd === 0x40 && text) {
+          // El payload puede ser solo el Device ID o key=value separado por &
+          const kv = {};
+          for (const part of text.split(/[&,;]/)) {
+            const m = part.match(/^([A-Za-z]+)\s*[:=]\s*(.*)$/);
+            if (m) kv[m[1]] = m[2].trim();
+          }
+          const deviceId = String(kv.SubDeviceID || kv.DeviceID || kv.DeviceId || kv.RegisterID || text).trim();
+          session.deviceId = deviceId;
+          session.authenticated = true;
+          ARS_DEVICES.set(deviceId, {
+            deviceId, originalId: deviceId, serialNo: kv.SerialNo || '',
+            deviceName: kv.MachineName || kv.DeviceName || ('CAM ' + deviceId), ip: kv.IPAddress || kv.IP || '',
+            port: kv.Port || 37777, username: kv.UserName || 'admin', password: kv.Password || '',
+            deviceType: kv.DeviceType || 62, channelNum: Number(kv.ChannelNum) || 1,
+            deviceClass: 'IPC', protocol: 'Dahua', source: 'auto-register',
+            status: 1, registeredAt: Date.now(), lastSeen: Date.now(),
+            registerFromIp: socket.remoteAddress
+          });
+          try {
+            const registered = registerArsDevice({
+              deviceId, deviceName: kv.MachineName || ('CAM ' + deviceId),
+              ip: kv.IPAddress || '', port: kv.Port || 37777,
+              username: kv.UserName || 'admin', password: kv.Password || '',
+              deviceType: kv.DeviceType || 62, channelCount: Number(kv.ChannelNum) || 1,
+              protocol: 'Dahua', model: kv.DeviceModel || '', serialNo: kv.SerialNo || deviceId,
+              registerFromIp: socket.remoteAddress
+            });
+            scheduleStreamProvisioning(registered, { notify: true });
+            try { NOTIFY.deviceEvent('DEVICE_ADDED', { deviceCode: registered.deviceCode }); } catch { /* hub */ }
+            console.log('[ARS TCP][E193] Device registered:', deviceId, 'from', socket.remoteAddress);
+          } catch (err) { console.log('[ARS TCP] registerArsDevice failed:', err.message); }
+          markArsLiveness(deviceId, true, socket.remoteAddress);
+          // ACK con el mismo magic LE y cmd 0x8040
+          const ackBody = JSON.stringify({ Ret: 100, RetMsg: 'OK' });
+          const ack = Buffer.alloc(32 + Buffer.byteLength(ackBody));
+          ack.writeUInt32LE(0x780000b4, 0);
+          ack.writeUInt32LE(0x8040, 4);
+          ack.writeUInt32LE(cSeq, 8);
+          ack.writeUInt32LE(Buffer.byteLength(ackBody), 12);
+          ack.write(ackBody, 32);
+          socket.write(ack);
+        } else {
+          const ack = Buffer.alloc(32);
+          ack.writeUInt32LE(0x780000b4, 0);
+          ack.writeUInt32LE((cCmd | 0x8000) >>> 0, 4);
+          ack.writeUInt32LE(cSeq, 8);
+          socket.write(ack);
+        }
+        buffer = buffer.subarray(96 <= buffer.length ? 96 : buffer.length);
+        return;
       }
       // E-192: DHIP big-endian de camaras Dahua (magic BE 0x20000000, cmd BE
       // 0x40=64 = REGISTER, payload en texto plano o JSON). Se parsea antes
